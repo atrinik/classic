@@ -25,6 +25,7 @@
 #include <server_main.h>
 #include <spatial.h>
 #include <tod.h>
+#include <toolkit/celestial_closure.h>
 #include <toolkit/celestial_model.h>
 #include <toolkit/celestial_solver.h>
 #include <toolkit/datetime.h>
@@ -200,6 +201,177 @@ static bool celestial_face_continuous(const spatial_face *face) {
            to->celestial_boundary[opposite[tile]] == CELESTIAL_BOUNDARY_CONTINUOUS &&
            memcmp(region_celestial_for_map(from)->digest,
                   region_celestial_for_map(to)->digest, 32) == 0;
+}
+
+void celestial_closure_begin(celestial_closure_accumulator_t *accumulator) {
+    memset(accumulator, 0, sizeof(*accumulator));
+    for (size_t face = 0; face < arraysize(accumulator->coefficient); face++) {
+        accumulator->coefficient[face] = CELESTIAL_SCALE;
+    }
+}
+
+void celestial_closure_accumulate(celestial_closure_accumulator_t *accumulator,
+                                  const object *op) {
+    /* Per face exactly as spatial_cell_light_face(), restricted to sent
+     * objects. */
+    uint8_t faces = celestial_structure_faces(op);
+    if (op->layer == LAYER_WALL && QUERY_FLAG(op, FLAG_HIDDEN)) {
+        faces |= CELESTIAL_FACE_DOWN;
+    }
+    if (QUERY_FLAG(op, FLAG_BLOCKSVIEW)) {
+        accumulator->blocker = true;
+    }
+    for (size_t i = 0; i < arraysize(accumulator->coefficient); i++) {
+        uint8_t face = (uint8_t)(1U << i);
+        if ((faces & face) == 0) {
+            continue;
+        }
+        accumulator->found |= face;
+        const char *value;
+        if (op->type == DOOR || op->type == GATE) {
+            bool closed = op->type == DOOR ? QUERY_FLAG(op, FLAG_DOOR_CLOSED)
+                                           : QUERY_FLAG(op, FLAG_NO_PASS);
+            value = object_get_value(op, closed ? "celestial_transmission_closed"
+                                                : "celestial_transmission_open");
+            accumulator->aperture |= face;
+        } else {
+            value = object_get_value(op, "celestial_transmission");
+            if (value != NULL) {
+                accumulator->aperture |= face;
+            }
+        }
+        celestial_transmission_t transmission = celestial_structure_transmission(value);
+        accumulator->coefficient[i] = MIN(accumulator->coefficient[i],
+                                          transmission == CELESTIAL_TRANSMISSION_INVALID
+                                              ? 0
+                                              : (uint16_t)transmission);
+    }
+}
+
+static uint32_t closure_class(uint16_t coefficient) {
+    switch (coefficient) {
+    case CELESTIAL_TRANSMISSION_GLASS: return 1;
+    case CELESTIAL_TRANSMISSION_GRATE: return 2;
+    case CELESTIAL_TRANSMISSION_OPEN: return 3;
+    default: return 0;
+    }
+}
+
+/**
+ * The static downward face of a cell, from every object on it a viewer may
+ * see, as spatial_cell_light_face() reads it. Floors and roofs belong to the
+ * cell whether or not the camera draws their layer. Doors and gates count as
+ * closed, or are skipped, since their state is shown only when sent.
+ */
+static uint16_t closure_static_down(mapstruct *map, int x, int y, const object *viewer,
+                                    bool doors_closed, bool *aperture) {
+    uint16_t coefficient = CELESTIAL_SCALE;
+    for (object *op = GET_MAP_OB(map, x, y); op != NULL; op = op->above) {
+        if ((QUERY_FLAG(op, FLAG_IS_INVISIBLE) && !QUERY_FLAG(viewer, FLAG_SEE_INVISIBLE)) ||
+            (op->layer != LAYER_WALL && QUERY_FLAG(op, FLAG_HIDDEN))) {
+            continue;
+        }
+        uint8_t faces = celestial_structure_faces(op);
+        if (op->layer == LAYER_WALL && QUERY_FLAG(op, FLAG_HIDDEN)) {
+            faces |= CELESTIAL_FACE_DOWN;
+        }
+        if ((faces & CELESTIAL_FACE_DOWN) == 0) {
+            continue;
+        }
+        const char *value;
+        if (op->type == DOOR || op->type == GATE) {
+            if (!doors_closed) {
+                continue;
+            }
+            value = object_get_value(op, "celestial_transmission_closed");
+            *aperture = true;
+        } else {
+            value = object_get_value(op, "celestial_transmission");
+            if (value != NULL) {
+                *aperture = true;
+            }
+        }
+        celestial_transmission_t transmission = celestial_structure_transmission(value);
+        coefficient = MIN(coefficient, transmission == CELESTIAL_TRANSMISSION_INVALID
+                                           ? 0
+                                           : (uint16_t)transmission);
+    }
+    return coefficient;
+}
+
+uint32_t celestial_closure_cell_value(const celestial_closure_accumulator_t *accumulator,
+                                      mapstruct *map, int x, int y, const object *viewer) {
+    uint32_t value = CELESTIAL_CLOSURE_IN;
+    bool static_aperture = false;
+    uint16_t static_down = closure_static_down(map, x, y, viewer, false, &static_aperture);
+    for (size_t i = 0; i < arraysize(accumulator->coefficient); i++) {
+        uint8_t face = (uint8_t)(1U << i);
+        uint16_t coefficient = accumulator->coefficient[i];
+        if (face == CELESTIAL_FACE_DOWN) {
+            coefficient = MIN(coefficient, static_down);
+            if (static_aperture) {
+                value |= CELESTIAL_CLOSURE_APERTURE(i);
+            }
+        }
+        /* A sent view blocker makes every unauthored cardinal face opaque,
+         * as P_BLOCKSVIEW does for gameplay, from sent objects only. */
+        if ((accumulator->found & face) == 0 && face != CELESTIAL_FACE_DOWN &&
+            accumulator->blocker) {
+            coefficient = 0;
+        }
+        value |= closure_class(coefficient) << CELESTIAL_CLOSURE_CLASS_SHIFT(i);
+        if ((accumulator->aperture & face) != 0) {
+            value |= CELESTIAL_CLOSURE_APERTURE(i);
+        }
+    }
+    spatial_cell cell = {.map = map, .x = x, .y = y};
+    if (spatial_cell_light_face(&cell, 0, 0, 1, NULL) == CELESTIAL_SCALE) {
+        value |= CELESTIAL_CLOSURE_COVER_OPEN;
+    }
+    /* Seam continuity and the sky exit are authored structure and links,
+     * judged exactly as transport judges each crossing. */
+    static const struct {
+        int8_t normal[3];
+        uint32_t bit;
+    } neighbors[] = {
+        {{0, -1, 0}, CELESTIAL_CLOSURE_CONTINUOUS_NORTH},
+        {{1, 0, 0}, CELESTIAL_CLOSURE_CONTINUOUS_EAST},
+        {{0, 1, 0}, CELESTIAL_CLOSURE_CONTINUOUS_SOUTH},
+        {{-1, 0, 0}, CELESTIAL_CLOSURE_CONTINUOUS_WEST},
+        {{0, 0, 1}, CELESTIAL_CLOSURE_CONTINUOUS_UP},
+        {{0, 0, -1}, CELESTIAL_CLOSURE_CONTINUOUS_DOWN},
+    };
+    for (size_t i = 0; i < arraysize(neighbors); i++) {
+        spatial_face face = {.from = cell};
+        memcpy(face.normal, neighbors[i].normal, sizeof(face.normal));
+        if (!spatial_resolve(map, x + face.normal[0], y + face.normal[1], face.normal[2],
+                             &face.to)) {
+            face.to = (spatial_cell){0};
+            if (face.normal[2] > 0) {
+                value |= UINT32_C(3) << CELESTIAL_CLOSURE_OVERHEAD_SHIFT;
+                if (celestial_sky_exit(&cell)) {
+                    value |= CELESTIAL_CLOSURE_SKY_EXIT;
+                }
+            }
+            continue;
+        }
+        if (face.normal[2] > 0) {
+            /* The floor or roof above, which the client reads while that
+             * cell is outside the closure: an indoor viewer's own ceiling is
+             * cut away from view but still shades the room. */
+            bool overhead_aperture = false;
+            uint16_t overhead = closure_static_down(face.to.map, face.to.x, face.to.y, viewer,
+                                                    true, &overhead_aperture);
+            value |= closure_class(overhead) << CELESTIAL_CLOSURE_OVERHEAD_SHIFT;
+            if (overhead_aperture) {
+                value |= CELESTIAL_CLOSURE_OVERHEAD_APERTURE;
+            }
+        }
+        if (celestial_face_continuous(&face)) {
+            value |= neighbors[i].bit;
+        }
+    }
+    return value;
 }
 
 static spatial_cell spatial_from_solver(const celestial_solver_cell_t *cell) {
@@ -968,6 +1140,171 @@ void celestial_light_process_pending(uint64_t budget_us) {
         pending_process(SIZE_MAX, budget_us > UINT64_MAX - now ? UINT64_MAX : now + budget_us);
     }
 }
+
+#ifdef ATRINIK_TESTING
+/* The conformance reference (CLIENT_CELESTIAL.md, Client solver and
+ * conformance): the server solver on real maps and links, with every cell
+ * outside the viewer's closure, and every point no map resolves, open air
+ * under an open sky. Unresolved points keep the coordinates of the map the
+ * traversal started from. */
+typedef struct reference_air {
+    mapstruct *origin;
+    int z;
+} reference_air;
+
+typedef struct reference_lattice {
+    celestial_reference_member_fn member;
+    void *context;
+    reference_air air[512];
+    size_t air_count;
+} reference_lattice;
+
+static reference_air *reference_air_of(reference_lattice *lattice, const void *map) {
+    if ((const char *)map < (const char *)lattice->air ||
+        (const char *)map >= (const char *)(lattice->air + lattice->air_count)) {
+        return NULL;
+    }
+    return (reference_air *)map;
+}
+
+/** The disclosed record of a closure cell, zero outside the closure. */
+static uint32_t reference_record(reference_lattice *lattice, const celestial_solver_cell_t *cell) {
+    if (cell->map == NULL || reference_air_of(lattice, cell->map) != NULL) {
+        return 0;
+    }
+    return lattice->member(lattice->context, cell->map, cell->x, cell->y);
+}
+
+static bool reference_inside(reference_lattice *lattice, const celestial_solver_cell_t *cell) {
+    return reference_record(lattice, cell) != 0;
+}
+
+static bool reference_resolve(void *context, void *origin, int x, int y, int z,
+                              celestial_solver_cell_t *cell) {
+    reference_lattice *lattice = context;
+    reference_air *air = reference_air_of(lattice, origin);
+    mapstruct *real = air != NULL ? air->origin : origin;
+    int base = air != NULL ? air->z : 0;
+    spatial_cell resolved;
+    if (spatial_resolve(real, x, y, base + z, &resolved)) {
+        *cell = (celestial_solver_cell_t){.map = resolved.map, .x = resolved.x, .y = resolved.y,
+                                          .z = z};
+        return true;
+    }
+    size_t found = 0;
+    while (found < lattice->air_count &&
+           (lattice->air[found].origin != real || lattice->air[found].z != base + z)) {
+        found++;
+    }
+    if (found == lattice->air_count) {
+        HARD_ASSERT(found < arraysize(lattice->air));
+        lattice->air[lattice->air_count++] = (reference_air){.origin = real, .z = base + z};
+    }
+    *cell = (celestial_solver_cell_t){.map = &lattice->air[found], .x = x, .y = y, .z = z};
+    return true;
+}
+
+static void reference_dimensions(void *context, void *map, int *width, int *height) {
+    if (reference_air_of(context, map) != NULL) {
+        *width = *height = 1;
+        return;
+    }
+    lattice_dimensions(context, map, width, height);
+}
+
+static bool reference_sky(void *context, const celestial_solver_face_t *face) {
+    reference_lattice *lattice = context;
+    if (!reference_inside(lattice, &face->from)) {
+        return !reference_inside(lattice, &face->to);
+    }
+    spatial_cell from = spatial_from_solver(&face->from);
+    return reference_air_of(lattice, face->to.map) != NULL && celestial_sky_exit(&from);
+}
+
+static bool reference_continuous(void *context, const celestial_solver_face_t *face) {
+    reference_lattice *lattice = context;
+    bool from = reference_inside(lattice, &face->from), to = reference_inside(lattice, &face->to);
+    if (!from && !to) {
+        return true;
+    }
+    if (reference_air_of(lattice, face->from.map) != NULL ||
+        reference_air_of(lattice, face->to.map) != NULL) {
+        return false;
+    }
+    return lattice_continuous(context, face);
+}
+
+/* Faces the viewer was shown come from the disclosed record; the virtual
+ * cover is the map's authored structure, read from the map. */
+static const uint16_t reference_class[4] = {CELESTIAL_TRANSMISSION_OPAQUE,
+                                            CELESTIAL_TRANSMISSION_GLASS,
+                                            CELESTIAL_TRANSMISSION_GRATE,
+                                            CELESTIAL_TRANSMISSION_OPEN};
+
+static uint16_t reference_record_face(uint32_t record, int face, bool *aperture) {
+    if (aperture != NULL && (record & CELESTIAL_CLOSURE_APERTURE(face)) != 0) {
+        *aperture = true;
+    }
+    return reference_class[(record >> CELESTIAL_CLOSURE_CLASS_SHIFT(face)) & 3U];
+}
+
+static uint16_t reference_light(void *context, const celestial_solver_face_t *face,
+                                bool *aperture) {
+    reference_lattice *lattice = context;
+    if (aperture != NULL) {
+        *aperture = false;
+    }
+    if (face->normal[2] != 0) {
+        const celestial_solver_cell_t *upper = face->normal[2] > 0 ? &face->to : &face->from;
+        const celestial_solver_cell_t *lower = face->normal[2] > 0 ? &face->from : &face->to;
+        uint32_t upper_record = reference_record(lattice, upper);
+        uint32_t lower_record = reference_record(lattice, lower);
+        uint16_t physical = CELESTIAL_SCALE;
+        if (upper_record != 0) {
+            physical = reference_record_face(upper_record, 0, aperture);
+        } else if (lower_record != 0) {
+            physical = reference_class[(lower_record >> CELESTIAL_CLOSURE_OVERHEAD_SHIFT) & 3U];
+            if (aperture != NULL && (lower_record & CELESTIAL_CLOSURE_OVERHEAD_APERTURE) != 0) {
+                *aperture = true;
+            }
+        }
+        uint16_t cover = CELESTIAL_SCALE;
+        if (lower_record != 0) {
+            spatial_cell real = spatial_from_solver(lower);
+            cover = spatial_cell_light_face(&real, 0, 0, 1, NULL);
+        }
+        return MIN(physical, cover);
+    }
+    uint32_t record = reference_record(lattice, &face->from);
+    if (record == 0) {
+        return CELESTIAL_SCALE;
+    }
+    int index = face->normal[0] < 0 ? 4 : face->normal[0] > 0 ? 2 : face->normal[1] < 0 ? 1 : 3;
+    return reference_record_face(record, index, aperture);
+}
+
+bool celestial_light_closure_reference_for_test(mapstruct *map, uint64_t absolute_hour,
+                                                celestial_reference_member_fn member,
+                                                void *context, int32_t *values,
+                                                int32_t (*rgb)[3]) {
+    static const celestial_solver_ops_t ops = {
+        .resolve = reference_resolve,
+        .dimensions = reference_dimensions,
+        .sky = reference_sky,
+        .continuous = reference_continuous,
+        .light = reference_light,
+    };
+    reference_lattice *reference = xcalloc(1, sizeof(*reference));
+    reference->member = member;
+    reference->context = context;
+    celestial_solver_lattice_t solver = {.ops = &ops, .context = reference};
+    celestial_model model;
+    celestial_model_for_map(map, absolute_hour, &model);
+    bool solved = celestial_solver_solve(&solver, map, &model, values, rgb);
+    free(reference);
+    return solved;
+}
+#endif
 
 #ifdef ATRINIK_TESTING
 uint64_t celestial_light_pending_batch_exchange_for_test(uint64_t batch) {

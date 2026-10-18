@@ -139,8 +139,45 @@ extern void celestial_light_process_pending(uint64_t budget_us);
 /** Cancel every queued stack retaining this map before its storage is released. */
 extern void celestial_light_forget(mapstruct *map);
 
+/** Celestial structure of one cell built from the objects MAP2 sends to a
+ * viewer (CLIENT_CELESTIAL.md, disclosure rule). */
+typedef struct celestial_closure_accumulator {
+    /** Coefficient of each face: down, north, east, south, west. */
+    uint16_t coefficient[5];
+    /** Faces some sent object authors, and faces with an aperture. */
+    uint8_t found, aperture;
+    /** A sent object blocks view: unauthored cardinal faces are opaque. */
+    bool blocker;
+} celestial_closure_accumulator_t;
+
+/** Start a cell's accumulator with every face open. */
+extern void celestial_closure_begin(celestial_closure_accumulator_t *accumulator);
+
+/** Add one object MAP2 sends for the cell. */
+extern void celestial_closure_accumulate(celestial_closure_accumulator_t *accumulator,
+                                         const object *op);
+
+/** The cell's closure value (toolkit/celestial_closure.h): its faces from the
+ * accumulated objects, and its sky cover, sky exit and continuity from the
+ * map's authored structure and links. */
+extern uint32_t celestial_closure_cell_value(const celestial_closure_accumulator_t *accumulator,
+                                             mapstruct *map, int x, int y,
+                                             const object *viewer);
+
 /** Update exact cell transport geometry and report a semantic change. */
 extern bool celestial_light_geometry_update(mapstruct *map, int x, int y);
+
+#ifdef ATRINIK_TESTING
+/** The disclosed closure record of a map cell, zero outside the closure. */
+typedef uint32_t (*celestial_reference_member_fn)(void *context, mapstruct *map, int x, int y);
+/** Solve one map with the server solver on the disclosed closure: real maps,
+ * links and authored cover, the faces the viewer was shown, and every cell
+ * outside the closure open air under an open sky. */
+extern bool celestial_light_closure_reference_for_test(mapstruct *map, uint64_t absolute_hour,
+                                                       celestial_reference_member_fn member,
+                                                       void *context, int32_t *values,
+                                                       int32_t (*rgb)[3]);
+#endif
 
 #ifdef ATRINIK_TESTING
 /** Swap the batch counter for isolated overflow tests with no pending jobs. */

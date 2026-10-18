@@ -64,6 +64,11 @@ typedef struct MapCell_struct {
     /** Cache of last sent ambient sound. */
     tag_t sound_ambient_count;
 
+    /** Celestial closure value of the cell (toolkit/celestial_closure.h),
+     * zero outside the closure. A remembered cell keeps the value it had
+     * when last visible, so it lives outside the cleared part. */
+    uint32_t celestial_structure;
+
     /* Everything below will be cleared by memset() in when the map
      * cell is no longer visible. */
 
@@ -271,8 +276,10 @@ typedef struct socket_struct {
     /** Assigned CELESTIAL slots, one bit per slot id. */
     uint64_t celestial_slots_assigned[(CELESTIAL_PROTOCOL_SLOTS_MAX + 63) / 64];
 
-    /** Digest of the last CELESTIAL payload sent, and its generation. */
+    /** Digests of the last CELESTIAL and CELESTIAL_STRUCTURE pair sent,
+     * whose generation is celestial_generation. */
     uint64_t celestial_sent_digest;
+    uint64_t celestial_structure_digest;
     uint32_t celestial_generation;
     bool celestial_sent;
 

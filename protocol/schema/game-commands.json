@@ -88,6 +88,7 @@
     {"id": 31, "symbol": "ACCESS_POLICY", "wire_name": "access_policy"},
     {"id": 32, "symbol": "REGION_EXPLORATION", "wire_name": "region_exploration"},
     {"id": 33, "symbol": "BOOK_EDIT", "wire_name": "book_edit"},
-    {"id": 34, "symbol": "CELESTIAL", "wire_name": "celestial"}
+    {"id": 34, "symbol": "CELESTIAL", "wire_name": "celestial"},
+    {"id": 35, "symbol": "CELESTIAL_STRUCTURE", "wire_name": "celestial_structure"}
   ]
 }

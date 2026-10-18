@@ -50,7 +50,13 @@
 #define CELESTIAL_CLOSURE_CONTINUOUS_WEST UINT32_C(0x200000)
 #define CELESTIAL_CLOSURE_CONTINUOUS_UP UINT32_C(0x400000)
 #define CELESTIAL_CLOSURE_CONTINUOUS_DOWN UINT32_C(0x800000)
-#define CELESTIAL_CLOSURE_VALUE_MASK UINT32_C(0xffffff)
+/** Transmission class of the static floor or roof of the cell above, two
+ * bits, read only while that cell is outside the closure; doors and gates
+ * count as closed. */
+#define CELESTIAL_CLOSURE_OVERHEAD_SHIFT 24
+/** That face carries a door, gate or authored transmission. */
+#define CELESTIAL_CLOSURE_OVERHEAD_APERTURE UINT32_C(0x4000000)
+#define CELESTIAL_CLOSURE_VALUE_MASK UINT32_C(0x7ffffff)
 /*@}*/
 
 /** One map's part of the closure at one depth: the bounding rectangle of its
@@ -60,7 +66,7 @@ typedef struct celestial_closure_fragment {
     uint8_t x, y, width, height;
     /** Profile slot of the fragment's map, or CELESTIAL_PROTOCOL_SLOT_NONE. */
     uint8_t slot;
-    /** Row-major cell values; zero for a cell outside the closure. */
+    /** Row-major 27-bit cell values; zero for a cell outside the closure. */
     uint32_t *values;
 } celestial_closure_fragment_t;
 

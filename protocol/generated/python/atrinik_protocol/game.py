@@ -102,3 +102,4 @@ class ServerToClientCommand(IntEnum):
     REGION_EXPLORATION = 32
     BOOK_EDIT = 33
     CELESTIAL = 34
+    CELESTIAL_STRUCTURE = 35

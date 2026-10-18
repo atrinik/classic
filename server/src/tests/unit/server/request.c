@@ -31,6 +31,11 @@
 #include <account.h>
 #include <toolkit/path.h>
 #include <toolkit/datetime.h>
+#include <toolkit/celestial_closure.h>
+#include <celestial_override.h>
+#include <celestial_structure.h>
+#include <region.h>
+#include <spatial.h>
 
 static size_t queued_command_count(socket_struct *cs, uint8_t type) {
     size_t count = 0;
@@ -3889,6 +3894,424 @@ START_TEST(test_remembered_light_records_split_at_tile_boundaries) {
 }
 END_TEST
 
+/* Celestial closure conformance (CLIENT_CELESTIAL.md). The client's solve of
+ * the received closure must match the server solver on the disclosed
+ * closure bit for bit. */
+#define CLOSURE_MEMBER_SLOTS 32768
+
+typedef struct closure_member_table {
+    struct {
+        mapstruct *map;
+        int x, y;
+        uint32_t record;
+        bool used;
+    } slots[CLOSURE_MEMBER_SLOTS];
+} closure_member_table;
+
+static size_t closure_member_hash(const mapstruct *map, int x, int y) {
+    uint64_t hash = (uint64_t)(uintptr_t)map * UINT64_C(0x9e3779b97f4a7c15);
+    hash ^= ((uint64_t)(uint32_t)x << 32) ^ (uint32_t)y;
+    hash ^= hash >> 29;
+    hash *= UINT64_C(0xbf58476d1ce4e5b9);
+    hash ^= hash >> 32;
+    return (size_t)(hash % CLOSURE_MEMBER_SLOTS);
+}
+
+static void closure_member_add(closure_member_table *table, mapstruct *map, int x, int y,
+                               uint32_t record) {
+    size_t slot = closure_member_hash(map, x, y);
+    while (table->slots[slot].used) {
+        if (table->slots[slot].map == map && table->slots[slot].x == x &&
+            table->slots[slot].y == y) {
+            ck_assert_uint_eq(table->slots[slot].record, record);
+            return;
+        }
+        slot = (slot + 1) % CLOSURE_MEMBER_SLOTS;
+    }
+    table->slots[slot].map = map;
+    table->slots[slot].x = x;
+    table->slots[slot].y = y;
+    table->slots[slot].record = record;
+    table->slots[slot].used = true;
+}
+
+static uint32_t closure_member_test(void *context, mapstruct *map, int x, int y) {
+    closure_member_table *table = context;
+    size_t slot = closure_member_hash(map, x, y);
+    while (table->slots[slot].used) {
+        if (table->slots[slot].map == map && table->slots[slot].x == x &&
+            table->slots[slot].y == y) {
+            return table->slots[slot].record;
+        }
+        slot = (slot + 1) % CLOSURE_MEMBER_SLOTS;
+    }
+    return 0;
+}
+
+/** Last queued payload of one server command. */
+static packet_struct *queued_command_payload_last(socket_struct *cs, uint8_t type) {
+    packet_struct *found = NULL;
+    for (packet_struct *packet = cs->packets; packet != NULL && packet->next != NULL;
+         packet = packet->next) {
+        if (packet->type == 0 && packet->len >= 3 && packet->data[packet->len - 1] == type) {
+            found = packet->next;
+        }
+    }
+    return found;
+}
+
+typedef struct closure_result {
+    size_t compared, gameplay_compared, gameplay_equal;
+    size_t fragments, depths;
+} closure_result;
+
+/** Decode the pair MAP2 just queued and compare the client's solve of every
+ * closure cell with the server reference and the gameplay field. */
+static closure_result closure_conformance(object *pl) {
+    socket_struct *cs = CONTR(pl)->cs;
+    packet_struct *celestial = queued_command_payload_last(cs, CLIENT_CMD_CELESTIAL);
+    packet_struct *structure = queued_command_payload_last(cs, CLIENT_CMD_CELESTIAL_STRUCTURE);
+    ck_assert_ptr_nonnull(celestial);
+    ck_assert_ptr_nonnull(structure);
+    static celestial_protocol_slot_t slots[CELESTIAL_PROTOCOL_SLOTS_MAX];
+    uint32_t generation;
+    uint64_t start;
+    size_t slot_count;
+    ck_assert(celestial_protocol_read(celestial->data, celestial->len, &generation, &start, slots,
+                                      &slot_count));
+    celestial_closure_t closure;
+    ck_assert(celestial_closure_read(structure->data, structure->len, cs->mapx, cs->mapy,
+                                     &closure));
+    ck_assert_uint_eq(closure.generation, generation);
+
+    int x0 = pl->x + (cs->mapx + 1) / 2 - cs->mapx;
+    int y0 = pl->y + (cs->mapy + 1) / 2 - cs->mapy;
+    closure_member_table *members = xcalloc(1, sizeof(*members));
+    uint16_t depths = 0;
+    for (size_t i = 0; i < closure.count; i++) {
+        const celestial_closure_fragment_t *fragment = &closure.fragments[i];
+        depths |= (uint16_t)(1U << MAP2_DEPTH_INDEX(fragment->depth));
+        for (int y = 0; y < fragment->height; y++) {
+            for (int x = 0; x < fragment->width; x++) {
+                if (fragment->values[(size_t)x + (size_t)fragment->width * y] == 0) {
+                    continue;
+                }
+                spatial_cell cell;
+                ck_assert(spatial_resolve(pl->map, x0 + fragment->x + x, y0 + fragment->y + y,
+                                          fragment->depth, &cell));
+                closure_member_add(members, cell.map, cell.x, cell.y,
+                                   fragment->values[(size_t)x + (size_t)fragment->width * y]);
+            }
+        }
+    }
+
+    closure_result result = {.fragments = closure.count};
+    for (int i = 0; i < MAP2_LEVELS; i++) {
+        result.depths += (depths >> i) & 1U;
+    }
+    for (size_t i = 0; i < closure.count; i++) {
+        const celestial_closure_fragment_t *fragment = &closure.fragments[i];
+        if (fragment->slot == CELESTIAL_PROTOCOL_SLOT_NONE) {
+            continue;
+        }
+        const celestial_protocol_slot_t *slot = NULL;
+        for (size_t s = 0; s < slot_count; s++) {
+            if (slots[s].slot == fragment->slot) {
+                slot = &slots[s];
+            }
+        }
+        ck_assert_ptr_nonnull(slot);
+        celestial_model_t model;
+        celestial_model_evaluate(&slot->current, &model);
+        size_t cells = (size_t)fragment->width * fragment->height;
+        int32_t *values = xcalloc(cells, sizeof(*values));
+        int32_t (*rgb)[3] = xcalloc(cells, sizeof(*rgb));
+        ck_assert(celestial_closure_solve(&closure, i, &model, values, rgb));
+
+        mapstruct *map = NULL;
+        int32_t *reference = NULL;
+        int32_t (*reference_rgb)[3] = NULL;
+        for (int y = 0; y < fragment->height; y++) {
+            for (int x = 0; x < fragment->width; x++) {
+                size_t index = (size_t)x + (size_t)fragment->width * y;
+                if (fragment->values[index] == 0) {
+                    continue;
+                }
+                spatial_cell cell;
+                ck_assert(spatial_resolve(pl->map, x0 + fragment->x + x, y0 + fragment->y + y,
+                                          fragment->depth, &cell));
+                if (map == NULL) {
+                    map = cell.map;
+                    size_t map_cells = (size_t)map->width * map->height;
+                    reference = xcalloc(map_cells, sizeof(*reference));
+                    reference_rgb = xcalloc(map_cells, sizeof(*reference_rgb));
+                    ck_assert(celestial_light_closure_reference_for_test(
+                        map, (uint64_t)todtick, closure_member_test, members, reference,
+                        reference_rgb));
+                }
+                /* One fragment is one map. */
+                ck_assert_ptr_eq(cell.map, map);
+                size_t real = (size_t)cell.x + (size_t)map->width * cell.y;
+                ck_assert_msg(values[index] == reference[real] &&
+                                  memcmp(rgb[index], reference_rgb[real], sizeof(rgb[index])) == 0,
+                              "%s %d,%d depth %d: client %d (%d %d %d) reference %d (%d %d %d)",
+                              map->path, cell.x, cell.y, fragment->depth, values[index],
+                              rgb[index][0], rgb[index][1], rgb[index][2], reference[real],
+                              reference_rgb[real][0], reference_rgb[real][1],
+                              reference_rgb[real][2]);
+                result.compared++;
+                const MapSpace *space = GET_MAP_SPACE_PTR(map, cell.x, cell.y);
+                if (map->celestial_light_valid) {
+                    result.gameplay_compared++;
+                    result.gameplay_equal +=
+                        space->celestial_light_value == values[index] &&
+                        memcmp(space->celestial_light_rgb, rgb[index], sizeof(rgb[index])) == 0;
+                }
+            }
+        }
+        free(reference_rgb);
+        free(reference);
+        free(rgb);
+        free(values);
+    }
+    free(members);
+    celestial_closure_free(&closure);
+    return result;
+}
+
+static void closure_fixture_schema(mapstruct *map) {
+    map->celestial_schema = 1;
+    map->celestial_schema_seen = true;
+    map->celestial_sky_above = CELESTIAL_SKY_OPEN;
+    map->celestial_sky_seen = true;
+    map->celestial_v1_header_seen = true;
+    map->celestial_width_seen = true;
+    map->celestial_height_seen = true;
+    map->region = region_world();
+}
+
+static object *closure_structure(mapstruct *map, int x, int y, uint8_t type, int flag,
+                                 const char *key, const char *value) {
+    object *op = arch_get("letter");
+    op->type = type;
+    op->x = x;
+    op->y = y;
+    if (flag >= 0) {
+        SET_FLAG(op, flag);
+    }
+    if (key != NULL) {
+        ck_assert(object_set_value(op, key, value, true));
+    }
+    op = object_insert_map(op, map, NULL, INS_NO_MERGE);
+    ck_assert_ptr_nonnull(op);
+    return op;
+}
+
+/** An open-sky map with every kind of horizontal structure in view, none of
+ * it blocking sight, so the closure holds every structured cell. */
+static mapstruct *closure_open_world(const char *path) {
+    mapstruct *map = get_empty_map(64, 64);
+    FREE_AND_COPY_HASH(map->path, path);
+    closure_fixture_schema(map);
+    for (int y = 16; y < 48; y++) {
+        for (int x = 16; x < 48; x++) {
+            closure_structure(map, x, y, MISC_OBJECT, -1, NULL, NULL);
+        }
+    }
+    for (int x = 34; x <= 37; x++) {
+        closure_structure(map, x, 29, DOOR, FLAG_DOOR_CLOSED, "celestial_transmission_closed",
+                          "opaque");
+    }
+    for (int y = 29; y <= 32; y++) {
+        closure_structure(map, 37, y, DOOR, FLAG_DOOR_CLOSED, "celestial_transmission_closed",
+                          "opaque");
+    }
+    closure_structure(map, 35, 32, DOOR, -1, "celestial_transmission_open", "glass");
+    closure_structure(map, 30, 34, MISC_OBJECT, -1, "celestial_transmission", "glass");
+    closure_structure(map, 31, 34, MISC_OBJECT, -1, "celestial_transmission", "glass");
+    closure_structure(map, 28, 30, MISC_OBJECT, -1, "celestial_transmission", "grate");
+    closure_structure(map, 26, 26, GATE, FLAG_NO_PASS, "celestial_transmission_closed", "grate");
+    closure_structure(map, 27, 26, GATE, -1, "celestial_transmission_open", "open");
+    object *partial = closure_structure(map, 29, 36, MISC_OBJECT, -1, "celestial_transmission",
+                                        "glass");
+    ck_assert(object_set_value(partial, "celestial_faces", "N,E", true));
+    return map;
+}
+
+static const uint64_t closure_hours[] = {
+    5 * HOURS_PER_MONTH + 7,  5 * HOURS_PER_MONTH + 10, 5 * HOURS_PER_MONTH + 12,
+    5 * HOURS_PER_MONTH + 16, 5 * HOURS_PER_MONTH + 21, 5 * HOURS_PER_MONTH + 2,
+};
+
+static closure_result closure_draw(object *pl, uint64_t hour) {
+    todtick = (unsigned long)hour;
+    for (mapstruct *map = first_map; map != NULL; map = map->next) {
+        if (map->celestial_schema == 1 && map->spaces != NULL) {
+            (void)celestial_light_rebuild(map, hour);
+        }
+    }
+    CONTR(pl)->update_los = 1;
+    socket_buffer_clear(CONTR(pl)->cs);
+    draw_client_map(pl);
+    ck_assert_uint_gt(validate_queued_map_payloads(CONTR(pl)->cs), 0);
+    return closure_conformance(pl);
+}
+
+START_TEST(test_celestial_closure_matches_server_solver_and_gameplay) {
+    mapstruct *old_map;
+    object *pl;
+    check_setup_env_pl(&old_map, &pl);
+    unsigned long saved_hour = todtick;
+    (void)celestial_override_clear();
+    mapstruct *map = closure_open_world("/closure/open");
+    request_move_player(&pl, map, 32, 32);
+    for (size_t h = 0; h < arraysize(closure_hours); h++) {
+        closure_result result = closure_draw(pl, closure_hours[h]);
+        ck_assert_uint_gt(result.compared, 500);
+        /* Nothing the solver reads is hidden here, so the disclosed closure
+         * reproduces the gameplay field exactly. */
+        ck_assert_uint_eq(result.gameplay_compared, result.compared);
+        ck_assert_uint_eq(result.gameplay_equal, result.compared);
+    }
+    todtick = saved_hour;
+}
+END_TEST
+
+START_TEST(test_celestial_closure_matches_server_solver_under_roofs) {
+    mapstruct *old_map;
+    object *pl;
+    check_setup_env_pl(&old_map, &pl);
+    unsigned long saved_hour = todtick;
+    (void)celestial_override_clear();
+    mapstruct *lower = closure_open_world("/closure/lower");
+    mapstruct *upper = get_empty_map(64, 64);
+    FREE_AND_COPY_HASH(upper->path, "/closure/upper");
+    closure_fixture_schema(upper);
+    FREE_AND_COPY_HASH(lower->tile_path[TILED_UP], upper->path);
+    FREE_AND_COPY_HASH(upper->tile_path[TILED_DOWN], lower->path);
+    lower->tile_map[TILED_UP] = upper;
+    upper->tile_map[TILED_DOWN] = lower;
+    lower->celestial_sky_above = CELESTIAL_SKY_LINKED;
+    lower->celestial_boundary[TILED_UP] = CELESTIAL_BOUNDARY_CONTINUOUS;
+    upper->celestial_boundary[TILED_DOWN] = CELESTIAL_BOUNDARY_CONTINUOUS;
+    for (int y = 27; y <= 33; y++) {
+        for (int x = 33; x <= 39; x++) {
+            object *roof = arch_get("roof_thatch");
+            ck_assert_ptr_nonnull(roof);
+            roof->x = x;
+            roof->y = y;
+            ck_assert_ptr_nonnull(object_insert_map(roof, upper, NULL, 0));
+        }
+    }
+    request_move_player(&pl, lower, 35, 30);
+    for (size_t h = 0; h < arraysize(closure_hours); h++) {
+        closure_result result = closure_draw(pl, closure_hours[h]);
+        ck_assert_uint_gt(result.compared, 500);
+    }
+    todtick = saved_hour;
+}
+END_TEST
+
+/** A cell of an authored map with a given kind of celestial structure. */
+typedef enum closure_site {
+    CLOSURE_SITE_OUTDOOR,
+    CLOSURE_SITE_INDOOR,
+    CLOSURE_SITE_UPPER,
+    CLOSURE_SITE_DOOR,
+    CLOSURE_SITE_GATE,
+    CLOSURE_SITE_APERTURE,
+    CLOSURE_SITES
+} closure_site;
+
+static bool closure_site_matches(mapstruct *map, int x, int y, closure_site site) {
+    if (site == CLOSURE_SITE_OUTDOOR) {
+        return celestial_structure_cell_exposed(map, x, y);
+    }
+    if (site == CLOSURE_SITE_INDOOR) {
+        return !celestial_structure_cell_exposed(map, x, y) &&
+               !(GET_MAP_FLAGS(map, x, y) & P_BLOCKSVIEW) && GET_MAP_OB(map, x, y) != NULL;
+    }
+    if (site == CLOSURE_SITE_UPPER) {
+        return map->tile_map[TILED_UP] != NULL && !(GET_MAP_FLAGS(map, x, y) & P_BLOCKSVIEW) &&
+               GET_MAP_OB(map, x, y) != NULL;
+    }
+    for (object *op = GET_MAP_OB(map, x, y); op != NULL; op = op->above) {
+        bool gate = op->type == GATE || strstr(op->arch->name, "gate") != NULL;
+        if ((site == CLOSURE_SITE_DOOR && op->type == DOOR && !gate) ||
+            (site == CLOSURE_SITE_GATE && gate) ||
+            (site == CLOSURE_SITE_APERTURE && op->type != DOOR && op->type != GATE &&
+             celestial_structure_transmission(object_get_value(op, "celestial_transmission")) !=
+                 CELESTIAL_TRANSMISSION_INVALID)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+START_TEST(test_celestial_closure_matches_server_solver_in_brynknot) {
+    static const char *const paths[] = {
+        "/shattered_islands/world_0_67", "/shattered_islands/world_1_67",
+        "/shattered_islands/world_2_67", "/shattered_islands/world_0_68",
+        "/shattered_islands/world_1_68", "/shattered_islands/world_2_68",
+        "/shattered_islands/world_0_69", "/shattered_islands/world_1_69",
+        "/shattered_islands/world_2_69", "/shattered_islands/world_0_70",
+        "/shattered_islands/world_1_70", "/shattered_islands/world_2_70",
+        "/shattered_islands/world_2_68_-1", "/shattered_islands/world_1_68_-1",
+    };
+    mapstruct *old_map;
+    object *pl;
+    check_setup_env_pl(&old_map, &pl);
+    unsigned long saved_hour = todtick;
+    (void)celestial_override_clear();
+    mapstruct *found_map[CLOSURE_SITES] = {0};
+    int found_x[CLOSURE_SITES], found_y[CLOSURE_SITES];
+    for (size_t i = 0; i < arraysize(paths); i++) {
+        mapstruct *map = ready_map_name(paths[i], NULL, MAP_NO_DYNAMIC);
+        ck_assert_msg(map != NULL, "Could not load %s", paths[i]);
+        for (mapstruct *upper = map; upper->tile_path[TILED_UP] != NULL;) {
+            upper = get_map_from_tiled(upper, TILED_UP);
+            ck_assert_ptr_nonnull(upper);
+        }
+    }
+    for (mapstruct *map = first_map; map != NULL; map = map->next) {
+        if (map->spaces == NULL || strstr(map->path, "/shattered_islands/world_") == NULL) {
+            continue;
+        }
+        for (int y = 0; y < map->height; y++) {
+            for (int x = 0; x < map->width; x++) {
+                for (int site = 0; site < CLOSURE_SITES; site++) {
+                    if (found_map[site] == NULL && closure_site_matches(map, x, y, site)) {
+                        found_map[site] = map;
+                        found_x[site] = x;
+                        found_y[site] = y;
+                    }
+                }
+            }
+        }
+    }
+    for (int site = 0; site < CLOSURE_SITES; site++) {
+        /* Brynknot authors its apertures on doors and gates; standalone glass
+         * and grates are covered by the synthetic fixtures. */
+        if (site == CLOSURE_SITE_APERTURE && found_map[site] == NULL) {
+            continue;
+        }
+        ck_assert_msg(found_map[site] != NULL, "Brynknot has no site of kind %d", site);
+        request_move_player(&pl, found_map[site], found_x[site], found_y[site]);
+        for (size_t h = 0; h < arraysize(closure_hours); h += 2) {
+            closure_result result = closure_draw(pl, closure_hours[h]);
+            ck_assert_uint_gt(result.compared, 0);
+            fprintf(stderr,
+                    "closure %s %d,%d kind %d hour %zu: %zu cells, %zu fragments, %zu depths, "
+                    "%zu/%zu equal to gameplay\n",
+                    found_map[site]->path, found_x[site], found_y[site], site, h,
+                    result.compared, result.fragments, result.depths, result.gameplay_equal,
+                    result.gameplay_compared);
+        }
+    }
+    todtick = saved_hour;
+}
+END_TEST
+
 static Suite *suite(void) {
     Suite *s = suite_create("request");
     TCase *tc_core = tcase_create("Core");
@@ -3897,6 +4320,15 @@ static Suite *suite(void) {
     tcase_add_unchecked_fixture(tc_core, check_setup, check_teardown);
     tcase_add_checked_fixture(tc_core, check_test_setup, check_test_teardown);
     suite_add_tcase(s, tc_core);
+    TCase *tc_closure = tcase_create("Celestial closure");
+    /* Full-field server and client solves over authored Brynknot views. */
+    tcase_set_timeout(tc_closure, 600);
+    tcase_add_unchecked_fixture(tc_closure, check_setup, check_teardown);
+    tcase_add_checked_fixture(tc_closure, check_test_setup, check_test_teardown);
+    suite_add_tcase(s, tc_closure);
+    tcase_add_test(tc_closure, test_celestial_closure_matches_server_solver_and_gameplay);
+    tcase_add_test(tc_closure, test_celestial_closure_matches_server_solver_under_roofs);
+    tcase_add_test(tc_closure, test_celestial_closure_matches_server_solver_in_brynknot);
     tcase_add_test(tc_core, test_removed_player_connection_keeps_servicing_queued_output);
     tcase_add_test(tc_core, test_map_name_metadata_handles_transient_unnamed_maps);
     tcase_add_test(tc_core, test_talk_target_binds_actor_without_selection_acknowledgement);

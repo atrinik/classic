@@ -108,7 +108,7 @@ static int test_round_trip(void) {
 
 /** Encode one fragment by hand: header, then the given runs. */
 static size_t encode(uint8_t *out, int8_t depth, uint8_t x, uint8_t y, uint8_t width,
-                     uint8_t height, const uint8_t (*runs)[4], size_t run_count) {
+                     uint8_t height, const uint8_t (*runs)[5], size_t run_count) {
     size_t len = 0;
     out[len++] = 0;
     out[len++] = 0;
@@ -123,8 +123,8 @@ static size_t encode(uint8_t *out, int8_t depth, uint8_t x, uint8_t y, uint8_t w
     out[len++] = height;
     out[len++] = 0;
     for (size_t i = 0; i < run_count; i++) {
-        memcpy(&out[len], runs[i], 4);
-        len += 4;
+        memcpy(&out[len], runs[i], 5);
+        len += 5;
     }
     return len;
 }
@@ -132,15 +132,15 @@ static size_t encode(uint8_t *out, int8_t depth, uint8_t x, uint8_t y, uint8_t w
 static int test_rejections(void) {
     uint8_t buffer[64];
     celestial_closure_t closure;
-    static const uint8_t ok[][4] = {{4, 0x00, 0x80, 0x00}};
+    static const uint8_t ok[][5] = {{4, 0x00, 0x00, 0x80, 0x00}};
     require(celestial_closure_read(buffer, encode(buffer, 0, 0, 0, 2, 2, ok, 1), 4, 4, &closure));
     celestial_closure_free(&closure);
     /* A run of length 0. */
-    static const uint8_t zero[][4] = {{0, 0x00, 0x80, 0x00}, {4, 0x00, 0x80, 0x00}};
+    static const uint8_t zero[][5] = {{0, 0x00, 0x00, 0x80, 0x00}, {4, 0x00, 0x00, 0x80, 0x00}};
     require(!celestial_closure_read(buffer, encode(buffer, 0, 0, 0, 2, 2, zero, 2), 4, 4,
                                     &closure));
     /* A run past the rectangle. */
-    static const uint8_t over[][4] = {{5, 0x00, 0x80, 0x00}};
+    static const uint8_t over[][5] = {{5, 0x00, 0x00, 0x80, 0x00}};
     require(!celestial_closure_read(buffer, encode(buffer, 0, 0, 0, 2, 2, over, 1), 4, 4,
                                     &closure));
     /* Runs that do not cover the rectangle. */
@@ -153,11 +153,15 @@ static int test_rejections(void) {
                                     &closure));
     /* A nonzero value without the closure bit, and a sky exit that also
      * continues upward. */
-    static const uint8_t outside[][4] = {{4, 0x01, 0x00, 0x00}};
+    static const uint8_t outside[][5] = {{4, 0x00, 0x01, 0x00, 0x00}};
     require(!celestial_closure_read(buffer, encode(buffer, 0, 0, 0, 2, 2, outside, 1), 4, 4,
                                     &closure));
-    static const uint8_t sky_up[][4] = {{4, 0x42, 0x80, 0x00}};
+    static const uint8_t sky_up[][5] = {{4, 0x00, 0x42, 0x80, 0x00}};
     require(!celestial_closure_read(buffer, encode(buffer, 0, 0, 0, 2, 2, sky_up, 1), 4, 4,
+                                    &closure));
+    /* A reserved bit. */
+    static const uint8_t reserved[][5] = {{4, 0x08, 0x00, 0x80, 0x00}};
+    require(!celestial_closure_read(buffer, encode(buffer, 0, 0, 0, 2, 2, reserved, 1), 4, 4,
                                     &closure));
     /* Overlapping fragments of one depth. */
     uint8_t twice[64];
@@ -225,6 +229,39 @@ static int test_covered_cell_is_darker_and_glass_transmits(void) {
     return 0;
 }
 
+static int test_overhead_face_of_an_unseen_cell_above(void) {
+    celestial_model_t model;
+    model_at(12, &model);
+    uint32_t open_above = (OPEN_AIR & ~CELESTIAL_CLOSURE_SKY_EXIT) |
+                          CELESTIAL_CLOSURE_CONTINUOUS_UP |
+                          (UINT32_C(3) << CELESTIAL_CLOSURE_OVERHEAD_SHIFT);
+    celestial_closure_t closure;
+    require(build_one(&closure, 0, 2, 2, 5, 5, open_above));
+    int32_t open[25], open_rgb[25][3];
+    require(celestial_closure_solve(&closure, 0, &model, open, open_rgb));
+    int32_t expected, expected_rgb[3];
+    celestial_model_publish(&model, model.direct, model.diffuse, 0, 0, 0, model.starlight,
+                            &expected, expected_rgb);
+    /* An open floor above an unseen cell is open sky. */
+    require(open[12] == expected);
+    celestial_closure_free(&closure);
+
+    /* An opaque roof above the middle cells shades them. */
+    require(build_one(&closure, 0, 2, 2, 5, 5, open_above));
+    for (int i = 0; i < 25; i++) {
+        int x = i % 5, y = i / 5;
+        if (x >= 1 && x <= 3 && y >= 1 && y <= 3) {
+            closure.fragments[0].values[i] &= ~(UINT32_C(3) << CELESTIAL_CLOSURE_OVERHEAD_SHIFT);
+        }
+    }
+    int32_t roofed[25], roofed_rgb[25][3];
+    require(celestial_closure_solve(&closure, 0, &model, roofed, roofed_rgb));
+    require(roofed[12] < open[12]);
+    require(roofed[0] == open[0]);
+    celestial_closure_free(&closure);
+    return 0;
+}
+
 int main(void) {
     toolkit_import(packet);
     int result = test_round_trip();
@@ -236,6 +273,9 @@ int main(void) {
     }
     if (result == 0) {
         result = test_covered_cell_is_darker_and_glass_transmits();
+    }
+    if (result == 0) {
+        result = test_overhead_face_of_an_unseen_cell_above();
     }
     toolkit_deinit();
     return result;

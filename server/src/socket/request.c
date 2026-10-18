@@ -54,6 +54,7 @@
 #include <exploration.h>
 #include <access_server.h>
 #include <access_admin.h>
+#include <toolkit/celestial_closure.h>
 #include <toolkit/map_protocol.h>
 #include <toolkit/packet.h>
 #include <toolkit/string.h>
@@ -1043,6 +1044,10 @@ static int16_t map_space_support_height(MapSpace *msp) {
         }                                                                                       \
     }
 
+/** The map of each cell in this update's celestial closure, NULL outside
+ * it (server thread only). */
+static mapstruct *map2_closure_maps[MAP2_LEVELS][MAP_CLIENT_X][MAP_CLIENT_Y];
+
 /** Distinct celestial profiles of the maps one MAP2 update shows. */
 typedef struct map2_celestial_maps {
     const mapstruct *maps[CELESTIAL_PROTOCOL_SLOTS_MAX];
@@ -1072,6 +1077,117 @@ static void map2_celestial_note(map2_celestial_maps_t *seen, const mapstruct *ma
 
 static bool map2_celestial_slot_assigned(const socket_struct *cs, int slot) {
     return (cs->celestial_slots_assigned[slot / 64] >> (slot % 64)) & 1U;
+}
+
+/** Profile slot of a map's fragments, or CELESTIAL_PROTOCOL_SLOT_NONE. */
+static uint8_t map2_closure_slot(const mapstruct *map, const map2_celestial_maps_t *seen,
+                                 const int *slot_of) {
+    if (map->celestial_schema != 1) {
+        return CELESTIAL_PROTOCOL_SLOT_NONE;
+    }
+    const region_celestial_profile_t *profile = region_celestial_for_map(map);
+    for (size_t i = 0; i < seen->count; i++) {
+        if (slot_of[i] >= 0 &&
+            memcmp(seen->profiles[i]->digest, profile->digest, sizeof(profile->digest)) == 0) {
+            return (uint8_t)slot_of[i];
+        }
+    }
+    return CELESTIAL_PROTOCOL_SLOT_NONE;
+}
+
+/**
+ * Collect this update's celestial closure from the per-socket records: one
+ * fragment per map and depth, the bounding rectangle of its closure cells.
+ * Records of cells outside the closure are dropped. A closure too large for
+ * one command loses its farthest depths, which the client then solves as
+ * open air.
+ */
+static bool map2_closure_collect(socket_struct *cs, const map2_celestial_maps_t *seen,
+                                 const int *slot_of, celestial_closure_t *closure) {
+    celestial_closure_fragment_t *fragments = NULL;
+    const mapstruct **owners = NULL;
+    size_t count = 0, capacity = 0;
+    for (int index = 0; index < MAP2_LEVELS; index++) {
+        int depth = index - MAP2_MAX_DEPTH;
+        size_t first = count;
+        for (int ax = 0; ax < cs->mapx; ax++) {
+            for (int ay = 0; ay < cs->mapy; ay++) {
+                const mapstruct *map = map2_closure_maps[index][ax][ay];
+                MapCell *cell = map_client_cache_cell(&cs->lastmap, depth, ax, ay, false);
+                if (map == NULL || cell == NULL || cell->celestial_structure == 0) {
+                    if (cell != NULL) {
+                        cell->celestial_structure = 0;
+                    }
+                    map2_closure_maps[index][ax][ay] = NULL;
+                    continue;
+                }
+                size_t fragment = first;
+                while (fragment < count && owners[fragment] != map) {
+                    fragment++;
+                }
+                if (fragment == count) {
+                    if (count == capacity) {
+                        capacity = capacity == 0 ? 16 : capacity * 2;
+                        fragments = xrealloc(fragments, capacity * sizeof(*fragments));
+                        owners = xrealloc(owners, capacity * sizeof(*owners));
+                    }
+                    owners[count] = map;
+                    fragments[count++] = (celestial_closure_fragment_t){
+                        .depth = (int8_t)depth, .x = (uint8_t)ax, .y = (uint8_t)ay, .width = 1,
+                        .height = 1, .slot = map2_closure_slot(map, seen, slot_of)};
+                    continue;
+                }
+                celestial_closure_fragment_t *grown = &fragments[fragment];
+                int min_x = MIN(grown->x, ax), min_y = MIN(grown->y, ay);
+                int max_x = MAX(grown->x + grown->width - 1, ax);
+                int max_y = MAX(grown->y + grown->height - 1, ay);
+                grown->x = (uint8_t)min_x;
+                grown->y = (uint8_t)min_y;
+                grown->width = (uint8_t)(max_x - min_x + 1);
+                grown->height = (uint8_t)(max_y - min_y + 1);
+            }
+        }
+        for (size_t fragment = first; fragment < count; fragment++) {
+            celestial_closure_fragment_t *filled = &fragments[fragment];
+            filled->values = xcalloc((size_t)filled->width * filled->height,
+                                     sizeof(*filled->values));
+            for (int y = 0; y < filled->height; y++) {
+                for (int x = 0; x < filled->width; x++) {
+                    int ax = filled->x + x, ay = filled->y + y;
+                    if (map2_closure_maps[index][ax][ay] == owners[fragment]) {
+                        filled->values[(size_t)x + (size_t)filled->width * y] =
+                            map_client_cache_cell(&cs->lastmap, depth, ax, ay, false)
+                                ->celestial_structure;
+                    }
+                }
+            }
+        }
+    }
+    free(owners);
+    for (int farthest = MAP2_MAX_DEPTH; farthest > 0; farthest--) {
+        celestial_closure_t sized = {.count = count, .fragments = fragments};
+        if (celestial_closure_size(&sized) <= PACKET_PAYLOAD_MAX) {
+            break;
+        }
+        size_t kept = 0;
+        for (size_t i = 0; i < count; i++) {
+            if (abs(fragments[i].depth) >= farthest) {
+                free(fragments[i].values);
+            } else {
+                fragments[kept++] = fragments[i];
+            }
+        }
+        count = kept;
+    }
+    return celestial_closure_build(closure, 0, cs->mapx, cs->mapy, fragments, count);
+}
+
+static uint64_t map2_packet_digest(const packet_struct *packet) {
+    uint64_t digest = UINT64_C(1469598103934665603);
+    for (size_t i = 0; i < packet->len; i++) {
+        digest = (digest ^ packet->data[i]) * UINT64_C(1099511628211);
+    }
+    return digest;
 }
 
 /**
@@ -1140,12 +1256,24 @@ static void map2_send_celestial(socket_struct *cs, const map2_celestial_maps_t *
         packet_free(probe);
         return;
     }
-    uint64_t digest = UINT64_C(1469598103934665603);
-    for (size_t i = 0; i < probe->len; i++) {
-        digest = (digest ^ probe->data[i]) * UINT64_C(1099511628211);
-    }
+    uint64_t digest = map2_packet_digest(probe);
     packet_free(probe);
-    if (cs->celestial_sent && cs->celestial_sent_digest == digest) {
+
+    celestial_closure_t closure;
+    if (!map2_closure_collect(cs, seen, slot_of, &closure)) {
+        LOG(ERROR, "Invalid celestial closure; not sent.");
+        return;
+    }
+    probe = packet_new(CLIENT_CMD_CELESTIAL_STRUCTURE, celestial_closure_size(&closure), 0);
+    bool encoded = celestial_closure_write(probe, &closure);
+    HARD_ASSERT(encoded);
+    (void)encoded;
+    uint64_t structure_digest = map2_packet_digest(probe);
+    packet_free(probe);
+    /* The two payloads are one publication: either changing sends both. */
+    if (cs->celestial_sent && cs->celestial_sent_digest == digest &&
+        cs->celestial_structure_digest == structure_digest) {
+        celestial_closure_free(&closure);
         return;
     }
     cs->celestial_generation++;
@@ -1159,6 +1287,16 @@ static void map2_send_celestial(socket_struct *cs, const map2_celestial_maps_t *
     (void)written;
     cs->celestial_sent = true;
     cs->celestial_sent_digest = digest;
+    socket_send_packet(cs, packet);
+
+    closure.generation = cs->celestial_generation;
+    packet = packet_new(CLIENT_CMD_CELESTIAL_STRUCTURE, celestial_closure_size(&closure), 0);
+    packet_debug_data(packet, 0, "Celestial closure");
+    written = celestial_closure_write(packet, &closure);
+    HARD_ASSERT(written);
+    (void)written;
+    cs->celestial_structure_digest = structure_digest;
+    celestial_closure_free(&closure);
     socket_send_packet(cs, packet);
 }
 
@@ -1586,6 +1724,7 @@ void draw_client_map2(object *pl) {
     bool timed_light_descriptor = false;
     bool light_state_invalidated = false;
     map2_celestial_maps_t celestial_maps = {0};
+    memset(map2_closure_maps, 0, sizeof(map2_closure_maps));
     uint64_t timed_light_generation = 0;
     uint64_t timed_light_start_seconds = 0;
     uint64_t timed_light_end_seconds = 0;
@@ -1836,6 +1975,11 @@ void draw_client_map2(object *pl) {
                     map_append_support_height(packet, mp, mask, map_space_support_height(msp));
                     if (remembered) {
                         mp->client_light_known |= MAP2_CLIENT_LIGHT_REMEMBERED;
+                        /* Remembered fog keeps its whole structure record as it
+                         * was when last visible. */
+                        if (mp->celestial_structure != 0) {
+                            map2_closure_maps[MAP2_DEPTH_INDEX(depth)][ax][ay] = m;
+                        }
                         map2_light_sample_t sample;
                         map2_sample_light(pl, m, nx, ny, (special_vision & 1) != 0, &sample);
                         if (sample.snap) {
@@ -1952,6 +2096,8 @@ void draw_client_map2(object *pl) {
                 /* Occluders of the objects actually sent to this viewer, and the
                  * emitters it shows, digested to detect value-only changes. */
                 uint64_t cell_occluder = 0;
+                celestial_closure_accumulator_t cell_celestial;
+                celestial_closure_begin(&cell_celestial);
                 uint32_t cell_emitter_digest = UINT32_C(2166136261);
                 uint64_t cell_emitter_sent = 0;
                 anim_num = 0;
@@ -2374,6 +2520,7 @@ void draw_client_map2(object *pl) {
                             uint64_t emitter_bit = UINT64_C(1) << socket_layer;
                             cell_occluder = light_occluder_combine(
                                 cell_occluder, light_occluder_object_bits(tmp));
+                            celestial_closure_accumulate(&cell_celestial, tmp);
                             if (emitter != 0) {
                                 uint64_t entry[2] = {(uint64_t)socket_layer, emitter};
                                 const uint8_t *bytes = (const uint8_t *)entry;
@@ -2854,6 +3001,10 @@ void draw_client_map2(object *pl) {
                 if (!map2_local_light_known(mp, local_light)) {
                     ext_flags |= MAP2_FLAG_EXT_LOCAL_LIGHT;
                 }
+                /* The cell is authorized: its structure record is current. */
+                mp->celestial_structure =
+                    celestial_closure_cell_value(&cell_celestial, m, nx, ny, pl);
+                map2_closure_maps[MAP2_DEPTH_INDEX(depth)][ax][ay] = m;
                 if (!tile_fow) {
                     occluder = light_occluder_finish(cell_occluder) |
                                light_occluder_faces(m, nx, ny,

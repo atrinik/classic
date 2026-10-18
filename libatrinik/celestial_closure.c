@@ -109,7 +109,7 @@ static size_t fragment_runs(const celestial_closure_fragment_t *fragment) {
 size_t celestial_closure_size(const celestial_closure_t *closure) {
     size_t size = 4 + 2;
     for (size_t i = 0; i < closure->count; i++) {
-        size += 6 + 4 * fragment_runs(&closure->fragments[i]);
+        size += 6 + 5 * fragment_runs(&closure->fragments[i]);
     }
     return size;
 }
@@ -138,9 +138,7 @@ bool celestial_closure_write(packet_struct *packet, const celestial_closure_t *c
             }
             uint32_t value = fragment->values[cell];
             packet_writer_write_uint8(packet, (uint8_t)length);
-            packet_writer_write_uint8(packet, (uint8_t)(value >> 16));
-            packet_writer_write_uint8(packet, (uint8_t)(value >> 8));
-            packet_writer_write_uint8(packet, (uint8_t)value);
+            packet_writer_write_uint32(packet, value);
             cell += length;
         }
     }
@@ -188,9 +186,7 @@ bool celestial_closure_read(const uint8_t *data, size_t len, int window_width, i
         }
         for (size_t cell = 0; valid && cell < cells;) {
             uint8_t length = packet_reader_read_uint8(&reader);
-            uint32_t value = (uint32_t)packet_reader_read_uint8(&reader) << 16;
-            value |= (uint32_t)packet_reader_read_uint8(&reader) << 8;
-            value |= packet_reader_read_uint8(&reader);
+            uint32_t value = packet_reader_read_uint32(&reader);
             valid = packet_reader_error(&reader) == PACKET_ERROR_NONE && length != 0 &&
                     length <= cells - cell && celestial_closure_value_valid(value);
             for (size_t i = 0; valid && i < length; i++) {
@@ -386,7 +382,18 @@ static uint16_t lattice_light(void *context, const celestial_solver_face_t *face
     if (face->normal[2] != 0) {
         const celestial_solver_cell_t *upper = face->normal[2] > 0 ? &face->to : &face->from;
         const celestial_solver_cell_t *lower = face->normal[2] > 0 ? &face->from : &face->to;
-        uint16_t physical = cell_face(lattice, upper, 0, aperture);
+        /* The floor above an authorized cell, when that cell is outside the
+         * closure, is the one the authorized cell recorded. */
+        uint16_t physical;
+        uint32_t below = lower->map != NULL ? lattice_value(lattice, lower) : 0;
+        if (upper->map != NULL && lattice_value(lattice, upper) == 0 && below != 0) {
+            physical = class_coefficient[(below >> CELESTIAL_CLOSURE_OVERHEAD_SHIFT) & 3U];
+            if (aperture != NULL && (below & CELESTIAL_CLOSURE_OVERHEAD_APERTURE) != 0) {
+                *aperture = true;
+            }
+        } else {
+            physical = cell_face(lattice, upper, 0, aperture);
+        }
         uint16_t cover = 0;
         if (lower->map != NULL) {
             uint32_t value = lattice_value(lattice, lower);

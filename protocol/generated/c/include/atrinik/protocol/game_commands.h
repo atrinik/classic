@@ -128,7 +128,8 @@ typedef enum atrinik_server_to_client_command {
     CLIENT_CMD_REGION_EXPLORATION = 32,
     CLIENT_CMD_BOOK_EDIT = 33,
     CLIENT_CMD_CELESTIAL = 34,
-    CLIENT_CMD_NROF = 35
+    CLIENT_CMD_CELESTIAL_STRUCTURE = 35,
+    CLIENT_CMD_NROF = 36
 } atrinik_server_to_client_command_t;
 
 /* Stable diagnostic names for server-to-client commands. */
@@ -167,5 +168,6 @@ typedef enum atrinik_server_to_client_command {
 #define CLIENT_CMD_NAME_REGION_EXPLORATION "region_exploration"
 #define CLIENT_CMD_NAME_BOOK_EDIT "book_edit"
 #define CLIENT_CMD_NAME_CELESTIAL "celestial"
+#define CLIENT_CMD_NAME_CELESTIAL_STRUCTURE "celestial_structure"
 
 #endif

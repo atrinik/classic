@@ -22,7 +22,7 @@ class GenerateTests(unittest.TestCase):
         self.assertEqual(schema["item_extra_message_size"], 256)
         self.assertEqual(schema["player_status"]["max_statuses"], 48)
         self.assertEqual(len(schema["client_to_server"]), 27)
-        self.assertEqual(len(schema["server_to_client"]), 35)
+        self.assertEqual(len(schema["server_to_client"]), 36)
 
     def test_book_edit_preserves_published_access_command_ids(self) -> None:
         schema = GENERATE.load_schema(ROOT / "schema/game-commands.json")
@@ -37,6 +37,7 @@ class GenerateTests(unittest.TestCase):
         schema = GENERATE.load_schema(ROOT / "schema/game-commands.json")
         s2c = {entry["symbol"]: entry["id"] for entry in schema["server_to_client"]}
         self.assertEqual(s2c["CELESTIAL"], 34)
+        self.assertEqual(s2c["CELESTIAL_STRUCTURE"], 35)
     def test_depth_targeting_preserves_published_target_command_ids(self) -> None:
         schema = GENERATE.load_schema(ROOT / "schema/game-commands.json")
         c2s = {entry["symbol"]: entry["id"] for entry in schema["client_to_server"]}
