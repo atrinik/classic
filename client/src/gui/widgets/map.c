@@ -3238,9 +3238,10 @@ void map_set_data(int x,
  * hard clear revokes both.
  */
 /** The occluder word the emitter field evaluates for a cell: zero when unknown. */
-static uint32_t map_cell_effective_occluder(const map_cell_header_t *header) {
+static uint64_t map_cell_effective_occluder(const map_cell_header_t *header) {
     return (header->client_light_known & 2U)
-               ? client_lighting_occluder(header->occluder, header->occluder_horizontal)
+               ? client_lighting_occluder(header->occluder, header->occluder_horizontal,
+                                          header->occluder_vertical)
                : 0;
 }
 
@@ -3482,10 +3483,10 @@ void map_set_occluder(int x, int y, uint16_t bits, uint16_t horizontal, uint8_t 
         return;
     }
     /* The emitter field reads only the evaluated occluder word, an unknown
-     * occluder reading as zero, so a change of any other bit, of the vertical
-     * byte or of knownness alone never rebuilds it. */
-    bool evaluated =
-        map_cell_effective_occluder(header) != client_lighting_occluder(bits, horizontal);
+     * occluder reading as zero, so a change of any other bit or of knownness
+     * alone never rebuilds it. */
+    bool evaluated = map_cell_effective_occluder(header) !=
+                     client_lighting_occluder(bits, horizontal, vertical);
     header->occluder = bits;
     header->occluder_horizontal = horizontal;
     header->occluder_vertical = vertical;
@@ -5660,6 +5661,26 @@ static bool map_client_lighting_translate(map_client_lighting_field_t *field) {
 }
 
 /** Rebuild the current level's emitter field from sent emitters and occluders. */
+/** Levels whose emitters and occluders a level's emitter field reads: those
+ * within the vertical reach of the largest profile. */
+static void map_client_lighting_levels(size_t level, size_t *lowest, size_t *highest) {
+    *lowest = level >= LIGHT_PROFILE_RADIUS_MAX ? level - LIGHT_PROFILE_RADIUS_MAX : 0;
+    *highest = MIN(level + LIGHT_PROFILE_RADIUS_MAX, MAP2_LEVELS - 1);
+}
+
+/** Revision of a level's emitter field inputs: the newest emitter revision of
+ * the levels it reads. Revisions come from one clock and never repeat, so any
+ * change to one of them changes this. */
+static uint64_t map_client_lighting_revision(size_t level) {
+    size_t lowest, highest;
+    map_client_lighting_levels(level, &lowest, &highest);
+    uint64_t revision = 0;
+    for (size_t i = lowest; i <= highest; i++) {
+        revision = MAX(revision, level_emitter_revision[i]);
+    }
+    return revision;
+}
+
 static void map_client_lighting_rebuild(map_client_lighting_field_t *field) {
     int margin = LIGHT_PROFILE_RADIUS_MAX;
     int width = map_width + margin * 2, height = map_height + margin * 2;
@@ -5676,53 +5697,65 @@ static void map_client_lighting_rebuild(map_client_lighting_field_t *field) {
     field->cache_origin_y = map_cache_origin_y;
     field->scroll_x = map_cache_scroll_x;
     field->scroll_y = map_cache_scroll_y;
-    field->revision = level_emitter_revision[current_level_index];
+    field->revision = map_client_lighting_revision(current_level_index);
     field->store = cells;
     field->valid = true;
 
+    /* Local light crosses levels as the server's transport does: the field of
+     * this level sums every level within reach through their occluders. */
+    size_t lowest, highest;
+    map_client_lighting_levels(current_level_index, &lowest, &highest);
+    int levels = (int)(highest - lowest + 1);
     int cache_width = map_width * MAP_FOW_SIZE, cache_height = map_height * MAP_FOW_SIZE;
-    uint32_t *occluders = xcalloc(count, sizeof(*occluders));
+    uint64_t *occluders = xcalloc(count * (size_t)levels, sizeof(*occluders));
     client_lighting_emitter_t *emitters = NULL;
     size_t emitter_count = 0, emitter_capacity = 0;
-    for (int y = 0; y < height; y++) {
-        for (int x = 0; x < width; x++) {
-            int cache_x = field->origin_x + x, cache_y = field->origin_y + y;
-            if (cache_x < 0 || cache_y < 0 || cache_x >= cache_width || cache_y >= cache_height) {
-                continue;
-            }
-            const map_cell_header_t *header =
-                &cells->headers[map_cache_physical_index(cache_x, cache_y)];
-            if (header->client_light_known & 2U) {
-                occluders[(size_t)y * width + x] =
-                    client_lighting_occluder(header->occluder, header->occluder_horizontal);
-            }
-            /* Remembered cells keep their occluders, but their remembered
-             * objects' emitters may have changed since: compose none. Only
-             * the live wire window is current; cells beside it, such as
-             * those a resize leaves behind, are never live. */
-            const map_cell_t *cell = MAP_CELL_GET(cache_x, cache_y);
-            bool live = cache_x >= MAP_STARTX && cache_x < MAP_STARTX + map_width &&
-                        cache_y >= MAP_STARTY && cache_y < MAP_STARTY + map_height;
-            if (!live || cell->fow || cell->emitters == NULL) {
-                continue;
-            }
-            for (size_t i = 0; i < cell->emitters->count; i++) {
-                const map_cell_emitter_t *record = &cell->emitters->entries[i];
-                if (emitter_count == emitter_capacity) {
-                    emitter_capacity = emitter_capacity == 0 ? 64 : emitter_capacity * 2;
-                    emitters = xreallocarray(emitters, emitter_capacity, sizeof(*emitters));
+    for (int z = 0; z < levels; z++) {
+        map_cell_store_t *store = level_cells[lowest + (size_t)z];
+        if (store == NULL) {
+            continue;
+        }
+        for (int y = 0; y < height; y++) {
+            for (int x = 0; x < width; x++) {
+                int cache_x = field->origin_x + x, cache_y = field->origin_y + y;
+                if (cache_x < 0 || cache_y < 0 || cache_x >= cache_width ||
+                    cache_y >= cache_height) {
+                    continue;
                 }
-                emitters[emitter_count++] = (client_lighting_emitter_t){
-                    .x = x,
-                    .y = y,
-                    .radius = record->radius,
-                    .flags = record->flags,
-                    .color = (uint32_t)record->rgb[0] << 16 | (uint32_t)record->rgb[1] << 8 |
-                             record->rgb[2]};
+                const map_cell_header_t *header =
+                    &store->headers[map_cache_physical_index(cache_x, cache_y)];
+                occluders[((size_t)z * height + y) * width + x] =
+                    map_cell_effective_occluder(header);
+                /* Remembered cells keep their occluders, but their remembered
+                 * objects' emitters may have changed since: compose none.
+                 * Only the live wire window is current; cells beside it, such
+                 * as those a resize leaves behind, are never live. */
+                const map_cell_t *cell = map_cache_cell(store, cache_x, cache_y);
+                bool live = cache_x >= MAP_STARTX && cache_x < MAP_STARTX + map_width &&
+                            cache_y >= MAP_STARTY && cache_y < MAP_STARTY + map_height;
+                if (!live || cell->fow || cell->emitters == NULL) {
+                    continue;
+                }
+                for (size_t i = 0; i < cell->emitters->count; i++) {
+                    const map_cell_emitter_t *record = &cell->emitters->entries[i];
+                    if (emitter_count == emitter_capacity) {
+                        emitter_capacity = emitter_capacity == 0 ? 64 : emitter_capacity * 2;
+                        emitters = xreallocarray(emitters, emitter_capacity, sizeof(*emitters));
+                    }
+                    emitters[emitter_count++] = (client_lighting_emitter_t){
+                        .x = x,
+                        .y = y,
+                        .z = z,
+                        .radius = record->radius,
+                        .flags = record->flags,
+                        .color = (uint32_t)record->rgb[0] << 16 |
+                                 (uint32_t)record->rgb[1] << 8 | record->rgb[2]};
+                }
             }
         }
     }
-    client_lighting_evaluate(width, height, occluders, emitters, emitter_count, field->cells);
+    client_lighting_evaluate_stack(levels, (int)(current_level_index - lowest), width, height,
+                                   occluders, emitters, emitter_count, field->cells);
     field->has_flicker = false;
     for (size_t index = 0; index < (size_t)width * height && !field->has_flicker; index++) {
         /* Grouping can cap the scalar while hue still flickers. */
@@ -5819,7 +5852,8 @@ map_client_lighting_apply(int x, int y, uint8_t sub_layer, uint16_t *scalar, uin
                             field->cache_origin_y != map_cache_origin_y ||
                             field->scroll_x != map_cache_scroll_x ||
                             field->scroll_y != map_cache_scroll_y);
-    if (!usable || moved || field->revision != level_emitter_revision[current_level_index]) {
+    if (!usable || moved ||
+        field->revision != map_client_lighting_revision(current_level_index)) {
         if (map_emitter_rebuild_allowed()) {
             map_client_lighting_rebuild(field);
             usable = true;
@@ -6827,18 +6861,24 @@ bool widget_map_client_lighting_state_test(void) {
     map_clear_cell(9, 9, true);
     map_clear_cell(9, 9, false);
     success = success && level_emitter_revision[current_level_index] == emitter_revision;
-    /* Only occluder inputs the emitter field evaluates rebuild it. */
+    /* Only occluder inputs the emitter field evaluates rebuild it: the
+     * vertical attenuation, the view blocker and roof bits and the up/down
+     * faces do, since light crosses levels; the floor and door bits do not. */
     map_set_occluder(9, 9, MAP2_OCCLUDER_FLOOR, 0x1111, 1);
     emitter_revision = level_emitter_revision[current_level_index];
     map_set_occluder(9, 9, MAP2_OCCLUDER_FLOOR, 0x1111, 2);
-    success = success && level_emitter_revision[current_level_index] == emitter_revision &&
+    success = success && level_emitter_revision[current_level_index] != emitter_revision &&
               map_get_occluder(9, 9, &bits, &horizontal, &vertical) && vertical == 2;
-    /* Geometry, roof and up/down face bits are not evaluated either. */
+    emitter_revision = level_emitter_revision[current_level_index];
+    map_set_occluder(9, 9, MAP2_OCCLUDER_FLOOR | MAP2_OCCLUDER_DOOR_CLOSED, 0x1111, 2);
+    success = success && level_emitter_revision[current_level_index] == emitter_revision;
     map_set_occluder(9, 9,
                      MAP2_OCCLUDER_BLOCKSVIEW | MAP2_OCCLUDER_ROOF |
                          (UINT16_C(0x30) << MAP2_OCCLUDER_FACE_SHIFT),
                      0x1111, 2);
-    success = success && level_emitter_revision[current_level_index] == emitter_revision;
+    success = success && level_emitter_revision[current_level_index] != emitter_revision;
+    map_set_occluder(9, 9, MAP2_OCCLUDER_FLOOR, 0x1111, 2);
+    emitter_revision = level_emitter_revision[current_level_index];
     map_set_occluder(9, 9, MAP2_OCCLUDER_FLOOR, 0x1112, 2);
     success = success && level_emitter_revision[current_level_index] != emitter_revision;
     emitter_revision = level_emitter_revision[current_level_index];
@@ -6853,9 +6893,10 @@ bool widget_map_client_lighting_state_test(void) {
     map_set_fow(9, 9, true);
     success = success && level_emitter_revision[current_level_index] == emitter_revision;
     map_clear_cell(9, 9, true);
-    /* Unknown and known-zero occluders are the same evaluator input. */
+    /* Unknown and known-zero occluders are the same evaluator input; a floor
+     * bit without attenuation is not evaluated. */
     emitter_revision = level_emitter_revision[current_level_index];
-    map_set_occluder(9, 9, MAP2_OCCLUDER_FLOOR, 0, 3);
+    map_set_occluder(9, 9, MAP2_OCCLUDER_FLOOR, 0, 0);
     map_clear_cell(9, 9, true);
     map_set_occluder(9, 9, 0, 0, 0);
     map_clear_cell(9, 9, true);
@@ -6900,7 +6941,7 @@ bool widget_map_client_lighting_state_test(void) {
         map_client_lighting_apply(8 + MAP_STARTX, 8 + MAP_STARTY, 0, &budget_scalar, budget_rgb);
     }
     success = success && budget_field->valid &&
-              budget_field->revision != level_emitter_revision[current_level_index];
+              budget_field->revision != map_client_lighting_revision(current_level_index);
     /* Over budget, a scrolled window moves its previous field with it and
      * stays out of date, and a depth without a usable field composes only
      * its base and coarse level. */
@@ -6967,11 +7008,11 @@ bool widget_map_client_lighting_state_test(void) {
     map_emitter_auxiliary_begin();
     map_emitter_revision_bump(current_level_index);
     map_client_lighting_apply(8 + MAP_STARTX, 8 + MAP_STARTY, 0, &budget_scalar, budget_rgb);
-    success = success && budget_field->revision != level_emitter_revision[current_level_index];
+    success = success && budget_field->revision != map_client_lighting_revision(current_level_index);
     map_emitter_frame_end();
     map_redraw_consume();
     map_client_lighting_apply(8 + MAP_STARTX, 8 + MAP_STARTY, 0, &budget_scalar, budget_rgb);
-    success = success && budget_field->revision == level_emitter_revision[current_level_index];
+    success = success && budget_field->revision == map_client_lighting_revision(current_level_index);
     /* Flicker never modulates a coarse floor that dominates the emitter: a
      * radius-1 flickering emitter under a level-2 block stays at the floor. */
     uint32_t saved_tick = LastTick;
