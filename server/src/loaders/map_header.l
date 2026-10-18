@@ -24,6 +24,7 @@
  ************************************************************************/
 
 #include <global.h>
+#include <celestial_dependencies.h>
 #include <celestial_structure.h>
 #include <loader.h>
 #include <region.h>
@@ -230,6 +231,7 @@ WS  [ \t]*
             m->celestial_header_invalid = true;
         }
         m->celestial_tile_path_seen[tile - 1] = true;
+        celestial_dependencies_inputs_changed();
         const char *value = yval();
         if (!celestial_structure_logical_map_id_valid(value)) {
             m->celestial_tile_path_invalid = true;
@@ -413,6 +415,7 @@ void map_set_celestial_boundary(mapstruct *m, int tile, const char *value)
         m->celestial_header_invalid = true;
         return;
     }
+    celestial_dependencies_inputs_changed();
     if (strcmp(value, "continuous") == 0) {
         m->celestial_boundary[tile] = CELESTIAL_BOUNDARY_CONTINUOUS;
     } else if (strcmp(value, "discontinuous") == 0) {

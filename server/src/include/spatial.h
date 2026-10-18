@@ -56,6 +56,7 @@ typedef struct spatial_observer {
     void *context;
 } spatial_observer;
 spatial_observer spatial_observer_exchange(spatial_observer observer);
+bool spatial_observer_active(void);
 
 typedef enum spatial_policy { SPATIAL_SIGHT, SPATIAL_COMBAT } spatial_policy;
 

@@ -3836,6 +3836,11 @@ shstr *object_get_value(const object *op, const char *const key) {
     HARD_ASSERT(op != NULL);
     HARD_ASSERT(key != NULL);
 
+    /* Most objects have no fields; skip hashing the key for them. */
+    if (op->key_values == NULL) {
+        return NULL;
+    }
+
     shstr *shared_key = find_string(key);
     if (shared_key == NULL) {
         return NULL;

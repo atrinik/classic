@@ -46,6 +46,7 @@
 #include <monster.h>
 #include <los.h>
 #include <spatial.h>
+#include <celestial_dependencies.h>
 #include <light.h>
 #include <initialization.h>
 #include <animation.h>
@@ -751,7 +752,9 @@ void draw_client_map(object *pl) {
     tag_t player_count = pl->count;
     player *view_player = CONTR(pl);
     socket_struct *view_socket = view_player->cs;
+    celestial_dependencies_cache_begin();
     draw_client_map2(pl);
+    celestial_dependencies_cache_end();
     if (!player_connection_is_current(pl, player_count, view_player, view_socket) ||
         view_socket->target_map_published_map == NULL) {
         return;

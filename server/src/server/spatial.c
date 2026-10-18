@@ -38,6 +38,10 @@ static struct {
 static unsigned long view_generation;
 static bool view_active;
 
+bool spatial_observer_active(void) {
+    return active_observer.visit != NULL;
+}
+
 spatial_observer spatial_observer_exchange(spatial_observer observer) {
     spatial_observer previous = active_observer;
     active_observer = observer;

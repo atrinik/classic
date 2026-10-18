@@ -19,6 +19,15 @@ bool celestial_dependencies_observe(celestial_dependencies *ctx, const mapstruct
 bool celestial_dependencies_observe_at(celestial_dependencies *ctx,
                                        const mapstruct *map, int tx, int ty, int z);
 bool celestial_dependencies_fresh(const celestial_dependencies *ctx);
+/* Call after changing any map field a dependency signature reads: residency,
+ * identity, dimensions, structure revision, schema, sky, region, tile paths,
+ * tile links or celestial boundaries. */
+void celestial_dependencies_inputs_changed(void);
+/* Bracket a phase whose map changes all go through the functions that call
+ * celestial_dependencies_inputs_changed(), such as building one map view.
+ * Within it, repeated freshness checks of an unchanged context are cached. */
+void celestial_dependencies_cache_begin(void);
+void celestial_dependencies_cache_end(void);
 bool celestial_dependencies_references_map(const celestial_dependencies *ctx,
                                            const mapstruct *map);
 size_t celestial_dependencies_bytes(const celestial_dependencies *ctx);

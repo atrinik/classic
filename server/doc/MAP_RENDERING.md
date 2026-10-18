@@ -1330,6 +1330,20 @@ wrap is a fatal error, never an invitation to reuse a cache entry.
   for offline callers/oracle validation; MAP2 uses the bounded runtime request.
   The exact packed cell geometry signatures occupy preexisting `MapSpace`
   tail padding; a compile-time assertion forbids growing that allocation.
+- Three caches avoid repeating identical work without changing any published
+  value. The synchronous solver resolves each level's spill coefficients once
+  and reuses them for all four Jacobi passes and all three relaxed fields; the
+  table is charged to the shared transient limit, and when it does not fit the
+  passes evaluate coefficients again in the original order. MAP2 view
+  construction opens a dependency-freshness scope: inside it, a context proven
+  fresh stays fresh until a notified change to a signature input (residency,
+  identity, dimensions, structural revision, schema, sky, region, tile paths,
+  links or boundaries); outside a scope every check compares signatures.
+  Testing builds verify every cached result against the full comparison.
+  A local-light rebuild shares one spatial-resolution and path-value cache
+  between the scalar, positive and color masks of each origin. It is
+  discarded when the LOS geometry epoch changes and bypassed while a
+  dependency observer must see every visit.
 - A structural edit increments the affected map's structural revision and
   rebuilds classification plus affected stack/halo fields atomically.  The
   revision remains part of every dependent key even when a later edit restores
