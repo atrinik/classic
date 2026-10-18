@@ -1046,6 +1046,31 @@ static int16_t map_space_support_height(MapSpace *msp) {
         }                                                                                       \
     }
 
+bool map2_direction_shown(const object *op, const object *viewer, int ax, int ay) {
+    if (!QUERY_FLAG(op, FLAG_DRAW_DIRECTION)) {
+        return true;
+    }
+    int center_x = CONTR(viewer)->cs->mapx_2;
+    int center_y = CONTR(viewer)->cs->mapy_2;
+    /* If the object is dir [0124568] and not in the top or right quadrant or
+     * on the central square, do not show it. */
+    if ((!op->direction || op->direction == NORTH || op->direction == NORTHEAST ||
+         op->direction == SOUTHEAST || op->direction == SOUTH || op->direction == SOUTHWEST ||
+         op->direction == NORTHWEST) &&
+        !(ax <= center_x && ay <= center_y) && !(ax > center_x && ay < center_y)) {
+        return false;
+    }
+    /* If the object is dir [0234768] and not in the top or left quadrant or
+     * on the central square, do not show it. */
+    if ((!op->direction || op->direction == NORTHEAST || op->direction == EAST ||
+         op->direction == SOUTHEAST || op->direction == SOUTHWEST || op->direction == WEST ||
+         op->direction == NORTHWEST) &&
+        !(ax <= center_x && ay <= center_y) && !(ax < center_x && ay > center_y)) {
+        return false;
+    }
+    return true;
+}
+
 /** The map of each cell in this update's celestial closure, NULL outside
  * it (server thread only). */
 static mapstruct *map2_closure_maps[MAP2_LEVELS][MAP_CLIENT_X][MAP_CLIENT_Y];
@@ -2225,30 +2250,8 @@ void draw_client_map2(object *pl) {
 
                         /* Handle objects that are shown based on their direction
                          * and the player's position. */
-                        if (tmp && QUERY_FLAG(tmp, FLAG_DRAW_DIRECTION)) {
-                            /* If the object is dir [0124568] and not in the top
-                             * or right quadrant or on the central square, do not
-                             * show it. */
-                            if ((!tmp->direction || tmp->direction == NORTH ||
-                                 tmp->direction == NORTHEAST || tmp->direction == SOUTHEAST ||
-                                 tmp->direction == SOUTH || tmp->direction == SOUTHWEST ||
-                                 tmp->direction == NORTHWEST) &&
-                                !((ax <= CONTR(pl)->cs->mapx_2) && (ay <= CONTR(pl)->cs->mapy_2)) &&
-                                !((ax > CONTR(pl)->cs->mapx_2) && (ay < CONTR(pl)->cs->mapy_2))) {
-                                tmp = NULL;
-                            } else if ((!tmp->direction || tmp->direction == NORTHEAST ||
-                                        tmp->direction == EAST || tmp->direction == SOUTHEAST ||
-                                        tmp->direction == SOUTHWEST || tmp->direction == WEST ||
-                                        tmp->direction == NORTHWEST) &&
-                                       !((ax <= CONTR(pl)->cs->mapx_2) &&
-                                         (ay <= CONTR(pl)->cs->mapy_2)) &&
-                                       !((ax < CONTR(pl)->cs->mapx_2) &&
-                                         (ay > CONTR(pl)->cs->mapy_2))) {
-                                /* If the object is dir [0234768] and not in the top
-                                 * or left quadrant or on the central square, do not
-                                 * show it. */
-                                tmp = NULL;
-                            }
+                        if (tmp != NULL && !map2_direction_shown(tmp, pl, ax, ay)) {
+                            tmp = NULL;
                         }
 
                         bool roof_surface = object_is_roof_surface(tmp);
@@ -3053,7 +3056,7 @@ void draw_client_map2(object *pl) {
                 }
                 /* The cell is authorized: its structure record is current. */
                 mp->celestial_structure =
-                    celestial_closure_cell_value(&cell_celestial, m, nx, ny, pl);
+                    celestial_closure_cell_value(&cell_celestial, m, nx, ny, pl, ax, ay);
                 map2_closure_maps[MAP2_DEPTH_INDEX(depth)][ax][ay] = m;
                 if (!tile_fow) {
                     occluder = light_occluder_finish(cell_occluder) |

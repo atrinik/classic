@@ -1,4 +1,5 @@
 #include <toolkit/celestial_closure.h>
+#include <toolkit/celestial_solver.h>
 #include <toolkit/packet.h>
 
 #include <stdlib.h>
@@ -159,6 +160,14 @@ static int test_rejections(void) {
     static const uint8_t sky_up[][5] = {{4, 0x00, 0x42, 0x80, 0x00}};
     require(!celestial_closure_read(buffer, encode(buffer, 0, 0, 0, 2, 2, sky_up, 1), 4, 4,
                                     &closure));
+    /* A sky exit beneath a closed cover, which the server never sends: the
+     * sky face skips the cover, so it would light a sealed cell. */
+    static const uint8_t sealed_sky[][5] = {{4, 0x00, 0x02, 0x80, 0x00}};
+    require(!celestial_closure_read(buffer, encode(buffer, 0, 0, 0, 2, 2, sealed_sky, 1), 4, 4,
+                                    &closure));
+    require(!celestial_closure_value_valid(CELESTIAL_CLOSURE_IN | CELESTIAL_CLOSURE_SKY_EXIT));
+    require(celestial_closure_value_valid(CELESTIAL_CLOSURE_IN | CELESTIAL_CLOSURE_SKY_EXIT |
+                                          CELESTIAL_CLOSURE_COVER_OPEN));
     /* A reserved bit. */
     static const uint8_t reserved[][5] = {{4, 0x08, 0x00, 0x80, 0x00}};
     require(!celestial_closure_read(buffer, encode(buffer, 0, 0, 0, 2, 2, reserved, 1), 4, 4,
@@ -262,6 +271,88 @@ static int test_overhead_face_of_an_unseen_cell_above(void) {
     return 0;
 }
 
+/** A 3 x 3 open map under the sky that counts its memory hooks. */
+typedef struct counting_lattice {
+    int map;
+    size_t reserves, releases, reserved_bytes, released_bytes;
+} counting_lattice;
+
+static bool counting_resolve(void *context, void *origin, int x, int y, int z,
+                             celestial_solver_cell_t *cell) {
+    (void)context;
+    if (z != 0 || x < 0 || y < 0 || x >= 3 || y >= 3) {
+        return false;
+    }
+    *cell = (celestial_solver_cell_t){.map = origin, .x = x, .y = y, .z = 0};
+    return true;
+}
+
+static void counting_dimensions(void *context, void *map, int *width, int *height) {
+    (void)context;
+    (void)map;
+    *width = 3;
+    *height = 3;
+}
+
+static bool counting_sky(void *context, const celestial_solver_face_t *face) {
+    (void)context;
+    return face->to.map == NULL;
+}
+
+static bool counting_continuous(void *context, const celestial_solver_face_t *face) {
+    (void)context;
+    return face->from.map != NULL && face->to.map != NULL;
+}
+
+static uint16_t counting_light(void *context, const celestial_solver_face_t *face,
+                               bool *aperture) {
+    (void)context;
+    (void)face;
+    if (aperture != NULL) {
+        *aperture = false;
+    }
+    return CELESTIAL_MODEL_SCALE;
+}
+
+static bool counting_reserve(void *context, size_t bytes) {
+    counting_lattice *lattice = context;
+    lattice->reserves++;
+    lattice->reserved_bytes += bytes;
+    return true;
+}
+
+static void counting_release(void *context, size_t bytes) {
+    counting_lattice *lattice = context;
+    lattice->releases++;
+    lattice->released_bytes += bytes;
+}
+
+static int test_release_pairs_with_reserve(void) {
+    celestial_model_t model;
+    model_at(12, &model);
+    int32_t values[9], rgb[9][3];
+    /* With both hooks, every charge is returned exactly once. */
+    static const celestial_solver_ops_t paired = {
+        .resolve = counting_resolve, .dimensions = counting_dimensions, .sky = counting_sky,
+        .continuous = counting_continuous, .light = counting_light,
+        .reserve = counting_reserve, .release = counting_release};
+    counting_lattice counts = {0};
+    celestial_solver_lattice_t lattice = {.ops = &paired, .context = &counts};
+    require(celestial_solver_solve(&lattice, &counts.map, &model, values, rgb));
+    require(counts.reserves > 0);
+    require(counts.releases == counts.reserves && counts.released_bytes == counts.reserved_bytes);
+    /* Without reserve nothing was charged, so nothing is released. */
+    static const celestial_solver_ops_t release_only = {
+        .resolve = counting_resolve, .dimensions = counting_dimensions, .sky = counting_sky,
+        .continuous = counting_continuous, .light = counting_light,
+        .release = counting_release};
+    counts = (counting_lattice){0};
+    lattice.ops = &release_only;
+    require(celestial_solver_solve(&lattice, &counts.map, &model, values, rgb));
+    require(counts.releases == 0);
+    return 0;
+}
+
 int main(void) {
     toolkit_import(packet);
     int result = test_round_trip();
@@ -276,6 +367,9 @@ int main(void) {
     }
     if (result == 0) {
         result = test_overhead_face_of_an_unseen_cell_above();
+    }
+    if (result == 0) {
+        result = test_release_pairs_with_reserve();
     }
     toolkit_deinit();
     return result;

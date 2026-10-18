@@ -4538,6 +4538,62 @@ START_TEST(test_celestial_closure_omits_plugin_controlled_static_faces) {
 }
 END_TEST
 
+START_TEST(test_celestial_closure_applies_map2_direction_filtering) {
+    mapstruct *old_map;
+    object *pl;
+    check_setup_env_pl(&old_map, &pl);
+    unsigned long saved_hour = todtick;
+    todtick = 5 * HOURS_PER_MONTH + 12;
+    mapstruct *lower = closure_open_world("/closure/direction-lower");
+    mapstruct *upper = get_empty_map(64, 64);
+    FREE_AND_COPY_HASH(upper->path, "/closure/direction-upper");
+    closure_fixture_schema(upper);
+    FREE_AND_COPY_HASH(lower->tile_path[TILED_UP], upper->path);
+    FREE_AND_COPY_HASH(upper->tile_path[TILED_DOWN], lower->path);
+    lower->tile_map[TILED_UP] = upper;
+    upper->tile_map[TILED_DOWN] = lower;
+    lower->celestial_sky_above = CELESTIAL_SKY_LINKED;
+    lower->celestial_boundary[TILED_UP] = CELESTIAL_BOUNDARY_CONTINUOUS;
+    upper->celestial_boundary[TILED_DOWN] = CELESTIAL_BOUNDARY_CONTINUOUS;
+    /* The viewer stands under a roof, which the camera cuts away. The roofs
+     * west and east of the viewer are drawn by direction: MAP2 shows a
+     * direction-0 object west of the center, never east of it. */
+    object *roofs[2] = {NULL, NULL};
+    for (int y = 29; y <= 33; y++) {
+        for (int x = 29; x <= 33; x++) {
+            object *roof = arch_get("roof_thatch");
+            roof->x = x;
+            roof->y = y;
+            if (y == 31 && (x == 30 || x == 32)) {
+                SET_FLAG(roof, FLAG_DRAW_DIRECTION);
+                roof->direction = 0;
+            }
+            roof = object_insert_map(roof, upper, NULL, 0);
+            ck_assert_ptr_nonnull(roof);
+            if (y == 31 && (x == 30 || x == 32)) {
+                roofs[x == 30 ? 0 : 1] = roof;
+            }
+        }
+    }
+    request_move_player(&pl, lower, 31, 31);
+    socket_struct *cs = CONTR(pl)->cs;
+    ck_assert(map2_direction_shown(roofs[0], pl, cs->mapx_2 - 1, cs->mapy_2));
+    ck_assert(!map2_direction_shown(roofs[1], pl, cs->mapx_2 + 1, cs->mapy_2));
+    closure_redraw(pl);
+    celestial_closure_t closure;
+    ck_assert(closure_last(pl, &closure));
+    uint32_t under_shown = closure_cell(pl, &closure, 30, 31);
+    uint32_t under_omitted = closure_cell(pl, &closure, 32, 31);
+    ck_assert_uint_ne(under_shown, 0);
+    ck_assert_uint_ne(under_omitted, 0);
+    /* The shown roof shades; the omitted one is never disclosed. */
+    ck_assert_uint_eq((under_shown >> CELESTIAL_CLOSURE_OVERHEAD_SHIFT) & 3U, 0);
+    ck_assert_uint_eq((under_omitted >> CELESTIAL_CLOSURE_OVERHEAD_SHIFT) & 3U, 3);
+    celestial_closure_free(&closure);
+    todtick = saved_hour;
+}
+END_TEST
+
 START_TEST(test_celestial_closure_is_resent_when_the_window_moves) {
     mapstruct *old_map;
     object *pl;
@@ -4627,6 +4683,7 @@ static Suite *suite(void) {
     tcase_add_test(tc_closure, test_celestial_closure_matches_server_solver_in_brynknot);
     tcase_add_test(tc_closure, test_celestial_closure_discloses_only_sent_structure);
     tcase_add_test(tc_closure, test_celestial_closure_omits_plugin_controlled_static_faces);
+    tcase_add_test(tc_closure, test_celestial_closure_applies_map2_direction_filtering);
     tcase_add_test(tc_closure, test_celestial_closure_is_resent_when_the_window_moves);
     tcase_add_test(tc_closure, test_celestial_closure_too_large_is_sent_as_open_air);
     tcase_add_test(tc_core, test_removed_player_connection_keeps_servicing_queued_output);

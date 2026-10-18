@@ -39,9 +39,12 @@ void celestial_closure_free(celestial_closure_t *closure) {
 bool celestial_closure_value_valid(uint32_t value) {
     return value == 0 ||
            ((value & ~CELESTIAL_CLOSURE_VALUE_MASK) == 0 && (value & CELESTIAL_CLOSURE_IN) != 0 &&
-            /* An upward exit to the sky has no cell above to continue into. */
+            /* An upward exit to the sky has no cell above to continue into,
+             * and leaves only through an open cover: the sky face skips the
+             * cover, so a sealed cell claiming one would see the sky. */
             ((value & CELESTIAL_CLOSURE_SKY_EXIT) == 0 ||
-             (value & CELESTIAL_CLOSURE_CONTINUOUS_UP) == 0));
+             ((value & CELESTIAL_CLOSURE_CONTINUOUS_UP) == 0 &&
+              (value & CELESTIAL_CLOSURE_COVER_OPEN) != 0)));
 }
 
 static size_t index_cells(const celestial_closure_t *closure) {

@@ -159,10 +159,15 @@ extern void celestial_closure_accumulate(celestial_closure_accumulator_t *accumu
 
 /** The cell's closure value (toolkit/celestial_closure.h): its faces from the
  * accumulated objects, and its sky cover, sky exit and continuity from the
- * map's authored structure and links. */
+ * map's authored structure and links. ax and ay are the cell's MAP2 window
+ * position, which decides what a direction-drawn object shows. */
 extern uint32_t celestial_closure_cell_value(const celestial_closure_accumulator_t *accumulator,
-                                             mapstruct *map, int x, int y,
-                                             const object *viewer);
+                                             mapstruct *map, int x, int y, const object *viewer,
+                                             int ax, int ay);
+
+/** Whether MAP2 shows a FLAG_DRAW_DIRECTION object at window position ax,
+ * ay to the viewer; true for every other object. */
+extern bool map2_direction_shown(const object *op, const object *viewer, int ax, int ay);
 
 /** Update exact cell transport geometry and report a semantic change. */
 extern bool celestial_light_geometry_update(mapstruct *map, int x, int y);

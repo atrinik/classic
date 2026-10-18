@@ -95,7 +95,8 @@ typedef struct celestial_solver_ops {
     /** Charge transient solve memory; false declines it. May be NULL to
      * allow every allocation. */
     bool (*reserve)(void *context, size_t bytes);
-    /** Return memory charged by reserve. May be NULL. */
+    /** Return memory charged by reserve; called only for bytes a reserve
+     * call accepted, never when reserve is NULL. May be NULL. */
     void (*release)(void *context, size_t bytes);
 } celestial_solver_ops_t;
 

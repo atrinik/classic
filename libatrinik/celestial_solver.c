@@ -388,6 +388,8 @@ typedef struct spill_table {
     int width, height;
     uint16_t *coefficients;
     size_t bytes;
+    /** Whether reserve charged bytes, so release returns exactly them. */
+    bool charged;
     bool unavailable;
 } spill_table;
 
@@ -398,14 +400,16 @@ static void spill_table_fill(spill_table *table) {
         table->unavailable = true;
         return;
     }
+    bool charged = ops->reserve != NULL;
     uint16_t *coefficients = calloc(bytes, 1);
     if (coefficients == NULL) {
-        if (ops->release != NULL) {
+        if (charged && ops->release != NULL) {
             ops->release(table->lattice->context, bytes);
         }
         table->unavailable = true;
         return;
     }
+    table->charged = charged;
     table->bytes = bytes;
     table->coefficients = coefficients;
     for (int y = 0; y < table->height; y++) {
@@ -429,7 +433,7 @@ static void spill_table_fill(spill_table *table) {
 static void spill_table_release(spill_table *table) {
     if (table->coefficients != NULL) {
         free(table->coefficients);
-        if (table->lattice->ops->release != NULL) {
+        if (table->charged && table->lattice->ops->release != NULL) {
             table->lattice->ops->release(table->lattice->context, table->bytes);
         }
     }
