@@ -412,7 +412,7 @@ void live_movement_ready(void) {
             setting_get_int(OPT_CAT_MAP, OPT_MAP_WIDTH),
             setting_get_int(OPT_CAT_MAP, OPT_MAP_HEIGHT),
             fps_limit,
-            setting_get_int(OPT_CAT_MAP, OPT_SMOOTH_LIGHTING) ? "true" : "false");
+            map_lighting_is_smooth() ? "true" : "false");
     for (size_t i = 0; i < RENDER_PROFILE_STAGE_NUM; i++) {
         render_profile_stage_metadata_t metadata;
         render_profiler_stage_metadata_get((render_profile_stage_t)i, &metadata);

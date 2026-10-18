@@ -264,8 +264,9 @@ typedef struct map_lighting_diagnostic {
 
     /** Current server-authorized MAP2 aggregate endpoint is present. */
     bool received;
-    uint16_t received_scalar;
-    uint16_t received_rgb[3];
+    /** Signed Q4.11 base words, as composition reads them. */
+    int16_t received_scalar;
+    int16_t received_rgb[3];
     bool received_rgb_explicit;
 
     /** The optional timed MAP2 endpoint which the client may interpolate. */
@@ -274,8 +275,8 @@ typedef struct map_lighting_diagnostic {
     uint64_t keyframe_generation;
     uint64_t keyframe_start_seconds;
     uint64_t keyframe_end_seconds;
-    uint16_t next_scalar;
-    uint16_t next_rgb[3];
+    int16_t next_scalar;
+    int16_t next_rgb[3];
     bool next_rgb_explicit;
 
     /** Client working value after temporal resolution and bounded borrowing. */
@@ -493,6 +494,15 @@ extern void map_set_local_light_layers(int x, int y, uint8_t count, const uint8_
 extern bool map_get_local_light_layer(int x, int y, uint8_t sub_layer, int8_t *level,
                                       bool *vision_floor, uint8_t *flags);
 extern void map_set_occluder(int x, int y, uint16_t bits, uint16_t horizontal, uint8_t vertical);
+/** Whether lighting renders smoothly: always, except in offline proofs. */
+extern bool map_lighting_is_smooth(void);
+/** Select the discrete projection for an offline conformance proof only. */
+extern void map_set_discrete_lighting_proof(bool discrete);
+/**
+ * Bound emitter-field rebuilds per presented frame (on by default). Offline
+ * proofs turn it off so every frame shows fully rebuilt fields.
+ */
+extern void map_set_emitter_rebuild_budget(bool enabled);
 extern bool map_get_local_light(int x, int y, int8_t *level, bool *vision_floor);
 extern bool map_get_occluder(int x, int y, uint16_t *bits, uint16_t *horizontal, uint8_t *vertical);
 extern void
@@ -718,6 +728,8 @@ extern bool minimap_redraw_due(void);
 
 /** Force the next minimap draw to rebuild its retained GPU canvas. */
 extern void minimap_redraw_force(void);
+/** Request a minimap redraw at its normal throttle. */
+extern void minimap_redraw_request(void);
 /** Hide any retained minimap from a superseded map/session generation. */
 extern void minimap_invalidate_map_generation(void);
 

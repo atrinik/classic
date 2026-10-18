@@ -180,11 +180,6 @@ category Map
 		default 100
 		desc Zoom percentage of the map.
 	end
-	setting Smooth lighting
-		type bool
-		default on
-		desc Smoothly interpolate ground lighting between tiles. Disable to use the faster discrete per-tile renderer.
-	end
 	setting Low health warning
 		type range
 		range 0 - 100

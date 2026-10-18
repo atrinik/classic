@@ -539,6 +539,15 @@ if (BUILD_TESTING)
         ${CMAKE_CURRENT_SOURCE_DIR}/src/include)
     add_test(NAME client-lighting-transfer COMMAND client-lighting-transfer-tests)
 
+    add_executable(client-lighting-tests
+        src/tests/client_lighting.c
+        src/client/client_lighting.c)
+    atrinik_configure_target(client-lighting-tests)
+    target_include_directories(client-lighting-tests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/include)
+    target_link_libraries(client-lighting-tests PRIVATE Atrinik::Core)
+    add_test(NAME client-lighting COMMAND client-lighting-tests)
+
     add_executable(client-gpu-light-row-tests src/tests/gpu_light_row.c)
     atrinik_configure_target(client-gpu-light-row-tests)
     target_include_directories(client-gpu-light-row-tests PRIVATE
