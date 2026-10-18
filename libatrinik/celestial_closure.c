@@ -230,31 +230,25 @@ uint32_t celestial_closure_value(const celestial_closure_t *closure, int depth, 
 #define OUTSIDE_DEPTH_MIN (-CELESTIAL_CLOSURE_DEPTH_MAX)
 #define OUTSIDE_DEPTHS (CELESTIAL_CLOSURE_DEPTHS + CELESTIAL_SOLVER_RAY_EVENTS + 1)
 
-typedef struct outside_air {
+/** Every map handle the solver sees is one of these, so a handle is told
+ * apart by its tag, never by where it points. */
+typedef struct lattice_handle {
+    /** The fragment of closure cells, or NULL for the open air of a depth. */
+    const celestial_closure_fragment_t *fragment;
     int depth;
-} outside_air;
+} lattice_handle;
 
 typedef struct closure_lattice {
     const celestial_closure_t *closure;
-    outside_air outside[OUTSIDE_DEPTHS];
+    /** One handle per closure fragment, in fragment order. */
+    lattice_handle *fragments;
+    lattice_handle outside[OUTSIDE_DEPTHS];
 } closure_lattice;
 
 static const celestial_closure_fragment_t *lattice_fragment(const closure_lattice *lattice,
                                                             const void *map) {
-    const celestial_closure_fragment_t *first = lattice->closure->fragments;
-    if (first == NULL || (const char *)map < (const char *)first ||
-        (const char *)map >= (const char *)(first + lattice->closure->count)) {
-        return NULL;
-    }
-    return map;
-}
-
-static const outside_air *lattice_outside(const closure_lattice *lattice, const void *map) {
-    if ((const char *)map < (const char *)lattice->outside ||
-        (const char *)map >= (const char *)(lattice->outside + OUTSIDE_DEPTHS)) {
-        return NULL;
-    }
-    return map;
+    (void)lattice;
+    return map != NULL ? ((const lattice_handle *)map)->fragment : NULL;
 }
 
 /** A cell's closure value; zero for open air and for unresolved cells. */
@@ -269,18 +263,14 @@ static uint32_t lattice_value(const closure_lattice *lattice, const celestial_so
 static bool lattice_resolve(void *context, void *origin, int x, int y, int z,
                             celestial_solver_cell_t *cell) {
     closure_lattice *lattice = context;
-    const celestial_closure_fragment_t *fragment = lattice_fragment(lattice, origin);
-    int depth;
-    if (fragment != NULL) {
-        x += fragment->x;
-        y += fragment->y;
-        depth = fragment->depth + z;
-    } else {
-        const outside_air *air = lattice_outside(lattice, origin);
-        if (air == NULL) {
-            return false;
-        }
-        depth = air->depth + z;
+    if (origin == NULL) {
+        return false;
+    }
+    const lattice_handle *handle = origin;
+    int depth = handle->depth + z;
+    if (handle->fragment != NULL) {
+        x += handle->fragment->x;
+        y += handle->fragment->y;
     }
     if (depth < OUTSIDE_DEPTH_MIN || depth >= OUTSIDE_DEPTH_MIN + OUTSIDE_DEPTHS) {
         return false;
@@ -296,7 +286,7 @@ static bool lattice_resolve(void *context, void *origin, int x, int y, int z,
             int local_x = x - found->x, local_y = y - found->y;
             if (found->values[(size_t)local_x + (size_t)found->width * local_y] != 0) {
                 *cell = (celestial_solver_cell_t){
-                    .map = (void *)found, .x = local_x, .y = local_y, .z = z};
+                    .map = &lattice->fragments[index - 1], .x = local_x, .y = local_y, .z = z};
                 return true;
             }
         }
@@ -429,16 +419,25 @@ bool celestial_closure_solve(const celestial_closure_t *closure, size_t fragment
         return false;
     }
     closure_lattice *context = malloc(sizeof(*context));
-    if (context == NULL) {
+    lattice_handle *handles = malloc(closure->count * sizeof(*handles));
+    if (context == NULL || handles == NULL) {
+        free(context);
+        free(handles);
         return false;
     }
     context->closure = closure;
+    context->fragments = handles;
+    for (size_t i = 0; i < closure->count; i++) {
+        handles[i] = (lattice_handle){.fragment = &closure->fragments[i],
+                                      .depth = closure->fragments[i].depth};
+    }
     for (int i = 0; i < OUTSIDE_DEPTHS; i++) {
-        context->outside[i].depth = OUTSIDE_DEPTH_MIN + i;
+        context->outside[i] = (lattice_handle){.depth = OUTSIDE_DEPTH_MIN + i};
     }
     celestial_solver_lattice_t lattice = {.ops = &closure_ops, .context = context};
-    celestial_closure_fragment_t *solved = &closure->fragments[fragment];
-    bool complete = celestial_solver_solve(&lattice, solved, model, values, rgb);
+    const celestial_closure_fragment_t *solved = &closure->fragments[fragment];
+    bool complete = celestial_solver_solve(&lattice, &handles[fragment], model, values, rgb);
+    free(handles);
     free(context);
     if (complete) {
         size_t cells = (size_t)solved->width * solved->height;

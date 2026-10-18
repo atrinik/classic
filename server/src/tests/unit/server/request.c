@@ -4460,6 +4460,76 @@ START_TEST(test_hidden_door_state_does_not_reach_base_radiance) {
 }
 END_TEST
 
+START_TEST(test_celestial_closure_is_resent_when_the_window_moves) {
+    mapstruct *old_map;
+    object *pl;
+    check_setup_env_pl(&old_map, &pl);
+    unsigned long saved_hour = todtick;
+    todtick = 5 * HOURS_PER_MONTH + 12;
+    /* A uniform map: the window-relative closure bytes are the same after a
+     * step, but they describe other cells. */
+    mapstruct *map = get_empty_map(64, 64);
+    FREE_AND_COPY_HASH(map->path, "/closure/uniform");
+    closure_fixture_schema(map);
+    for (int y = 0; y < 64; y++) {
+        for (int x = 0; x < 64; x++) {
+            closure_structure(map, x, y, MISC_OBJECT, -1, NULL, NULL);
+        }
+    }
+    request_move_player(&pl, map, 32, 32);
+    closure_redraw(pl);
+    celestial_closure_t before;
+    ck_assert(closure_last(pl, &before));
+    packet_struct *payload =
+        queued_command_payload_last(CONTR(pl)->cs, CLIENT_CMD_CELESTIAL_STRUCTURE);
+    size_t before_len = payload->len;
+    uint8_t *before_bytes = xmalloc(before_len);
+    memcpy(before_bytes, payload->data, before_len);
+    request_move_player(&pl, map, 33, 32);
+    closure_redraw(pl);
+    celestial_closure_t after;
+    ck_assert(closure_last(pl, &after));
+    ck_assert_uint_eq(after.generation, before.generation + 1);
+    payload = queued_command_payload_last(CONTR(pl)->cs, CLIENT_CMD_CELESTIAL_STRUCTURE);
+    /* Byte for byte the same apart from the generation. */
+    ck_assert_uint_eq(payload->len, before_len);
+    ck_assert(memcmp(payload->data + 4, before_bytes + 4, before_len - 4) == 0);
+    free(before_bytes);
+    celestial_closure_free(&before);
+    celestial_closure_free(&after);
+    todtick = saved_hour;
+}
+END_TEST
+
+START_TEST(test_celestial_closure_too_large_is_sent_as_open_air) {
+    mapstruct *old_map;
+    object *pl;
+    check_setup_env_pl(&old_map, &pl);
+    unsigned long saved_hour = todtick;
+    todtick = 5 * HOURS_PER_MONTH + 12;
+    mapstruct *map = closure_open_world("/closure/large");
+    request_move_player(&pl, map, 32, 32);
+    size_t limit = map2_closure_payload_max_exchange_for_test(64);
+    closure_redraw(pl);
+    (void)map2_closure_payload_max_exchange_for_test(limit);
+    celestial_closure_t closure;
+    ck_assert(closure_last(pl, &closure));
+    /* The depth is not dropped: every cell of it is sent as open air, so the
+     * client solves and updates it. */
+    ck_assert_uint_gt(closure.count, 0);
+    const celestial_closure_fragment_t *fragment = &closure.fragments[0];
+    ck_assert_int_eq(fragment->depth, 0);
+    uint32_t open_air = fragment->values[0];
+    ck_assert_uint_ne(open_air & CELESTIAL_CLOSURE_IN, 0);
+    ck_assert_uint_eq(open_air & 0x3ffU, 0x3ffU);
+    for (size_t i = 0; i < (size_t)fragment->width * fragment->height; i++) {
+        ck_assert_uint_eq(fragment->values[i], open_air);
+    }
+    celestial_closure_free(&closure);
+    todtick = saved_hour;
+}
+END_TEST
+
 static Suite *suite(void) {
     Suite *s = suite_create("request");
     TCase *tc_core = tcase_create("Core");
@@ -4480,6 +4550,8 @@ static Suite *suite(void) {
     tcase_add_test(tc_closure, test_celestial_closure_discloses_only_sent_structure);
     tcase_add_test(tc_closure, test_celestial_closure_omits_plugin_controlled_static_faces);
     tcase_add_test(tc_closure, test_hidden_door_state_does_not_reach_base_radiance);
+    tcase_add_test(tc_closure, test_celestial_closure_is_resent_when_the_window_moves);
+    tcase_add_test(tc_closure, test_celestial_closure_too_large_is_sent_as_open_air);
     tcase_add_test(tc_core, test_removed_player_connection_keeps_servicing_queued_output);
     tcase_add_test(tc_core, test_map_name_metadata_handles_transient_unnamed_maps);
     tcase_add_test(tc_core, test_talk_target_binds_actor_without_selection_acknowledgement);

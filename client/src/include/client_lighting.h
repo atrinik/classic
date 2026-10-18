@@ -29,6 +29,8 @@
 typedef struct client_lighting_emitter {
     int x;
     int y;
+    /** Level within the evaluated stack. */
+    int z;
     int8_t radius;
     /** MAP2 emitter flags; MAP2_EMITTER_FLICKER opts in to presentation flicker. */
     uint8_t flags;
@@ -50,27 +52,47 @@ typedef struct client_lighting_cell {
 } client_lighting_cell_t;
 
 /** The MAP2 occluder bits local light evaluation reads: the closed north,
- * east, south and west faces. Geometry, roof, door and up/down face bits
- * matter only to other consumers. */
-#define CLIENT_LIGHTING_OCCLUDER_FACES (UINT16_C(0x0f) << MAP2_OCCLUDER_FACE_SHIFT)
+ * east, south, west, upward and downward faces, and whether the cell blocks
+ * view or is a roof surface, whose slab an upward step ending on it skips.
+ * Floor and door bits matter only to other consumers. */
+#define CLIENT_LIGHTING_OCCLUDER_FACES (UINT16_C(0x3f) << MAP2_OCCLUDER_FACE_SHIFT)
+#define CLIENT_LIGHTING_OCCLUDER_BITS                                                      \
+    (CLIENT_LIGHTING_OCCLUDER_FACES | MAP2_OCCLUDER_BLOCKSVIEW | MAP2_OCCLUDER_ROOF)
 
-/** A cell's occluder for evaluation: the closed horizontal faces low, the
- * horizontal face attenuation nibbles (north, east, south, west) high. It
- * holds exactly the inputs evaluation reads, so equal words light equally. */
-static inline uint32_t client_lighting_occluder(uint16_t bits, uint16_t horizontal) {
-    return (uint32_t)(bits & CLIENT_LIGHTING_OCCLUDER_FACES) | (uint32_t)horizontal << 16;
+/** A cell's occluder for evaluation: the bits it reads low, the horizontal
+ * face attenuation nibbles (north, east, south, west) from bit 16 and the
+ * vertical attenuation of the downward face from bit 32. It holds exactly the
+ * inputs evaluation reads, so equal words light equally. */
+static inline uint64_t client_lighting_occluder(uint16_t bits, uint16_t horizontal,
+                                                uint8_t vertical) {
+    return (uint64_t)(bits & CLIENT_LIGHTING_OCCLUDER_BITS) | (uint64_t)horizontal << 16 |
+           (uint64_t)(vertical & MAP2_OCCLUDER_VERTICAL_MASK) << 32;
 }
 
 /**
- * Evaluate emitters into a width-by-height grid.
- * Every emitter is evaluated; none is dropped for capacity.
- * @param occluders client_lighting_occluder() words per cell in row-major
- * order, or NULL for open geometry.
- * @param cells Output of width * height cells.
+ * Evaluate the local light of one level of a stack of levels, each a
+ * width-by-height grid, as the server's 3D transport does: every emitter of
+ * every level reaches the target level within its profile, through the
+ * occluders of the cells between. Every emitter is evaluated; none is
+ * dropped for capacity.
+ * @param occluders client_lighting_occluder() words, level by level, each in
+ * row-major order, or NULL for open geometry. Level z + 1 lies above z.
+ * @param emitters Emitters with their level in z.
+ * @param cells Output of width * height cells of the target level.
  */
+void client_lighting_evaluate_stack(int levels,
+                                    int target,
+                                    int width,
+                                    int height,
+                                    const uint64_t *occluders,
+                                    const client_lighting_emitter_t *emitters,
+                                    size_t count,
+                                    client_lighting_cell_t *cells);
+
+/** client_lighting_evaluate_stack() of a single level; emitters' z is 0. */
 void client_lighting_evaluate(int width,
                               int height,
-                              const uint32_t *occluders,
+                              const uint64_t *occluders,
                               const client_lighting_emitter_t *emitters,
                               size_t count,
                               client_lighting_cell_t *cells);

@@ -192,6 +192,14 @@ bool celestial_model_inputs_valid(const celestial_model_inputs_t *inputs) {
         inputs->night_brightness > CELESTIAL_MODEL_BRIGHTNESS_MAX) {
         return false;
     }
+    /* Day and night colors are black or normalized to a 65535 peak. */
+    for (size_t i = 0; i < 2; i++) {
+        const uint16_t *color = i == 0 ? inputs->day_linear : inputs->night_linear;
+        uint16_t peak = MAX(color[0], MAX(color[1], color[2]));
+        if (peak != 0 && peak != UINT16_MAX) {
+            return false;
+        }
+    }
     celestial_lunar_input lunar;
     model_lunar_input(inputs, &lunar);
     return lunar_input_valid(&lunar);
@@ -338,11 +346,18 @@ void celestial_model_publish(const celestial_model_t *model,
 /** Two slot inputs share every profile constant and differ only in phases. */
 static bool celestial_protocol_same_profile(const celestial_model_inputs_t *a,
                                             const celestial_model_inputs_t *b) {
-    celestial_model_inputs_t left = *a, right = *b;
-    left.solar_hour = right.solar_hour = 0;
-    left.season_phase = right.season_phase = 0;
-    left.lunar_age = right.lunar_age = 0;
-    return memcmp(&left, &right, sizeof(left)) == 0;
+    /* Field by field, so padding never decides it. */
+    for (size_t channel = 0; channel < 3; channel++) {
+        if (a->day_linear[channel] != b->day_linear[channel] ||
+            a->night_linear[channel] != b->night_linear[channel] ||
+            a->moon_linear[channel] != b->moon_linear[channel] ||
+            a->starlight_linear[channel] != b->starlight_linear[channel]) {
+            return false;
+        }
+    }
+    return a->day_brightness == b->day_brightness &&
+           a->night_brightness == b->night_brightness && a->moon_max == b->moon_max &&
+           a->starlight_strength == b->starlight_strength && a->lunar_period == b->lunar_period;
 }
 
 static void celestial_protocol_write_rgb(packet_struct *packet, const uint16_t rgb[3]) {
