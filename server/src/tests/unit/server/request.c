@@ -3804,6 +3804,88 @@ START_TEST(test_client_lighting_remembered_tiles_keep_coarse_light) {
     ck_assert_ptr_nonnull(cell);
     ck_assert_uint_ne(cell->light_radiance[0], base_before);
     ck_assert_uint_eq(cell->emitter_layers, 0);
+
+    /* Current empty geometry hard-clears the soft-cleared remembered tile,
+     * which revokes its remembered light. */
+    object_remove(wall, 0);
+    object_destroy(wall);
+    object_remove(content, 0);
+    object_destroy(content);
+    pl->update_los = 1;
+    pticks++;
+    socket_buffer_clear(pl->cs);
+    draw_client_map(op);
+    cell = map_client_cache_cell(&pl->cs->lastmap, 0, ax, ay, false);
+    ck_assert_ptr_nonnull(cell);
+    ck_assert_uint_eq(cell->cleared, 1);
+    ck_assert_uint_eq(cell->client_light_known & 8U, 0);
+    ck_assert_uint_eq(cell->light_known[0], 0);
+}
+END_TEST
+
+START_TEST(test_remembered_light_records_split_at_tile_boundaries) {
+    mapstruct *old_map;
+    object *op;
+    check_setup_env_pl(&old_map, &op);
+    mapstruct *map = get_empty_map(MAP_CLIENT_X, MAP_CLIENT_Y);
+    request_move_player(&op, map, MAP_CLIENT_X / 2, MAP_CLIENT_Y / 2);
+    player *pl = CONTR(op);
+
+    /* Every cell is sent with colored base light. */
+    for (int y = 0; y < MAP_CLIENT_Y; y++) {
+        for (int x = 0; x < MAP_CLIENT_X; x++) {
+            if (abs(x - op->x) <= 1 && abs(y - op->y) <= 1) {
+                continue;
+            }
+            object *content = arch_get("letter");
+            content->x = x;
+            content->y = y;
+            ck_assert_ptr_nonnull(object_insert_map(content, map, NULL, INS_NO_MERGE));
+            MapSpace *space = GET_MAP_SPACE_PTR(map, x, y);
+            space->celestial_light_rgb[0] = 30 + x;
+            space->celestial_light_rgb[1] = 60 + y;
+            space->celestial_light_rgb[2] = 90;
+        }
+    }
+    update_los(op);
+    map_client_cache_clear(&pl->cs->lastmap);
+    socket_buffer_clear(pl->cs);
+    pl->map_update_cmd = MAP_UPDATE_CMD_SAME;
+    draw_client_map2(op);
+    ck_assert_uint_gt(validate_queued_map_payloads(pl->cs), 0);
+
+    /* Walls around the viewer turn the whole view into remembered fog at
+     * once; the resent light records exceed one level chunk. */
+    for (int dy = -1; dy <= 1; dy++) {
+        for (int dx = -1; dx <= 1; dx++) {
+            if (dx == 0 && dy == 0) {
+                continue;
+            }
+            object *wall = arch_get("letter");
+            SET_FLAG(wall, FLAG_BLOCKSVIEW);
+            wall->x = op->x + dx;
+            wall->y = op->y + dy;
+            ck_assert_ptr_nonnull(object_insert_map(wall, map, NULL, INS_NO_MERGE));
+        }
+    }
+    pl->update_los = 1;
+    update_los(op);
+    pticks++;
+    socket_buffer_clear(pl->cs);
+    draw_client_map2(op);
+    ck_assert_uint_gt(validate_queued_map_payloads(pl->cs), 1);
+
+    size_t remembered = 0;
+    for (int ay = 0; ay < pl->cs->mapy; ay++) {
+        for (int ax = 0; ax < pl->cs->mapx; ax++) {
+            MapCell *cell = map_client_cache_cell(&pl->cs->lastmap, 0, ax, ay, false);
+            if (cell != NULL && (cell->client_light_known & 8U) != 0) {
+                ck_assert_uint_ne(cell->light_rgb_known[0], 0);
+                remembered++;
+            }
+        }
+    }
+    ck_assert_uint_gt(remembered, 900);
 }
 END_TEST
 
@@ -3896,6 +3978,7 @@ static Suite *suite(void) {
     tcase_add_test(tc_core, test_client_lighting_fields_follow_sent_objects_only);
     tcase_add_test(tc_core, test_client_lighting_cache_fields_add_no_padding);
     tcase_add_test(tc_core, test_client_lighting_remembered_tiles_keep_coarse_light);
+    tcase_add_test(tc_core, test_remembered_light_records_split_at_tile_boundaries);
     return s;
 }
 
