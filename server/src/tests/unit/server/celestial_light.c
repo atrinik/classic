@@ -25,6 +25,7 @@
 #include <region.h>
 #include <time.h>
 #include <signal.h>
+#include <inttypes.h>
 
 static mapstruct *open_fixture(int width, int height) {
     mapstruct *map = get_empty_map(width, height);
@@ -215,6 +216,82 @@ START_TEST(test_brynknot_and_outside_fields_follow_settime) {
         ck_assert_uint_gt(celestial_light_generation(map), generation);
     }
     todtick = saved_hour;
+}
+END_TEST
+
+/* Field digests of the authored Brynknot stacks, recorded from the solver
+ * before it moved to libatrinik: the shared solver must reproduce the
+ * gameplay field bit for bit. */
+static const char *const golden_paths[] = {
+    "/shattered_islands/world_0_67", "/shattered_islands/world_1_67",
+    "/shattered_islands/world_2_67", "/shattered_islands/world_0_68",
+    "/shattered_islands/world_1_68", "/shattered_islands/world_2_68",
+    "/shattered_islands/world_0_69", "/shattered_islands/world_1_69",
+    "/shattered_islands/world_2_69", "/shattered_islands/world_0_70",
+    "/shattered_islands/world_1_70", "/shattered_islands/world_2_70",
+    "/shattered_islands/world_3_67",
+};
+static const uint64_t golden_hours[] = {
+    5 * HOURS_PER_MONTH + 6, 5 * HOURS_PER_MONTH + 9, 5 * HOURS_PER_MONTH + 15,
+    5 * HOURS_PER_MONTH + 19, 2 * HOURS_PER_MONTH + 12, 11 * HOURS_PER_MONTH + 1,
+};
+static const uint64_t golden_digests[arraysize(golden_paths)][arraysize(golden_hours)] = {
+    {UINT64_C(0x4225708f321ded64), UINT64_C(0x454ae0a5a6f917e6), UINT64_C(0xaa24e93f24740727), UINT64_C(0xfe89bbaed6905aa2), UINT64_C(0x451aa037a6f40b27), UINT64_C(0xfe0dc959e1dff2b3)},
+    {UINT64_C(0x458ed99dd2d4ea5b), UINT64_C(0x68aada83ad8b826a), UINT64_C(0xd16c38a2d6207e82), UINT64_C(0xeb84daac8d5e8405), UINT64_C(0x151505011c47810c), UINT64_C(0xdab6a9cc5c150dc2)},
+    {UINT64_C(0x6f408806f9dbda43), UINT64_C(0xa152cfa3c43b96d7), UINT64_C(0x49b5aedf710a5ae5), UINT64_C(0xefaa86c856f34c25), UINT64_C(0x19c539f528926746), UINT64_C(0xc19d99774b5917d3)},
+    {UINT64_C(0xbc7c54f3c3704eab), UINT64_C(0xceea5b74da7b09ed), UINT64_C(0x1f794a8e865f7f7c), UINT64_C(0xabc5d4dd793d4373), UINT64_C(0xf126635723eb302a), UINT64_C(0x78700ee1b6154e12)},
+    {UINT64_C(0x5c6cd06ba8850d98), UINT64_C(0xcb4fe3b0d2918cd3), UINT64_C(0xef19064e866151cb), UINT64_C(0xacbae3c5bc380436), UINT64_C(0x1a34323fad05a9d0), UINT64_C(0xba76396fe3aa7383)},
+    {UINT64_C(0x81b9afd9c315dd1a), UINT64_C(0x9018a91ff49544c0), UINT64_C(0xd7d369f37a25155b), UINT64_C(0x382e91071670c400), UINT64_C(0x34f5efd0faac881e), UINT64_C(0x84841700ba716463)},
+    {UINT64_C(0x2b586d96ca9e6133), UINT64_C(0xb905f6c6a2494ffc), UINT64_C(0x9efdcb7d905bd517), UINT64_C(0x685d11a499c64f03), UINT64_C(0xca5e0527a66f57fb), UINT64_C(0x8bb8ef4a6d9ecbc3)},
+    {UINT64_C(0x8aab6fd251e47013), UINT64_C(0xd99d2a21489ecf57), UINT64_C(0x0502e087eedc3254), UINT64_C(0x0863a764d67ebab5), UINT64_C(0x9c560b8fcfc2d74d), UINT64_C(0x22b5c51cb5a905f3)},
+    {UINT64_C(0x0e2211a931cfeb83), UINT64_C(0x4c0ef20da3bf3483), UINT64_C(0xc0216f5f7ddebe83), UINT64_C(0x6b11637c07750f83), UINT64_C(0xd3405ecfbe3bd883), UINT64_C(0x916d40fdd3f6d383)},
+    {UINT64_C(0x0e2211a931cfeb83), UINT64_C(0x4c0ef20da3bf3483), UINT64_C(0xc0216f5f7ddebe83), UINT64_C(0x6b11637c07750f83), UINT64_C(0xd3405ecfbe3bd883), UINT64_C(0x916d40fdd3f6d383)},
+    {UINT64_C(0x0e2211a931cfeb83), UINT64_C(0x4c0ef20da3bf3483), UINT64_C(0xc0216f5f7ddebe83), UINT64_C(0x6b11637c07750f83), UINT64_C(0xd3405ecfbe3bd883), UINT64_C(0x916d40fdd3f6d383)},
+    {UINT64_C(0x0e2211a931cfeb83), UINT64_C(0x4c0ef20da3bf3483), UINT64_C(0xc0216f5f7ddebe83), UINT64_C(0x6b11637c07750f83), UINT64_C(0xd3405ecfbe3bd883), UINT64_C(0x916d40fdd3f6d383)},
+    {UINT64_C(0x0e2211a931cfeb83), UINT64_C(0x4c0ef20da3bf3483), UINT64_C(0xc0216f5f7ddebe83), UINT64_C(0x6b11637c07750f83), UINT64_C(0xd3405ecfbe3bd883), UINT64_C(0x916d40fdd3f6d383)},
+};
+
+static uint64_t golden_stack_digest(mapstruct *map) {
+    uint64_t hash = UINT64_C(1469598103934665603);
+    for (mapstruct *level = map; level != NULL; level = level->tile_map[TILED_UP]) {
+        for (int i = 0; i < level->width * level->height; i++) {
+            const MapSpace *space = &level->spaces[i];
+            int32_t words[4] = {space->celestial_light_value, space->celestial_light_rgb[0],
+                                space->celestial_light_rgb[1], space->celestial_light_rgb[2]};
+            for (size_t w = 0; w < 4; w++) {
+                for (size_t b = 0; b < 4; b++) {
+                    hash ^= (uint8_t)((uint32_t)words[w] >> (8 * b));
+                    hash *= UINT64_C(1099511628211);
+                }
+            }
+        }
+    }
+    return hash;
+}
+
+START_TEST(test_brynknot_fields_match_golden_digests) {
+    (void)celestial_override_clear();
+    bool print = getenv("ATRINIK_CELESTIAL_GOLDEN_PRINT") != NULL;
+    for (size_t i = 0; i < arraysize(golden_paths); i++) {
+        mapstruct *map = ready_map_name(golden_paths[i], NULL, MAP_NO_DYNAMIC);
+        ck_assert_msg(map != NULL, "Could not load %s", golden_paths[i]);
+        mapstruct *upper = map;
+        while (upper->tile_path[TILED_UP] != NULL) {
+            upper = get_map_from_tiled(upper, TILED_UP);
+            ck_assert_ptr_nonnull(upper);
+        }
+        for (size_t h = 0; h < arraysize(golden_hours); h++) {
+            ck_assert_msg(celestial_light_rebuild(map, golden_hours[h]), "%s hour %d failed",
+                          golden_paths[i], (int)h);
+            uint64_t digest = golden_stack_digest(map);
+            if (print) {
+                fprintf(stderr, "GOLDEN %zu %zu UINT64_C(0x%016" PRIx64 ")\n", i, h, digest);
+            } else {
+                ck_assert_msg(digest == golden_digests[i][h], "%s hour %zu digest %016" PRIx64,
+                              golden_paths[i], h, digest);
+            }
+        }
+    }
 }
 END_TEST
 
@@ -1184,6 +1261,7 @@ static Suite *suite(void) {
     tcase_add_test(tc_core, test_remote_two_seam_geometry_fences_current_and_pending_fields);
     tcase_add_test(tc_core, test_discontinuous_horizontal_neighbor_is_not_a_local_light_dependency);
     tcase_add_test(tc_real_maps, test_brynknot_and_outside_fields_follow_settime);
+    tcase_add_test(tc_real_maps, test_brynknot_fields_match_golden_digests);
     tcase_add_test(tc_core, test_unloaded_lower_map_does_not_gate_upper_light);
     tcase_add_test(tc_core, test_real_wilderness_midnight_full_and_new_moon_samples);
     tcase_add_test(tc_core, test_derived_horizontal_neighbors_preserve_day_and_lunar_light);
