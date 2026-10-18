@@ -13,6 +13,7 @@
 #include <initialization.h>
 #include <server_main.h>
 #include <light.h>
+#include <los.h>
 #include <check.h>
 #include <checkstd.h>
 #include <check_utils.h>
@@ -1738,6 +1739,26 @@ START_TEST(test_client_lighting_local_source_epochs_are_per_map) {
 }
 END_TEST
 
+START_TEST(test_client_lighting_local_cache_ignores_unrelated_geometry) {
+    /* A geometry change elsewhere, such as another map being saved, only
+     * rehashes a cached block's own maps; a link change on one of them
+     * walks again. */
+    mapstruct *map = get_empty_map(9, 9);
+    add_colored_light(map, 4, 4, 13, LIGHT_COLOR_WHITE);
+    int level = light_local_level(map, 4, 4);
+    ck_assert_int_gt(level, 0);
+    uint64_t walks = light_local_walks_for_test();
+    los_geometry_changed();
+    ck_assert_int_eq(light_local_level(map, 4, 4), level);
+    ck_assert_uint_eq(light_local_walks_for_test(), walks);
+    mapstruct *east = get_empty_map(9, 9);
+    link_horizontal_maps(map, east);
+    los_geometry_changed();
+    ck_assert_int_eq(light_local_level(map, 8, 4), light_local_level(map, 8, 4));
+    ck_assert_uint_gt(light_local_walks_for_test(), walks);
+}
+END_TEST
+
 START_TEST(test_client_lighting_local_level_fails_closed_on_unbounded_cycles) {
     /* Reciprocal east, north, west and south links that return to the same
      * offset on a new map each lap place unboundedly many maps within reach;
@@ -2101,6 +2122,7 @@ static Suite *suite(void) {
     tcase_add_test(tc_core, test_client_lighting_hidden_wall_surfaces_own_a_downward_face);
     tcase_add_test(tc_core, test_client_lighting_local_level_shares_tall_stacks);
     tcase_add_test(tc_core, test_client_lighting_local_source_epochs_are_per_map);
+    tcase_add_test(tc_core, test_client_lighting_local_cache_ignores_unrelated_geometry);
     tcase_add_test(tc_core, test_client_lighting_local_level_fails_closed_on_unbounded_cycles);
     tcase_add_test(tc_core, test_client_lighting_local_level_pools_every_reachable_tiny_map);
     tcase_add_test(tc_core, test_client_lighting_local_level_reaches_levels_linked_from_neighbors);

@@ -66,6 +66,11 @@ extern int8_t light_local_level(mapstruct *map, int x, int y);
 /** Free a map's coarse light cache, with the map. */
 extern void light_local_forget(mapstruct *map);
 
+#ifdef ATRINIK_TESTING
+/** Coarse-light topology walks performed so far. */
+extern uint64_t light_local_walks_for_test(void);
+#endif
+
 /** The signed coarse level of a block's strongest positive and negative raw
  * contributions: each sign is quantized before they compete. */
 extern int8_t light_local_level_from_extrema(int32_t positive, int32_t negative);
