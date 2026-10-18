@@ -4664,6 +4664,69 @@ START_TEST(test_celestial_closure_too_large_is_sent_as_open_air) {
 }
 END_TEST
 
+START_TEST(test_celestial_closure_headers_too_large_coalesce_by_depth) {
+    mapstruct *old_map;
+    object *pl;
+    check_setup_env_pl(&old_map, &pl);
+    unsigned long saved_hour = todtick;
+    todtick = 5 * HOURS_PER_MONTH + 12;
+    mapstruct *west = get_empty_map(64, 64);
+    mapstruct *east = get_empty_map(64, 64);
+    FREE_AND_COPY_HASH(west->path, "/closure/coalesce-west");
+    FREE_AND_COPY_HASH(east->path, "/closure/coalesce-east");
+    closure_fixture_schema(west);
+    closure_fixture_schema(east);
+    west->tile_map[TILED_EAST] = east;
+    east->tile_map[TILED_WEST] = west;
+    /* Structure on both sides of the seam puts both maps in the closure. */
+    for (int y = 28; y <= 36; y++) {
+        for (int x = 56; x < 64; x++) {
+            closure_structure(west, x, y, MISC_OBJECT, -1, NULL, NULL);
+        }
+        for (int x = 0; x < 4; x++) {
+            closure_structure(east, x, y, MISC_OBJECT, -1, NULL, NULL);
+        }
+    }
+    request_move_player(&pl, west, 60, 32);
+    /* Normally each map is its own fragment. */
+    closure_redraw(pl);
+    celestial_closure_t closure;
+    ck_assert(closure_last(pl, &closure));
+    size_t depth0 = 0;
+    for (size_t i = 0; i < closure.count; i++) {
+        depth0 += closure.fragments[i].depth == 0;
+    }
+    ck_assert_uint_eq(depth0, 2);
+    celestial_closure_free(&closure);
+    /* With no room even for open-air fragment headers, each depth becomes one
+     * open-air fragment over both maps, so every cell is still stored. */
+    size_t limit = map2_closure_payload_max_exchange_for_test(1);
+    closure_redraw(pl);
+    (void)map2_closure_payload_max_exchange_for_test(limit);
+    ck_assert(closure_last(pl, &closure));
+    ck_assert_uint_gt(closure.count, 0);
+    for (size_t i = 0; i < closure.count; i++) {
+        const celestial_closure_fragment_t *fragment = &closure.fragments[i];
+        for (size_t j = i + 1; j < closure.count; j++) {
+            ck_assert_int_ne(closure.fragments[j].depth, fragment->depth);
+        }
+        if (fragment->depth == 0) {
+            int east_x = 64 - pl->x + CONTR(pl)->cs->mapx_2;
+            ck_assert_int_lt(fragment->x, east_x);
+            ck_assert_int_ge(fragment->x + fragment->width, east_x + 1);
+        }
+        for (size_t cell = 0; cell < (size_t)fragment->width * fragment->height; cell++) {
+            ck_assert_uint_eq(fragment->values[cell], fragment->values[0]);
+        }
+        ck_assert_uint_eq(fragment->values[0] & 0x3ffU, 0x3ffU);
+    }
+    celestial_closure_free(&closure);
+    west->tile_map[TILED_EAST] = NULL;
+    east->tile_map[TILED_WEST] = NULL;
+    todtick = saved_hour;
+}
+END_TEST
+
 static Suite *suite(void) {
     Suite *s = suite_create("request");
     TCase *tc_core = tcase_create("Core");
@@ -4686,6 +4749,7 @@ static Suite *suite(void) {
     tcase_add_test(tc_closure, test_celestial_closure_applies_map2_direction_filtering);
     tcase_add_test(tc_closure, test_celestial_closure_is_resent_when_the_window_moves);
     tcase_add_test(tc_closure, test_celestial_closure_too_large_is_sent_as_open_air);
+    tcase_add_test(tc_closure, test_celestial_closure_headers_too_large_coalesce_by_depth);
     tcase_add_test(tc_core, test_removed_player_connection_keeps_servicing_queued_output);
     tcase_add_test(tc_core, test_map_name_metadata_handles_transient_unnamed_maps);
     tcase_add_test(tc_core, test_talk_target_binds_actor_without_selection_acknowledgement);

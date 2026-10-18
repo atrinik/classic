@@ -1151,6 +1151,12 @@ size_t map2_closure_payload_max_exchange_for_test(size_t max) {
  * one command sends its farthest depths, then if need be every depth, as
  * uniform open air, which compresses to a few runs; the client solves those
  * cells as it solves cells outside the closure, so none keeps a stale field.
+ * Should the fragment headers alone still not fit, as only countless tiny
+ * maps can cause, each depth becomes one open-air fragment over the bounds
+ * of its fragments: at most MAP2_LEVELS headers and runs, which always fit.
+ * It keeps the depth's profile slot when every fragment shares it, and
+ * otherwise has none, so its cells are explicitly stored without celestial
+ * light rather than under another map's profile.
  */
 static bool map2_closure_collect(socket_struct *cs, const map2_celestial_maps_t *seen,
                                  const int *slot_of, celestial_closure_t *closure) {
@@ -1230,12 +1236,35 @@ static bool map2_closure_collect(socket_struct *cs, const map2_celestial_maps_t 
     }
     celestial_closure_t sized = {.count = count, .fragments = fragments};
     if (celestial_closure_size(&sized) > map2_closure_payload_max) {
-        /* Only countless tiny maps get here: an empty closure leaves every
-         * cell open air. */
-        for (size_t i = 0; i < count; i++) {
-            free(fragments[i].values);
+        /* Fragments are collected depth by depth, so each depth's run is
+         * contiguous and coalesces in place. */
+        size_t coalesced = 0;
+        for (size_t i = 0; i < count;) {
+            celestial_closure_fragment_t merged = fragments[i];
+            int max_x = merged.x + merged.width - 1, max_y = merged.y + merged.height - 1;
+            size_t next = i;
+            for (; next < count && fragments[next].depth == merged.depth; next++) {
+                const celestial_closure_fragment_t *part = &fragments[next];
+                merged.x = MIN(merged.x, part->x);
+                merged.y = MIN(merged.y, part->y);
+                max_x = MAX(max_x, part->x + part->width - 1);
+                max_y = MAX(max_y, part->y + part->height - 1);
+                if (part->slot != merged.slot) {
+                    merged.slot = CELESTIAL_PROTOCOL_SLOT_NONE;
+                }
+                free(part->values);
+            }
+            merged.width = (uint8_t)(max_x - merged.x + 1);
+            merged.height = (uint8_t)(max_y - merged.y + 1);
+            size_t cells = (size_t)merged.width * merged.height;
+            merged.values = xcalloc(cells, sizeof(*merged.values));
+            for (size_t cell = 0; cell < cells; cell++) {
+                merged.values[cell] = MAP2_CLOSURE_OPEN_AIR;
+            }
+            fragments[coalesced++] = merged;
+            i = next;
         }
-        count = 0;
+        count = coalesced;
     }
     return celestial_closure_build(closure, 0, cs->mapx, cs->mapy, fragments, count);
 }
