@@ -21,6 +21,7 @@
 #include <light.h>
 #include <map.h>
 #include <object.h>
+#include <plugin.h>
 #include <region.h>
 #include <server_main.h>
 #include <spatial.h>
@@ -267,8 +268,12 @@ static uint16_t closure_static_down(mapstruct *map, int x, int y, const object *
                                     bool doors_closed, bool *aperture) {
     uint16_t coefficient = CELESTIAL_SCALE;
     for (object *op = GET_MAP_OB(map, x, y); op != NULL; op = op->above) {
+        /* A plugin decides per viewer whether MAP2 shows an object; one that
+         * may hide it is never disclosed here, where no plugin is asked. */
+        const object *head = HEAD(op);
         if ((QUERY_FLAG(op, FLAG_IS_INVISIBLE) && !QUERY_FLAG(viewer, FLAG_SEE_INVISIBLE)) ||
-            (op->layer != LAYER_WALL && QUERY_FLAG(op, FLAG_HIDDEN))) {
+            (op->layer != LAYER_WALL && QUERY_FLAG(op, FLAG_HIDDEN)) ||
+            HAS_EVENT(head, EVENT_ASK_SHOW)) {
             continue;
         }
         uint8_t faces = celestial_structure_faces(op);

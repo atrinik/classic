@@ -57,8 +57,14 @@
   meaning, and the version handshake rejects earlier peers. It also appends S2C
   `CELESTIAL` (34): region light constants and effective phases, framed by
   `celestial_protocol_write()` in `libatrinik/celestial_model.c` and sent to
-  every connection; see
-  [`CLIENT_CELESTIAL.md`](../server/doc/CLIENT_CELESTIAL.md) and
+  every connection, and S2C `CELESTIAL_STRUCTURE` (35): the viewer's celestial
+  closure as per-map fragments of 32-bit cell values, framed by
+  `celestial_closure_write()`/`celestial_closure_read()` in
+  `libatrinik/celestial_closure.c`. The two are one publication: they share a
+  generation, the server sends both whenever either changes, immediately
+  before the MAP2 update they belong to, and the client stages each and
+  replaces both only after that update applies, discarding them if it fails;
+  see [`CLIENT_CELESTIAL.md`](../server/doc/CLIENT_CELESTIAL.md) and
   [`CLIENT_LIGHTING.md`](../server/doc/CLIENT_LIGHTING.md).
 
 - Rendezvous admission transport identities live in `schema/rendezvous-admission.json`

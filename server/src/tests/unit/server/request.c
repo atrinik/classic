@@ -4420,6 +4420,54 @@ START_TEST(test_celestial_closure_discloses_only_sent_structure) {
 }
 END_TEST
 
+START_TEST(test_celestial_closure_omits_plugin_controlled_static_faces) {
+    mapstruct *old_map;
+    object *pl;
+    check_setup_env_pl(&old_map, &pl);
+    unsigned long saved_hour = todtick;
+    todtick = 5 * HOURS_PER_MONTH + 12;
+    mapstruct *lower = closure_open_world("/closure/ask-lower");
+    mapstruct *upper = get_empty_map(64, 64);
+    FREE_AND_COPY_HASH(upper->path, "/closure/ask-upper");
+    closure_fixture_schema(upper);
+    FREE_AND_COPY_HASH(lower->tile_path[TILED_UP], upper->path);
+    FREE_AND_COPY_HASH(upper->tile_path[TILED_DOWN], lower->path);
+    lower->tile_map[TILED_UP] = upper;
+    upper->tile_map[TILED_DOWN] = lower;
+    lower->celestial_sky_above = CELESTIAL_SKY_LINKED;
+    lower->celestial_boundary[TILED_UP] = CELESTIAL_BOUNDARY_CONTINUOUS;
+    upper->celestial_boundary[TILED_DOWN] = CELESTIAL_BOUNDARY_CONTINUOUS;
+    /* The viewer stands under a roof, which the camera cuts away. */
+    object *scripted = NULL;
+    for (int y = 29; y <= 33; y++) {
+        for (int x = 29; x <= 33; x++) {
+            object *roof = arch_get("roof_thatch");
+            roof->x = x;
+            roof->y = y;
+            roof = object_insert_map(roof, upper, NULL, 0);
+            ck_assert_ptr_nonnull(roof);
+            if (x == 32 && y == 31) {
+                scripted = roof;
+            }
+        }
+    }
+    /* A plugin decides per viewer whether this roof cell is shown. */
+    scripted->event_flags |= EVENT_FLAG(EVENT_ASK_SHOW);
+    request_move_player(&pl, lower, 31, 31);
+    closure_redraw(pl);
+    celestial_closure_t closure;
+    ck_assert(closure_last(pl, &closure));
+    uint32_t under_plain = closure_cell(pl, &closure, 30, 31);
+    uint32_t under_scripted = closure_cell(pl, &closure, 32, 31);
+    ck_assert_uint_ne(under_plain, 0);
+    ck_assert_uint_ne(under_scripted, 0);
+    ck_assert_uint_eq((under_plain >> CELESTIAL_CLOSURE_OVERHEAD_SHIFT) & 3U, 0);
+    ck_assert_uint_eq((under_scripted >> CELESTIAL_CLOSURE_OVERHEAD_SHIFT) & 3U, 3);
+    celestial_closure_free(&closure);
+    todtick = saved_hour;
+}
+END_TEST
+
 static Suite *suite(void) {
     Suite *s = suite_create("request");
     TCase *tc_core = tcase_create("Core");
@@ -4438,6 +4486,7 @@ static Suite *suite(void) {
     tcase_add_test(tc_closure, test_celestial_closure_matches_server_solver_under_roofs);
     tcase_add_test(tc_closure, test_celestial_closure_matches_server_solver_in_brynknot);
     tcase_add_test(tc_closure, test_celestial_closure_discloses_only_sent_structure);
+    tcase_add_test(tc_closure, test_celestial_closure_omits_plugin_controlled_static_faces);
     tcase_add_test(tc_core, test_removed_player_connection_keeps_servicing_queued_output);
     tcase_add_test(tc_core, test_map_name_metadata_handles_transient_unnamed_maps);
     tcase_add_test(tc_core, test_talk_target_binds_actor_without_selection_acknowledgement);

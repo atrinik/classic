@@ -99,7 +99,17 @@ typedef struct celestial_solver_ops {
     void (*release)(void *context, size_t bytes);
 } celestial_solver_ops_t;
 
-/** A celestial lattice: its operations and their context. */
+/**
+ * A celestial lattice: its operations and their context. Both are owned by
+ * the caller and must outlive every solver call that receives the lattice
+ * and every ray or cursor initialized from it. The solver calls the
+ * operations synchronously on the calling thread, never retains them past a
+ * call, and does not reenter a solver entry point from an operation. Nothing
+ * in the solver is shared between calls, so lattices may be solved on
+ * different threads concurrently as long as each operation set and context
+ * is used by one thread at a time; operations that mutate their context
+ * (observe, reserve, release) need the caller's synchronization otherwise.
+ */
 typedef struct celestial_solver_lattice {
     const celestial_solver_ops_t *ops;
     void *context;
