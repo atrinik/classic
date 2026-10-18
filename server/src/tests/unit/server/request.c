@@ -4312,6 +4312,114 @@ START_TEST(test_celestial_closure_matches_server_solver_in_brynknot) {
 }
 END_TEST
 
+/** Decode the last queued closure, or return false when none was queued. */
+static bool closure_last(object *pl, celestial_closure_t *closure) {
+    socket_struct *cs = CONTR(pl)->cs;
+    packet_struct *structure = queued_command_payload_last(cs, CLIENT_CMD_CELESTIAL_STRUCTURE);
+    if (structure == NULL) {
+        return false;
+    }
+    ck_assert(celestial_closure_read(structure->data, structure->len, cs->mapx, cs->mapy,
+                                     closure));
+    return true;
+}
+
+static uint32_t closure_cell(object *pl, const celestial_closure_t *closure, int x, int y) {
+    socket_struct *cs = CONTR(pl)->cs;
+    int x0 = pl->x + (cs->mapx + 1) / 2 - cs->mapx;
+    int y0 = pl->y + (cs->mapy + 1) / 2 - cs->mapy;
+    return celestial_closure_value(closure, 0, x - x0, y - y0);
+}
+
+static void closure_redraw(object *pl) {
+    CONTR(pl)->update_los = 1;
+    socket_buffer_clear(CONTR(pl)->cs);
+    draw_client_map(pl);
+    ck_assert_uint_gt(validate_queued_map_payloads(CONTR(pl)->cs), 0);
+}
+
+START_TEST(test_celestial_closure_discloses_only_sent_structure) {
+    mapstruct *old_map;
+    object *pl;
+    check_setup_env_pl(&old_map, &pl);
+    unsigned long saved_hour = todtick;
+    todtick = 5 * HOURS_PER_MONTH + 12;
+    mapstruct *map = closure_open_world("/closure/disclosure");
+    object *door = closure_structure(map, 30, 32, DOOR, -1, "celestial_transmission_open",
+                                     "glass");
+    ck_assert(object_set_value(door, "celestial_transmission_closed", "opaque", true));
+    object *far_door = closure_structure(map, 40, 32, DOOR, -1, "celestial_transmission_open",
+                                         "glass");
+    ck_assert(object_set_value(far_door, "celestial_transmission_closed", "opaque", true));
+    object *pane = closure_structure(map, 32, 30, MISC_OBJECT, FLAG_IS_INVISIBLE,
+                                     "celestial_transmission", "glass");
+    ck_assert_ptr_nonnull(pane);
+    request_move_player(&pl, map, 32, 32);
+    closure_redraw(pl);
+    celestial_closure_t closure;
+    ck_assert(closure_last(pl, &closure));
+    uint32_t generation = closure.generation;
+    uint32_t open_door = closure_cell(pl, &closure, 30, 32);
+    ck_assert_uint_ne(open_door, 0);
+    /* The open glass door: glass faces with an aperture. */
+    ck_assert_uint_eq((open_door >> CELESTIAL_CLOSURE_CLASS_SHIFT(1)) & 3U, 1);
+    ck_assert_uint_ne(open_door & CELESTIAL_CLOSURE_APERTURE(1), 0);
+    /* An invisible pane is not sent, so it discloses nothing. */
+    uint32_t pane_cell = closure_cell(pl, &closure, 32, 30);
+    ck_assert_uint_ne(pane_cell, 0);
+    for (int face = 1; face < 5; face++) {
+        ck_assert_uint_eq((pane_cell >> CELESTIAL_CLOSURE_CLASS_SHIFT(face)) & 3U, 3);
+        ck_assert_uint_eq(pane_cell & CELESTIAL_CLOSURE_APERTURE(face), 0);
+    }
+    uint32_t far_open = closure_cell(pl, &closure, 40, 32);
+    ck_assert_uint_ne(far_open, 0);
+    celestial_closure_free(&closure);
+
+    /* An unchanged view sends no new pair. */
+    closure_redraw(pl);
+    ck_assert_ptr_null(queued_command_payload_last(CONTR(pl)->cs, CLIENT_CMD_CELESTIAL_STRUCTURE));
+    ck_assert_ptr_null(queued_command_payload_last(CONTR(pl)->cs, CLIENT_CMD_CELESTIAL));
+
+    /* Closing a visible door sends both payloads with the next generation. */
+    SET_FLAG(door, FLAG_DOOR_CLOSED);
+    closure_redraw(pl);
+    ck_assert(closure_last(pl, &closure));
+    ck_assert_uint_eq(closure.generation, generation + 1);
+    ck_assert_ptr_nonnull(queued_command_payload_last(CONTR(pl)->cs, CLIENT_CMD_CELESTIAL));
+    uint32_t closed_door = closure_cell(pl, &closure, 30, 32);
+    ck_assert_uint_eq((closed_door >> CELESTIAL_CLOSURE_CLASS_SHIFT(1)) & 3U, 0);
+    generation = closure.generation;
+    celestial_closure_free(&closure);
+
+    /* A wall hides the far door, which stays as it was when last seen while
+     * its real state changes out of sight. */
+    for (int y = 30; y <= 34; y++) {
+        closure_structure(map, 38, y, MISC_OBJECT, FLAG_BLOCKSVIEW, NULL, NULL);
+    }
+    closure_redraw(pl);
+    if (closure_last(pl, &closure)) {
+        ck_assert_uint_eq(closure_cell(pl, &closure, 40, 32), far_open);
+        generation = closure.generation;
+        celestial_closure_free(&closure);
+    }
+    SET_FLAG(far_door, FLAG_DOOR_CLOSED);
+    closure_redraw(pl);
+    /* Nothing visible changed: no pair at all, so neither the state nor its
+     * timing reaches the client. */
+    ck_assert_ptr_null(queued_command_payload_last(CONTR(pl)->cs, CLIENT_CMD_CELESTIAL_STRUCTURE));
+    MapCell *remembered = map_client_cache_cell(&CONTR(pl)->cs->lastmap, 0,
+                                                40 - (pl->x + (CONTR(pl)->cs->mapx + 1) / 2 -
+                                                      CONTR(pl)->cs->mapx),
+                                                32 - (pl->y + (CONTR(pl)->cs->mapy + 1) / 2 -
+                                                      CONTR(pl)->cs->mapy),
+                                                false);
+    ck_assert_ptr_nonnull(remembered);
+    ck_assert_uint_eq(remembered->celestial_structure, far_open);
+    (void)generation;
+    todtick = saved_hour;
+}
+END_TEST
+
 static Suite *suite(void) {
     Suite *s = suite_create("request");
     TCase *tc_core = tcase_create("Core");
@@ -4329,6 +4437,7 @@ static Suite *suite(void) {
     tcase_add_test(tc_closure, test_celestial_closure_matches_server_solver_and_gameplay);
     tcase_add_test(tc_closure, test_celestial_closure_matches_server_solver_under_roofs);
     tcase_add_test(tc_closure, test_celestial_closure_matches_server_solver_in_brynknot);
+    tcase_add_test(tc_closure, test_celestial_closure_discloses_only_sent_structure);
     tcase_add_test(tc_core, test_removed_player_connection_keeps_servicing_queued_output);
     tcase_add_test(tc_core, test_map_name_metadata_handles_transient_unnamed_maps);
     tcase_add_test(tc_core, test_talk_target_binds_actor_without_selection_acknowledgement);
