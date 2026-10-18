@@ -102,10 +102,11 @@ static bool spell_target_authorized(object *op, object *target, int type) {
         dx += target->x - op->x;
         dy += target->y - op->y;
         /* Only a script service, such as a temple priest, aims a self-only
-         * spell at another creature; it reaches at least the NPC talk range
-         * (the SIZEOFFREE2 ring) so a served player is never out of range. */
+         * spell at another creature; on the same level it reaches at least
+         * the planar NPC talk range (the SIZEOFFREE2 ring), so a served
+         * player is never out of range. Other stories keep the spell's own. */
         int range = spells[type].range;
-        if (!(spells[type].flags & (SPELL_DESC_FRIENDLY | SPELL_DESC_ENEMY))) {
+        if (dz == 0 && !(spells[type].flags & (SPELL_DESC_FRIENDLY | SPELL_DESC_ENEMY))) {
             range = MAX(range, SPELL_SERVICE_RANGE);
         }
         if (abs(dz) > 6 || MAX(abs(dx), MAX(abs(dy), abs(dz))) > range) {

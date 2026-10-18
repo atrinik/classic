@@ -582,6 +582,16 @@ START_TEST(test_script_self_spell_reaches_a_visible_player) {
     ck_assert(perception_object_visible(distant, pl));
     ck_assert_int_eq(cast_spell(pl, distant, 0, SP_REMOVE_DEPLETION, 0, CAST_NPC, NULL), 0);
     ck_assert_ptr_nonnull(object_find_arch(pl, arch_find("depletion")));
+    /* Talk range is planar: a priest one open story above cannot serve. */
+    mapstruct *upper = get_empty_map(24, 24);
+    map->tile_map[TILED_UP] = upper;
+    upper->tile_map[TILED_DOWN] = map;
+    object *above = source_on(upper, 8, 8);
+    ck_assert(perception_object_visible(above, pl));
+    ck_assert_int_eq(cast_spell(pl, above, 0, SP_REMOVE_DEPLETION, 0, CAST_NPC, NULL), 0);
+    ck_assert_ptr_nonnull(object_find_arch(pl, arch_find("depletion")));
+    map->tile_map[TILED_UP] = NULL;
+    delete_map(upper);
     /* A wall still stops it. */
     object *wall = source_on(map, 8, 7);
     SET_FLAG(wall, FLAG_NO_PASS);
