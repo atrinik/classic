@@ -1057,7 +1057,6 @@ static void light_origin_list_update(mapstruct *map, MapSpace *space) {
 }
 
 static void light_local_reach_stamp(mapstruct *map, int x, int y);
-static void light_local_retire_stamp(mapstruct *map);
 
 /** Adjust one grouped scalar component at a source origin. */
 static void adjust_grouped_light_source(mapstruct *map,
@@ -1642,25 +1641,35 @@ typedef struct light_local_cache_entry {
     uint64_t validated, validated_all;
     /** The distinct maps the block's walk reached, valid for its geometry
      * epoch: revalidation hashes only their source epochs, never rewalks.
-     * Each keeps the map's count at the walk: a map freed or recycled since
-     * no longer matches it, so its stale pointer is never followed. */
+     * Freeing one of them sends the entry back to a walk first, so these
+     * pointers are only ever followed while their maps are live. */
     mapstruct **deps;
-    tag_t *deps_counts;
     size_t deps_count, deps_capacity;
     int8_t level;
 } light_local_cache_entry;
 
 
 void light_local_forget(mapstruct *map) {
-    /* Only blocks within reach of this map can hold it: stamp them, so they
-     * leave the constant-time path and check their maps' identities, while
-     * caches elsewhere stay as they are. Its own epoch changes too, for a
-     * map swapped out but kept. */
+    /* Every cached block whose walk reached this map walks again before it is
+     * read: the pointer is compared, never followed, so storage the pool may
+     * release is not touched, while caches that never reached the map keep
+     * their levels and fast paths. Map frees are rare, so a scan of the
+     * loaded maps' caches is cheap. Its own epoch changes too, for a map
+     * swapped out but kept. */
     map->light_local_epoch++;
-    light_local_retire_stamp(map);
+    for (mapstruct *other = first_map; other != NULL; other = other->next) {
+        for (size_t i = 0; other != map && i < other->light_local_cache_blocks; i++) {
+            light_local_cache_entry *entry = &other->light_local_cache[i];
+            for (size_t dep = 0; dep < entry->deps_count; dep++) {
+                if (entry->deps[dep] == map) {
+                    entry->geometry_epoch = 0;
+                    break;
+                }
+            }
+        }
+    }
     for (size_t i = 0; i < map->light_local_cache_blocks; i++) {
         free(map->light_local_cache[i].deps);
-        free(map->light_local_cache[i].deps_counts);
     }
     FREE_AND_NULL_PTR(map->light_local_cache);
     map->light_local_cache_blocks = 0;
@@ -1745,12 +1754,7 @@ int8_t light_local_level(mapstruct *map, int x, int y) {
 #ifdef ATRINIK_TESTING
         light_local_rehashes++;
 #endif
-        bool resident = true;
-        for (size_t i = 0; resident && i < entry->deps_count; i++) {
-            resident = entry->deps[i]->count == entry->deps_counts[i];
-        }
-        if (resident &&
-            light_local_deps_hash(entry->deps, entry->deps_count) == entry->source_hash) {
+        if (light_local_deps_hash(entry->deps, entry->deps_count) == entry->source_hash) {
             entry->validated = map->light_local_reach_generation;
             entry->validated_all = light_local_generation_all;
             entry->geometry_epoch = geometry;
@@ -1775,10 +1779,7 @@ int8_t light_local_level(mapstruct *map, int x, int y) {
             if (entry->deps_count == entry->deps_capacity) {
                 entry->deps_capacity = entry->deps_capacity == 0 ? 8 : entry->deps_capacity * 2;
                 entry->deps = xreallocarray(entry->deps, entry->deps_capacity, sizeof(*entry->deps));
-                entry->deps_counts = xreallocarray(entry->deps_counts, entry->deps_capacity,
-                                                   sizeof(*entry->deps_counts));
             }
-            entry->deps_counts[entry->deps_count] = regions[i].map->count;
             entry->deps[entry->deps_count++] = regions[i].map;
         }
     }
@@ -1951,32 +1952,6 @@ static void light_local_reach_stamp(mapstruct *map, int x, int y) {
     const light_local_region *regions;
     size_t count;
     if (!light_local_walk(map, bx, ex, by, ey, &regions, &count)) {
-        light_local_generation_all++;
-        return;
-    }
-    for (size_t i = 0; i < count; i++) {
-        regions[i].map->light_local_reach_generation = stamp;
-    }
-}
-
-/**
- * Stamp every map whose blocks may list this one, before it is freed or
- * swapped out: the walk from its whole area places them, by the same
- * symmetry as a source change. A map that cannot be walked (not resident,
- * narrower than a block, or a walk that fails closed) revalidates every
- * entry instead; a cache that walked through it then sees its count change.
- */
-static void light_local_retire_stamp(mapstruct *map) {
-    if (map->in_memory != MAP_IN_MEMORY || map->spaces == NULL) {
-        /* Its spaces went with an earlier retirement, which stamped then. */
-        return;
-    }
-    uint64_t stamp = ++light_local_generation;
-    map->light_local_reach_generation = stamp;
-    const light_local_region *regions;
-    size_t count;
-    if (MAP_WIDTH(map) < 3 || MAP_HEIGHT(map) < 3 ||
-        !light_local_walk(map, 0, MAP_WIDTH(map), 0, MAP_HEIGHT(map), &regions, &count)) {
         light_local_generation_all++;
         return;
     }

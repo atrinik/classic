@@ -270,48 +270,70 @@ static uint32_t closure_class(uint16_t coefficient) {
 }
 
 /**
- * The static downward face of a cell, from every object on it a viewer may
- * see, as spatial_cell_light_face() reads it. Floors and roofs belong to the
- * cell whether or not the camera draws their layer. Doors and gates count as
- * closed, or are skipped, since their state is shown only when sent. An object
- * drawn by direction counts only where MAP2 shows it at window position ax, ay.
+ * The static downward face of a cell, from the objects MAP2 selects for it
+ * (one per layer and sub-layer, an invisible one replaced as MAP2 replaces
+ * it), as spatial_cell_light_face() reads them, so an object beneath the
+ * selected one discloses nothing. Floors and roofs belong to the cell whether
+ * or not the camera draws their layer. Doors and gates count as closed, or are
+ * skipped, since their state is shown only when sent. An object drawn by
+ * direction counts only where MAP2 shows it at window position ax, ay.
  */
 static uint16_t closure_static_down(mapstruct *map, int x, int y, const object *viewer, int ax,
                                     int ay, bool doors_closed, bool *aperture) {
     uint16_t coefficient = CELESTIAL_SCALE;
-    for (object *op = GET_MAP_OB(map, x, y); op != NULL; op = op->above) {
-        /* A plugin decides per viewer whether MAP2 shows an object; one that
-         * may hide it is never disclosed here, where no plugin is asked. */
-        const object *head = HEAD(op);
-        if ((QUERY_FLAG(op, FLAG_IS_INVISIBLE) && !QUERY_FLAG(viewer, FLAG_SEE_INVISIBLE)) ||
-            (op->layer != LAYER_WALL && QUERY_FLAG(op, FLAG_HIDDEN)) ||
-            HAS_EVENT(head, EVENT_ASK_SHOW) || !map2_direction_shown(op, viewer, ax, ay)) {
-            continue;
-        }
-        uint8_t faces = celestial_structure_faces(op);
-        if (op->layer == LAYER_WALL && QUERY_FLAG(op, FLAG_HIDDEN)) {
-            faces |= CELESTIAL_FACE_DOWN;
-        }
-        if ((faces & CELESTIAL_FACE_DOWN) == 0) {
-            continue;
-        }
-        const char *value;
-        if (op->type == DOOR || op->type == GATE) {
-            if (!doors_closed) {
+    MapSpace *msp = GET_MAP_SPACE_PTR(map, x, y);
+    for (int layer = LAYER_FLOOR; layer <= NUM_LAYERS; layer++) {
+        for (int sub_layer = 0; sub_layer < NUM_SUB_LAYERS; sub_layer++) {
+            object *op = GET_MAP_SPACE_LAYER(msp, layer, sub_layer);
+            if (op != NULL && QUERY_FLAG(op, FLAG_IS_INVISIBLE) &&
+                !QUERY_FLAG(viewer, FLAG_SEE_INVISIBLE)) {
+                object *visible = NULL;
+                for (object *next = op; next != NULL && next->layer == layer &&
+                                        next->sub_layer == sub_layer;
+                     next = next->above) {
+                    if (!QUERY_FLAG(next, FLAG_IS_INVISIBLE)) {
+                        visible = next;
+                        break;
+                    }
+                }
+                op = visible;
+            }
+            if (op == NULL) {
                 continue;
             }
-            value = object_get_value(op, "celestial_transmission_closed");
-            *aperture = true;
-        } else {
-            value = object_get_value(op, "celestial_transmission");
-            if (value != NULL) {
-                *aperture = true;
+            /* A plugin decides per viewer whether MAP2 shows an object; one
+             * that may hide it is never disclosed here, where no plugin is
+             * asked. */
+            const object *head = HEAD(op);
+            if ((op->layer != LAYER_WALL && QUERY_FLAG(op, FLAG_HIDDEN)) ||
+                HAS_EVENT(head, EVENT_ASK_SHOW) || !map2_direction_shown(op, viewer, ax, ay)) {
+                continue;
             }
+            uint8_t faces = celestial_structure_faces(op);
+            if (op->layer == LAYER_WALL && QUERY_FLAG(op, FLAG_HIDDEN)) {
+                faces |= CELESTIAL_FACE_DOWN;
+            }
+            if ((faces & CELESTIAL_FACE_DOWN) == 0) {
+                continue;
+            }
+            const char *value;
+            if (op->type == DOOR || op->type == GATE) {
+                if (!doors_closed) {
+                    continue;
+                }
+                value = object_get_value(op, "celestial_transmission_closed");
+                *aperture = true;
+            } else {
+                value = object_get_value(op, "celestial_transmission");
+                if (value != NULL) {
+                    *aperture = true;
+                }
+            }
+            celestial_transmission_t transmission = celestial_structure_transmission(value);
+            coefficient = MIN(coefficient, transmission == CELESTIAL_TRANSMISSION_INVALID
+                                               ? 0
+                                               : (uint16_t)transmission);
         }
-        celestial_transmission_t transmission = celestial_structure_transmission(value);
-        coefficient = MIN(coefficient, transmission == CELESTIAL_TRANSMISSION_INVALID
-                                           ? 0
-                                           : (uint16_t)transmission);
     }
     return coefficient;
 }

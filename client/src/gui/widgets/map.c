@@ -278,6 +278,7 @@ static void map_emitter_revoke(size_t level) {
     map_emitter_revision_bump(level);
     map_client_lighting_fields[level].valid = false;
 }
+static void map_emitter_revoke_cell(size_t level, const map_cell_t *cell);
 static size_t current_level_index = MAP2_DEPTH_INDEX(0);
 /** Offline proofs only: the discrete per-tile projection pinned by approved
  * conformance goldens. Players always get smooth lighting. */
@@ -1412,7 +1413,8 @@ static void map_cache_mark_fow(map_cell_store_t *level,
              * keyframe, remembered occluders and coarse levels, as a soft
              * clear does; their emitters are revoked. */
             if (cell != NULL && cell->emitters != NULL && !cell->fow) {
-                map_emitter_revoke(level_index);
+                /* Fields of linked levels include these emitters too. */
+                map_emitter_revoke_cell(level_index, cell);
             }
             if (cell != NULL && (!cell->fow || cell->structural_fow)) {
                 map_clear_live_cell(cell);
@@ -2369,6 +2371,18 @@ void map_level_scroll(int dz) {
             shifted_fields[MAP2_DEPTH_INDEX(depth)] =
                 map_client_lighting_fields[MAP2_DEPTH_INDEX(source_depth)];
             map_client_lighting_fields[MAP2_DEPTH_INDEX(source_depth)].cells = NULL;
+            /* A field whose vertical reach read a depth the shift drops keeps
+             * that depth's emitters, which no revision can revoke any more:
+             * it rebuilds instead. */
+            int reach = MIN(LIGHT_PROFILE_RADIUS_MAX, 2 * MAP2_MAX_DEPTH);
+            for (int read = source_depth - reach; read <= source_depth + reach; read++) {
+                int destination = read - dz;
+                if (read >= -MAP2_MAX_DEPTH && read <= MAP2_MAX_DEPTH &&
+                    (destination < -MAP2_MAX_DEPTH || destination > MAP2_MAX_DEPTH)) {
+                    shifted_fields[MAP2_DEPTH_INDEX(depth)].valid = false;
+                    break;
+                }
+            }
             level_cells[MAP2_DEPTH_INDEX(source_depth)] = NULL;
         }
     }
@@ -7367,6 +7381,14 @@ bool widget_map_client_lighting_state_test(void) {
     map_level_scroll(1);
     success = success && changed != unchanged &&
               level_emitter_revision[MAP2_DEPTH_INDEX(0)] == changed;
+    /* A shift that drops a depth rebuilds every field whose vertical reach
+     * read it; fields beyond that reach move intact. */
+    map_client_lighting_fields[MAP2_DEPTH_INDEX(-MAP2_MAX_DEPTH + 1)].valid = true;
+    map_client_lighting_fields[MAP2_DEPTH_INDEX(MAP2_MAX_DEPTH - 1)].valid = true;
+    map_level_scroll(1);
+    success = success && !map_client_lighting_fields[MAP2_DEPTH_INDEX(-MAP2_MAX_DEPTH)].valid &&
+              map_client_lighting_fields[MAP2_DEPTH_INDEX(MAP2_MAX_DEPTH - 2)].valid;
+    map_level_scroll(-1);
 
     /* A committed scroll cancels fragments still to solve: they address the
      * window before it, so they would land on shifted cells, while solved

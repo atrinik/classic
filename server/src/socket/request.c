@@ -1973,15 +1973,16 @@ void draw_client_map2(object *pl) {
                     mp = map_client_cache_cell(&CONTR(pl)->cs->lastmap, depth, ax, ay, true);
                     map_append_support_height(packet, mp, mask, map_space_support_height(msp));
                     if (remembered) {
-                        /* Only an authorized cell contributes its profile,
-                         * and only a shown stack prepares its next hour. */
-                        map2_celestial_note(&celestial_maps, m);
+                        /* A remembered tile renders light: its stack prepares
+                         * its next hour. */
                         map2_shown_note(m);
                         mp->client_light_known |= MAP2_CLIENT_LIGHT_REMEMBERED;
                         /* Remembered fog keeps its whole structure record as it
-                         * was when last visible. */
+                         * was when last visible; only a cell with a closure
+                         * record takes a profile slot. */
                         if (mp->celestial_structure != 0) {
                             map2_closure_maps[MAP2_DEPTH_INDEX(depth)][ax][ay] = m;
+                            map2_celestial_note(&celestial_maps, m);
                         }
                         map2_light_sample_t sample;
                         map2_sample_light(pl, m, nx, ny, (special_vision & 1) != 0, &sample);
@@ -1989,11 +1990,9 @@ void draw_client_map2(object *pl) {
                     }
                     map2_next_cell();
                 }
-                /* Past the LOS checks: the cell is shown, so its profile is
-                 * part of the update and it is bound to this map cell; a
-                 * LOS-blocked, never-sent cell is neither. */
+                /* Past the LOS checks: the cell is shown, so it is bound to this
+                 * map cell; a LOS-blocked, never-sent cell is not. */
                 if (depth != 0 || !blocksview) {
-                    map2_celestial_note(&celestial_maps, m);
                     MapCell *shown =
                         map_client_cache_cell(&CONTR(pl)->cs->lastmap, depth, ax, ay, true);
                     if (shown->source_map != m->count || shown->source_x != nx ||
@@ -2912,6 +2911,10 @@ void draw_client_map2(object *pl) {
                     mp->celestial_structure =
                         celestial_closure_cell_value(&cell_celestial, m, nx, ny, pl, ax, ay);
                     map2_closure_maps[MAP2_DEPTH_INDEX(depth)][ax][ay] = m;
+                    /* Only a cell with a closure record takes a profile slot:
+                     * empty or fully filtered maps neither disclose theirs nor
+                     * crowd out a rendered map's. */
+                    map2_celestial_note(&celestial_maps, m);
                 } else {
                     mp->celestial_structure = 0;
                 }
