@@ -335,6 +335,29 @@ static void test_publication_solves_every_closure_cell(void) {
     }
 }
 
+static void test_cancel_stops_the_remaining_fragments(void) {
+    client_celestial_reset();
+    celestial_protocol_slot_t slot = slot_at(9, 12, 900);
+    packet_struct *packet = encode(1, &slot, 1);
+    TEST_CHECK(client_celestial_apply(packet->data, packet->len));
+    packet_free(packet);
+    celestial_closure_fragment_t *fragments = malloc(2 * sizeof(*fragments));
+    TEST_CHECK(fragments != NULL);
+    fragments[0] = fragment_of(0, 1, 1, 2, 1, 9, OPEN_AIR);
+    fragments[1] = fragment_of(1, 4, 4, 2, 1, 9, OPEN_AIR);
+    TEST_CHECK(stage_closure(1, fragments, 2));
+    published_cells cells = {0};
+    TEST_CHECK(client_celestial_publish(record_cell, &cells));
+    TEST_CHECK(!client_celestial_process(0));
+    TEST_CHECK(cells.count == 2);
+    /* The window moved: the second fragment is never reported. */
+    client_celestial_cancel();
+    TEST_CHECK(client_celestial_process(UINT64_MAX));
+    TEST_CHECK(cells.count == 2 && cells.depth[1] == 0);
+    /* The pair stays published. */
+    TEST_CHECK(client_celestial_generation() == 1);
+}
+
 static void test_worst_case_closure_cost(void) {
     /* Every cell of a 32 x 32 window over all 13 depths. */
     client_celestial_reset();
@@ -386,6 +409,7 @@ int main(void) {
     test_reset_forgets_slots_and_generation();
     test_pair_publishes_only_together();
     test_publication_solves_every_closure_cell();
+    test_cancel_stops_the_remaining_fragments();
     test_worst_case_closure_cost();
     toolkit_deinit();
     return EXIT_SUCCESS;

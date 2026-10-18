@@ -2171,6 +2171,11 @@ void display_mapscroll(int dx, int dy, int old_w, int old_h) {
     int width = map_width * MAP_FOW_SIZE;
     int height = map_height * MAP_FOW_SIZE;
 
+    if (dx != 0 || dy != 0 || (old_w != 0 && old_h != 0 && (old_w != width || old_h != height))) {
+        /* Fragments still to solve address the window before this move. */
+        client_celestial_cancel();
+    }
+
     if (old_w != 0 && old_h != 0 && (old_w != width || old_h != height)) {
         int old_origin_x = map_cache_origin_x;
         int old_origin_y = map_cache_origin_y;
@@ -3262,6 +3267,10 @@ static void map_cell_clear_client_light(size_t index, bool hard) {
     level_lighting_revision[current_level_index]++;
 }
 
+/** Whether a stored celestial field may still be blending toward its next
+ * hour; set on store, cleared lazily once a scan finds none. */
+static bool map_celestial_moving;
+
 /** Saturate a solved celestial word into its cache cell. */
 static int16_t map_celestial_word(int32_t value) {
     return (int16_t)MAX(INT16_MIN, MIN(INT16_MAX, value));
@@ -3287,8 +3296,13 @@ void map_celestial_store(void *context, int depth, int x, int y, const int32_t c
     }
     header->celestial_hour = client_celestial_start_seconds() / 3600;
     header->client_light_known |= 4U;
+    if (memcmp(header->celestial[0], header->celestial[1], sizeof(header->celestial[0])) != 0) {
+        map_celestial_moving = true;
+    }
     level_lighting_revision[level]++;
     map_redraw_request(MAP_REDRAW_REASON_LIGHTING);
+    /* The dynamic minimap retains its own target. */
+    minimap_redraw_request();
 }
 
 /**
@@ -3318,19 +3332,42 @@ static bool map_cell_celestial(const map_cell_header_t *header, int64_t field[4]
     return true;
 }
 
-/** Relight once a game minute while a celestial field may move. */
+/** Whether any stored cell's field changes during its hour after now. */
+static bool map_celestial_any_moving(uint64_t now) {
+    for (size_t level = 0; level < arraysize(level_cells); level++) {
+        const map_cell_store_t *store = level_cells[level];
+        for (size_t i = 0; store != NULL && i < store->count; i++) {
+            const map_cell_header_t *header = &store->headers[i];
+            if ((header->client_light_known & 4U) != 0 &&
+                now < ((uint64_t)header->celestial_hour + 1) * 3600 &&
+                memcmp(header->celestial[0], header->celestial[1],
+                       sizeof(header->celestial[0])) != 0) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+/** Relight once a game minute while a stored celestial field moves. */
 static void map_celestial_temporal_update(void) {
     static uint64_t minute = UINT64_MAX;
     uint64_t now;
-    if (client_celestial_generation() == 0 || !telemetry_game_time_seconds(&now) ||
-        now / 60 == minute) {
+    if (!map_celestial_moving || !telemetry_game_time_seconds(&now) || now / 60 == minute) {
         return;
     }
     minute = now / 60;
+    /* Equal endpoints, or an hour fully blended, present nothing new: once
+     * none remain, relight a last time to land the final blend, then stop.
+     * The scan is far cheaper than the relight it gates. */
+    if (!map_celestial_any_moving(now)) {
+        map_celestial_moving = false;
+    }
     for (size_t level = 0; level < arraysize(level_lighting_revision); level++) {
         level_lighting_revision[level]++;
     }
     map_redraw_request(MAP_REDRAW_REASON_LIGHTING);
+    minimap_redraw_request();
 }
 
 bool map_celestial_field(int depth, int x, int y, bool next, int16_t field[4]) {
@@ -7014,6 +7051,19 @@ bool widget_map_client_lighting_state_test(void) {
     success = success && blended[0] == 151 && blended[1] == 49;
     map_celestial_blend(&blend, 3600, blended);
     success = success && blended[0] == 201 && blended[1] == -1;
+    /* A store invalidates the dynamic minimap's retained target too, and the
+     * minute relight runs only while some field still blends: equal
+     * endpoints, or an hour past its end, present nothing new. */
+    uint64_t store_hour = client_celestial_start_seconds() / 3600;
+    minimap_redraw_flag = 0;
+    map_celestial_store(NULL, celestial_depth, 10, 8, sky, sky);
+    success = success && minimap_redraw_flag != 0 && !map_celestial_any_moving(store_hour * 3600);
+    int32_t dusk[4] = {200, 100, 150, 250};
+    map_celestial_store(NULL, celestial_depth, 10, 8, sky, dusk);
+    success = success && map_celestial_moving && map_celestial_any_moving(store_hour * 3600) &&
+              !map_celestial_any_moving((store_hour + 1) * 3600);
+    map_clear_cell(10, 8, true);
+    success = success && !map_celestial_any_moving(store_hour * 3600);
     /* A presented frame rebuilds at most its budget of out-of-date emitter
      * fields; the rest are deferred to a requested redraw, and rebuilds
      * outside a frame stay unbounded. */
@@ -7256,6 +7306,45 @@ bool widget_map_client_lighting_state_test(void) {
     map_level_scroll(1);
     success = success && changed != unchanged &&
               level_emitter_revision[MAP2_DEPTH_INDEX(0)] == changed;
+
+    /* A scroll cancels fragments still to solve: they address the window
+     * before it, so they would land on shifted cells, while solved cells
+     * move with the cache. The server sends a pair for the new window. */
+    success = success && map_select_level(0, true);
+    client_celestial_reset();
+    packet_struct *celestial_packet = packet_new(0, 64, 0);
+    success = success && celestial_protocol_write(celestial_packet, 1, 0, NULL, 0) &&
+              client_celestial_apply(celestial_packet->data, celestial_packet->len);
+    packet_free(celestial_packet);
+    celestial_closure_fragment_t *scroll_fragments = xcalloc(2, sizeof(*scroll_fragments));
+    for (size_t i = 0; i < 2; i++) {
+        scroll_fragments[i] = (celestial_closure_fragment_t){
+            .depth = 0, .x = (uint8_t)(12 + i), .y = 8, .width = 1, .height = 1,
+            .slot = CELESTIAL_PROTOCOL_SLOT_NONE};
+        scroll_fragments[i].values = xcalloc(1, sizeof(*scroll_fragments[i].values));
+        scroll_fragments[i].values[0] = CELESTIAL_CLOSURE_IN;
+    }
+    celestial_closure_t scroll_closure;
+    celestial_packet = packet_new(0, 64, 0);
+    success = success &&
+              celestial_closure_build(&scroll_closure, 1, map_width, map_height, scroll_fragments,
+                                      2) &&
+              celestial_closure_write(celestial_packet, &scroll_closure) &&
+              client_celestial_apply_structure(celestial_packet->data, celestial_packet->len,
+                                               map_width, map_height);
+    celestial_closure_free(&scroll_closure);
+    packet_free(celestial_packet);
+    success = success && client_celestial_publish(map_celestial_store, NULL) &&
+              !client_celestial_process(0);
+    int64_t saved_scroll_x = map_cache_scroll_x, saved_scroll_y = map_cache_scroll_y;
+    display_mapscroll(1, 0, 0, 0);
+    success = success && client_celestial_process(UINT64_MAX) &&
+              map_celestial_field(0, 11, 8, false, stored) &&
+              !map_celestial_field(0, 12, 8, false, stored) &&
+              !map_celestial_field(0, 13, 8, false, stored);
+    map_cache_scroll_x = saved_scroll_x;
+    map_cache_scroll_y = saved_scroll_y;
+    client_celestial_reset();
 
     for (size_t store = 0; store < arraysize(map_client_lighting_fields); store++) {
         map_client_lighting_fields[store].valid = false;

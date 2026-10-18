@@ -51,6 +51,10 @@ void client_celestial_discard_staged(void) {
     client_celestial.staged_closure_valid = false;
 }
 
+void client_celestial_cancel(void) {
+    client_celestial.solved = client_celestial.closure.count;
+}
+
 void client_celestial_reset(void) {
     uint64_t revision = client_celestial.revision;
     client_celestial_discard_staged();

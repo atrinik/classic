@@ -1038,20 +1038,22 @@ static int16_t map_space_support_height(MapSpace *msp) {
  * it (server thread only). */
 static mapstruct *map2_closure_maps[MAP2_LEVELS][MAP_CLIENT_X][MAP_CLIENT_Y];
 
-/** Distinct maps one MAP2 update shows, whose next hour it prepares. */
-#define MAP2_SHOWN_MAPS_MAX 64
+/** Distinct maps one MAP2 update shows, whose next hour it prepares. Each
+ * shown cell notes at most one map, so the view bounds the list and no map
+ * is ever dropped (server thread only). */
+#define MAP2_SHOWN_MAPS_MAX (MAP2_LEVELS * MAP_CLIENT_X * MAP_CLIENT_Y)
 static mapstruct *map2_shown_maps[MAP2_SHOWN_MAPS_MAX];
 static size_t map2_shown_count;
+/** Stamps mapstruct::map2_shown_pass once per update for O(1) dedup. */
+static uint64_t map2_shown_pass;
 
 static void map2_shown_note(mapstruct *map) {
-    for (size_t i = 0; i < map2_shown_count; i++) {
-        if (map2_shown_maps[i] == map) {
-            return;
-        }
+    if (map->map2_shown_pass == map2_shown_pass) {
+        return;
     }
-    if (map2_shown_count < MAP2_SHOWN_MAPS_MAX) {
-        map2_shown_maps[map2_shown_count++] = map;
-    }
+    HARD_ASSERT(map2_shown_count < MAP2_SHOWN_MAPS_MAX);
+    map->map2_shown_pass = map2_shown_pass;
+    map2_shown_maps[map2_shown_count++] = map;
 }
 
 /** Distinct celestial profiles of the maps one MAP2 update shows. */
@@ -1694,6 +1696,7 @@ void draw_client_map2(object *pl) {
     map2_celestial_maps_t celestial_maps = {0};
     memset(map2_closure_maps, 0, sizeof(map2_closure_maps));
     map2_shown_count = 0;
+    map2_shown_pass++;
 
     if (!los_view_is_current(pl)) {
         goto abort_map;

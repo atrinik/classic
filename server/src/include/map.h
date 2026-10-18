@@ -809,6 +809,10 @@ typedef struct mapdef {
     /** Used by relative_tile_position() to mark visited maps */
     uint32_t traversed;
 
+    /** The last MAP2 update that listed this map as shown (server thread
+     * only; zero is never a pass). */
+    uint64_t map2_shown_pass;
+
     /**
      * Indicates the base light value on this map.
      *

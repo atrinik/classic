@@ -73,6 +73,13 @@ bool client_celestial_process(uint64_t budget_us);
 /** Drop staged payloads, as when the MAP2 update that follows fails. */
 void client_celestial_discard_staged(void);
 
+/**
+ * Stop solving the published closure, whose coordinates name the window it
+ * was sent for, once the local cache scrolls or resizes. The server sends a
+ * new pair for every window move, so its cells are solved again.
+ */
+void client_celestial_cancel(void);
+
 /** The published closure. */
 const celestial_closure_t *client_celestial_closure(void);
 
