@@ -1436,10 +1436,9 @@ static mapstruct *light_local_seam(mapstruct *map, int tile) {
     return next;
 }
 
-/** Remembered levels of recently sampled blocks, valid while the sources of
- * every map their walk reaches and the geometry epoch are unchanged: every
- * cell and sub-layer of a block shares its level. */
-#define LIGHT_LOCAL_CACHE_SIZE 1024
+/* Each map keeps the level of every one of its blocks, valid while the
+ * sources of every map the block's walk reaches and the geometry epoch are
+ * unchanged: every cell and sub-layer of a block shares its level. */
 
 /** One map placed relative to the target block: cell (cx, cy) lies at
  * (cx + ox, cy + oy) on the target map, on any level of its linked stack. */
@@ -1502,10 +1501,9 @@ static void light_local_set_reset(void) {
 }
 
 typedef struct light_local_cache_entry {
-    const mapstruct *map;
-    tag_t count;
-    int bx, by;
-    uint64_t source_hash, geometry_epoch;
+    /** Zero until the block's level is first computed. */
+    uint64_t geometry_epoch;
+    uint64_t source_hash;
     /** light_local_generation when the level was last confirmed current. */
     uint64_t validated;
     /** The distinct maps the block's walk reached, valid for its geometry
@@ -1515,7 +1513,14 @@ typedef struct light_local_cache_entry {
     int8_t level;
 } light_local_cache_entry;
 
-static light_local_cache_entry light_local_cache[LIGHT_LOCAL_CACHE_SIZE];
+
+void light_local_forget(mapstruct *map) {
+    for (size_t i = 0; i < map->light_local_cache_blocks; i++) {
+        free(map->light_local_cache[i].deps);
+    }
+    FREE_AND_NULL_PTR(map->light_local_cache);
+    map->light_local_cache_blocks = 0;
+}
 
 /** Hash of the source epochs of a cached block's dependency maps. */
 static uint64_t light_local_deps_hash(mapstruct *const *deps, size_t count) {
@@ -1550,12 +1555,21 @@ int8_t light_local_level(mapstruct *map, int x, int y) {
      * confirmed, rehashes only its own maps' source epochs otherwise, and
      * walks and pools again only when the topology or one of those sources
      * changed. Every cell of a block shares one entry. */
+    /* Every block of a map has its own entry, so no working set of players
+     * and maps evicts another's; the cache lives and dies with the map. */
+    size_t blocks_x = (size_t)MAX(1, MAP_WIDTH(map) / 3);
+    size_t blocks_y = (size_t)MAX(1, MAP_HEIGHT(map) / 3);
+    if (map->light_local_cache == NULL) {
+        map->light_local_cache_blocks = blocks_x * blocks_y;
+        map->light_local_cache =
+            xcalloc(map->light_local_cache_blocks, sizeof(*map->light_local_cache));
+    }
+    size_t index = MIN((size_t)by / 3, blocks_y - 1) * blocks_x +
+                   MIN((size_t)bx / 3, blocks_x - 1);
+    HARD_ASSERT(index < map->light_local_cache_blocks);
+    light_local_cache_entry *entry = &map->light_local_cache[index];
     uint64_t geometry = los_geometry_epoch();
-    size_t slot = (((uintptr_t)map >> 4) ^ ((size_t)bx * 31u) ^ ((size_t)by * 1031u)) %
-                  LIGHT_LOCAL_CACHE_SIZE;
-    light_local_cache_entry *entry = &light_local_cache[slot];
-    if (entry->map == map && entry->count == map->count && entry->bx == bx &&
-        entry->by == by && entry->geometry_epoch == geometry) {
+    if (entry->geometry_epoch != 0 && entry->geometry_epoch == geometry) {
         if (entry->validated == light_local_generation) {
             return entry->level;
         }
@@ -1583,10 +1597,6 @@ int8_t light_local_level(mapstruct *map, int x, int y) {
             entry->deps[entry->deps_count++] = regions[i].map;
         }
     }
-    entry->map = map;
-    entry->count = map->count;
-    entry->bx = bx;
-    entry->by = by;
     entry->geometry_epoch = geometry;
     entry->source_hash = light_local_deps_hash(entry->deps, entry->deps_count);
     entry->validated = light_local_generation;

@@ -63,6 +63,9 @@ extern void light_base_radiance_signed(const MapSpace *space,
 /** Signed, source-anonymous coarse local light level of one cell (protocol 1085). */
 extern int8_t light_local_level(mapstruct *map, int x, int y);
 
+/** Free a map's coarse light cache, with the map. */
+extern void light_local_forget(mapstruct *map);
+
 /** The signed coarse level of a block's strongest positive and negative raw
  * contributions: each sign is quantized before they compete. */
 extern int8_t light_local_level_from_extrema(int32_t positive, int32_t negative);

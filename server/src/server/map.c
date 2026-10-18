@@ -1849,6 +1849,7 @@ void free_map(mapstruct *m, int flag) {
     celestial_dependencies_forget(m);
     celestial_dependencies_field_forget(m);
     celestial_light_forget(m);
+    light_local_forget(m);
 
     if (!m->in_memory) {
         return;

@@ -697,6 +697,11 @@ typedef struct mapdef {
      * coarse light caches validate against the maps their walk reaches. */
     uint64_t light_local_epoch;
 
+    /** Cached coarse level of each of this map's blocks, allocated on first
+     * use and freed with the map (light_local_forget()). */
+    struct light_local_cache_entry *light_local_cache;
+    size_t light_local_cache_blocks;
+
     /** Parsed celestial-v1 sky anchor. */
     uint8_t celestial_sky_above;
 
