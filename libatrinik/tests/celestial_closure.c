@@ -342,6 +342,16 @@ static int test_release_pairs_with_reserve(void) {
     require(celestial_solver_solve(&lattice, &counts.map, &model, values, rgb));
     require(counts.reserves > 0);
     require(counts.releases == counts.reserves && counts.released_bytes == counts.reserved_bytes);
+    /* A reserve without its release is never called: the charge could not
+     * be returned. */
+    static const celestial_solver_ops_t reserve_only = {
+        .resolve = counting_resolve, .dimensions = counting_dimensions, .sky = counting_sky,
+        .continuous = counting_continuous, .light = counting_light,
+        .reserve = counting_reserve};
+    counts = (counting_lattice){0};
+    lattice.ops = &reserve_only;
+    require(celestial_solver_solve(&lattice, &counts.map, &model, values, rgb));
+    require(counts.reserves == 0);
     /* Without reserve nothing was charged, so nothing is released. */
     static const celestial_solver_ops_t release_only = {
         .resolve = counting_resolve, .dimensions = counting_dimensions, .sky = counting_sky,
@@ -394,6 +404,37 @@ static int test_outside_records_and_sky_exits(void) {
     return 0;
 }
 
+static const celestial_solver_ops_t paired_open_ops = {
+    .resolve = counting_resolve, .dimensions = counting_dimensions, .sky = counting_sky,
+    .continuous = counting_continuous, .light = counting_light};
+
+static int test_continuity_is_symmetric(void) {
+    /* Two adjacent closure cells disagreeing about their seam: light crosses
+     * it neither way, as if both called it discontinuous. */
+    celestial_model_t model;
+    model_at(12, &model);
+    uint32_t sealed_east = OPEN_AIR & ~CELESTIAL_CLOSURE_CONTINUOUS_EAST;
+    int32_t field[2][9], field_rgb[2][9][3];
+    for (int variant = 0; variant < 2; variant++) {
+        celestial_closure_fragment_t *fragment = calloc(1, sizeof(*fragment));
+        require(fragment != NULL);
+        *fragment = (celestial_closure_fragment_t){.depth = 0, .x = 3, .y = 3, .width = 3,
+                                                   .height = 3, .slot = 3};
+        fragment->values = values_of(9, OPEN_AIR);
+        /* Variant 0: only the west cell says sealed; variant 1: both do. */
+        fragment->values[3] = sealed_east;
+        if (variant == 1) {
+            fragment->values[4] = OPEN_AIR & ~CELESTIAL_CLOSURE_CONTINUOUS_WEST;
+        }
+        celestial_closure_t closure;
+        require(celestial_closure_build(&closure, 7, 9, 9, fragment, 1));
+        require(celestial_closure_solve(&closure, 0, &model, field[variant], field_rgb[variant]));
+        celestial_closure_free(&closure);
+    }
+    require(memcmp(field[0], field[1], sizeof(field[0])) == 0);
+    return 0;
+}
+
 static int invalid_width;
 
 static void invalid_dimensions(void *context, void *map, int *width, int *height) {
@@ -424,15 +465,25 @@ static int test_invalid_inputs_fail_without_crashing(void) {
     celestial_closure_t closure;
     require(!celestial_closure_build(&closure, 1, 9, 9, NULL, 3));
     celestial_closure_free(&closure);
+    /* An azimuth outside the eight directions traces nothing either. */
+    lattice.ops = &paired_open_ops;
+    celestial_solver_ray_t probe;
+    celestial_solver_ray_init(&lattice, &probe, &counts.map, 1, 1, 0, 16384);
+    require(probe.done);
+    celestial_solver_ray_init(&lattice, &probe, &counts.map, 1, 1, CELESTIAL_MODEL_NORTHWEST + 1,
+                              16384);
+    require(probe.done);
+    celestial_solver_ray_init(&lattice, &probe, &counts.map, 1, 1, CELESTIAL_MODEL_NORTH, 16384);
+    require(!probe.done);
     /* An elevation above the Q15 zenith traces nothing. */
     static const celestial_solver_ops_t open_ops = {
         .resolve = counting_resolve, .dimensions = counting_dimensions, .sky = counting_sky,
         .continuous = counting_continuous, .light = counting_light};
     lattice.ops = &open_ops;
     celestial_solver_ray_t ray;
-    celestial_solver_ray_init(&lattice, &ray, &counts.map, 1, 1, 0, 32769);
+    celestial_solver_ray_init(&lattice, &ray, &counts.map, 1, 1, CELESTIAL_MODEL_NORTH, 32769);
     require(ray.done);
-    celestial_solver_ray_init(&lattice, &ray, &counts.map, 1, 1, 0, 32768);
+    celestial_solver_ray_init(&lattice, &ray, &counts.map, 1, 1, CELESTIAL_MODEL_NORTH, 32768);
     require(!ray.done);
     /* A writer failing part way leaves no partial payload. */
     require(build_one(&closure, 0, 0, 0, 3, 3, OPEN_AIR));
@@ -472,6 +523,9 @@ int main(void) {
     }
     if (result == 0) {
         result = test_outside_records_and_sky_exits();
+    }
+    if (result == 0) {
+        result = test_continuity_is_symmetric();
     }
     toolkit_deinit();
     return result;

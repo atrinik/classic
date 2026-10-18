@@ -368,17 +368,15 @@ static bool lattice_continuous(void *context, const celestial_solver_face_t *fac
     if (face->from.map == NULL || face->to.map == NULL) {
         return face->from.map == face->to.map;
     }
+    /* A face is one seam whichever way light crosses it: every closure cell
+     * on it must call it continuous, so malformed, one-sided bits can never
+     * make it passable in one direction only. */
+    int8_t reverse[3] = {(int8_t)-face->normal[0], (int8_t)-face->normal[1],
+                         (int8_t)-face->normal[2]};
     uint32_t from = lattice_value(lattice, &face->from);
-    if (from != 0) {
-        return (from & continuity_bit(face->normal)) != 0;
-    }
     uint32_t to = lattice_value(lattice, &face->to);
-    if (to != 0) {
-        int8_t reverse[3] = {(int8_t)-face->normal[0], (int8_t)-face->normal[1],
-                             (int8_t)-face->normal[2]};
-        return (to & continuity_bit(reverse)) != 0;
-    }
-    return true;
+    return (from == 0 || (from & continuity_bit(face->normal)) != 0) &&
+           (to == 0 || (to & continuity_bit(reverse)) != 0);
 }
 
 /** Coefficient of a cell's face (0 down .. 4 west), open air transmitting

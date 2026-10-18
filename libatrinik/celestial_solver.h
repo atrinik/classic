@@ -105,7 +105,8 @@ typedef struct celestial_solver_ops {
      * reports, as the server reserves them before a rebuild. */
     bool (*reserve)(void *context, size_t bytes);
     /** Return memory charged by reserve; called only for bytes a reserve
-     * call accepted, never when reserve is NULL. May be NULL. */
+     * call accepted. The two hooks work as a pair: with either NULL, neither
+     * is called. */
     void (*release)(void *context, size_t bytes);
 } celestial_solver_ops_t;
 
@@ -151,7 +152,7 @@ uint32_t celestial_solver_sqrt(uint64_t value);
 
 /** Start a backtrace from a map cell towards a source at the given direction
  * (CELESTIAL_MODEL_NORTH..NORTHWEST) and Q15 elevation, 1..32768; any other
- * elevation leaves the ray done. */
+ * elevation, or any other direction, leaves the ray done. */
 void celestial_solver_ray_init(const celestial_solver_lattice_t *lattice,
                                celestial_solver_ray_t *ray, void *map, int x, int y,
                                uint8_t direction, int32_t elevation);
