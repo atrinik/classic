@@ -23,6 +23,7 @@
 #include <object.h>
 #include <player.h>
 #include <plugin.h>
+#include <region.h>
 #include <toolkit/mempool.h>
 #include <tod.h>
 #include <commands.h>
@@ -3052,6 +3053,75 @@ START_TEST(test_celestial_inputs_precede_map_and_resend_only_on_change) {
 }
 END_TEST
 
+START_TEST(test_celestial_profiles_come_only_from_authorized_cells) {
+    mapstruct *map;
+    object *pl;
+    check_setup_env_pl(&map, &pl);
+    mapstruct *east = get_empty_map(24, 24);
+    map->tile_map[TILED_EAST] = east;
+    east->tile_map[TILED_WEST] = map;
+    mapstruct *maps[] = {map, east};
+    for (size_t i = 0; i < arraysize(maps); i++) {
+        maps[i]->celestial_schema = 1;
+        maps[i]->celestial_schema_seen = true;
+        maps[i]->celestial_sky_above = CELESTIAL_SKY_OPEN;
+        maps[i]->celestial_sky_seen = true;
+        maps[i]->celestial_v1_header_seen = true;
+        maps[i]->celestial_width_seen = true;
+        maps[i]->celestial_height_seen = true;
+    }
+    /* The neighbor behind the wall has a profile of its own. */
+    region_struct region = {.name = "hidden", .map_first = "/world/hidden"};
+    region.celestial = *region_celestial_for_map(map);
+    region.celestial.digest[0] ^= 0xff;
+    east->region = &region;
+    request_move_player(&pl, map, 20, 12);
+    object *walls[24];
+    for (int y = 0; y < map->height; y++) {
+        walls[y] = arch_get("wall_wood_1");
+        walls[y]->x = 21;
+        walls[y]->y = y;
+        walls[y] = object_insert_map(walls[y], map, NULL, 0);
+        ck_assert_ptr_nonnull(walls[y]);
+    }
+    socket_struct *cs = CONTR(pl)->cs;
+    static celestial_protocol_slot_t slots[CELESTIAL_PROTOCOL_SLOTS_MAX];
+    uint32_t generation;
+    uint64_t start;
+    size_t count;
+
+    /* Every neighbor cell is behind the wall and was never sent: its profile
+     * stays off the payload. */
+    update_los(pl);
+    map_client_cache_clear(&cs->lastmap);
+    socket_buffer_clear(cs);
+    CONTR(pl)->map_update_cmd = MAP_UPDATE_CMD_SAME;
+    draw_client_map2(pl);
+    packet_struct *celestial = queued_command_payload_find(cs, CLIENT_CMD_CELESTIAL);
+    ck_assert_ptr_nonnull(celestial);
+    ck_assert(celestial_protocol_read(celestial->data, celestial->len, &generation, &start, slots,
+                                      &count));
+    ck_assert_uint_eq(count, 1);
+
+    /* Once the wall goes, the neighbor is shown and its profile is sent. */
+    for (int y = 0; y < map->height; y++) {
+        object_remove(walls[y], 0);
+        object_destroy(walls[y]);
+    }
+    update_los(pl);
+    socket_buffer_clear(cs);
+    CONTR(pl)->map_update_cmd = MAP_UPDATE_CMD_SAME;
+    draw_client_map2(pl);
+    celestial = queued_command_payload_find(cs, CLIENT_CMD_CELESTIAL);
+    ck_assert_ptr_nonnull(celestial);
+    ck_assert(celestial_protocol_read(celestial->data, celestial->len, &generation, &start, slots,
+                                      &count));
+    ck_assert_uint_eq(count, 2);
+    socket_buffer_clear(cs);
+    east->region = NULL;
+}
+END_TEST
+
 START_TEST(test_timed_endpoint_tracks_rgb_only_changes_without_redundant_updates) {
     mapstruct *map;
     object *pl;
@@ -4629,6 +4699,7 @@ static Suite *suite(void) {
     tcase_add_test(tc_core, test_greyton_roof_only_cover_hides_city_portal_face);
     tcase_add_test(tc_core, test_region_exploration_grants_only_visible_public_base_cells);
     tcase_add_test(tc_core, test_celestial_inputs_precede_map_and_resend_only_on_change);
+    tcase_add_test(tc_core, test_celestial_profiles_come_only_from_authorized_cells);
     tcase_add_test(tc_core, test_timed_endpoint_tracks_rgb_only_changes_without_redundant_updates);
     tcase_add_test(tc_core, test_pending_neighbor_endpoint_resends_without_player_generation_change);
     tcase_add_test(tc_core, test_local_light_color_stays_out_of_base_radiance);
