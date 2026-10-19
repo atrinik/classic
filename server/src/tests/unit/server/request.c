@@ -3156,6 +3156,70 @@ START_TEST(test_celestial_generation_exhaustion_closes_the_connection) {
 }
 END_TEST
 
+START_TEST(test_aborted_celestial_publication_commits_no_exploration) {
+    mapstruct *map;
+    object *pl;
+    check_setup_env_pl(&map, &pl);
+    map->celestial_schema = 1;
+    map->celestial_schema_seen = true;
+    map->celestial_sky_above = CELESTIAL_SKY_OPEN;
+    map->celestial_sky_seen = true;
+    map->celestial_v1_header_seen = true;
+    map->celestial_width_seen = true;
+    map->celestial_height_seen = true;
+    /* Keeps the region set below rather than the world's. */
+    map->celestial_region_seen = true;
+    request_move_player(&pl, map, 12, 12);
+    socket_struct *cs = CONTR(pl)->cs;
+    free(cs->account);
+    cs->account = xstrdup("explorecelestial");
+    char *account_path = account_make_path(cs->account);
+    char path[HUGE_BUF];
+    snprintf((path), sizeof((path)), "%s.exploration", account_path);
+    free(account_path);
+    unlink(path);
+    exploration_begin(cs);
+    /* Exploration needs a mapped region; it keeps the world's celestial
+     * profile. */
+    region_struct *original_region = map->region;
+    ck_assert_ptr_nonnull(region_world());
+    region_struct region = {.name = "test", .map_first = "/world/test",
+                            .celestial = region_world()->celestial};
+    map->region = &region;
+    FREE_AND_COPY_HASH(map->path, "/world/celestial");
+    object *exit = arch_get("stairs_down");
+    exit->x = 13;
+    exit->y = 12;
+    ck_assert_ptr_nonnull(object_insert_map(exit, map, NULL, 0));
+
+    /* The MAP update is abandoned when its celestial pair cannot be
+     * prepared, so the cells it would have shown stay unexplored. */
+    cs->celestial_generation = UINT32_MAX;
+    cs->celestial_sent = false;
+    update_los(pl);
+    map_client_cache_clear(&cs->lastmap);
+    CONTR(pl)->map_update_cmd = MAP_UPDATE_CMD_SAME;
+    socket_buffer_clear(cs);
+    draw_client_map2(pl);
+    ck_assert_ptr_null(queued_command_payload_find(cs, CLIENT_CMD_MAP));
+    ck_assert_int_eq(cs->state, ST_DEAD);
+    ck_assert(!exploration_visited(cs, "/world/celestial", 13, 12));
+
+    /* A published update commits them. */
+    cs->state = ST_PLAYING;
+    cs->celestial_generation = 0;
+    socket_buffer_clear(cs);
+    draw_client_map2(pl);
+    ck_assert_ptr_nonnull(queued_command_payload_find(cs, CLIENT_CMD_MAP));
+    ck_assert(exploration_visited(cs, "/world/celestial", 13, 12));
+
+    exploration_end(cs);
+    socket_buffer_clear(cs);
+    map->region = original_region;
+    unlink(path);
+}
+END_TEST
+
 START_TEST(test_celestial_profiles_come_only_from_authorized_cells) {
     mapstruct *map;
     object *pl;
@@ -5224,6 +5288,7 @@ static Suite *suite(void) {
     tcase_add_test(tc_core, test_celestial_inputs_precede_map_and_resend_only_on_change);
     tcase_add_test(tc_core, test_celestial_profiles_come_only_from_authorized_cells);
     tcase_add_test(tc_core, test_celestial_generation_exhaustion_closes_the_connection);
+    tcase_add_test(tc_core, test_aborted_celestial_publication_commits_no_exploration);
     tcase_add_test(tc_core, test_celestial_profiles_skip_maps_without_closure_records);
     tcase_add_test(tc_core, test_view_skips_preparation_of_stacks_it_renders_nothing_of);
     tcase_add_test(tc_core, test_remembered_fog_is_bound_to_its_map_cell);

@@ -58,8 +58,8 @@ static size_t index_cells(const celestial_closure_t *closure) {
     return (size_t)closure->window_width * closure->window_height;
 }
 
-/** As celestial_closure_build(), setting *out_of_memory when it failed only
- * because an allocation did. */
+/** As celestial_closure_build(), setting *out_of_memory when an allocation
+ * failed; only overlap and sky exits are checked after the first one. */
 static bool closure_build(celestial_closure_t *closure, uint32_t generation, int window_width,
                           int window_height, celestial_closure_fragment_t *fragments,
                           size_t count, bool *out_of_memory) {
@@ -71,6 +71,18 @@ static bool closure_build(celestial_closure_t *closure, uint32_t generation, int
     closure->count = count;
     bool valid = window_width > 0 && window_height > 0 && window_width <= 255 &&
                  window_height <= 255 && count <= UINT16_MAX && (count == 0 || fragments != NULL);
+    /* Everything checkable without memory is checked before the index is
+     * allocated, so only overlap and sky exits can follow a failed one. */
+    for (size_t i = 0; valid && i < count; i++) {
+        const celestial_closure_fragment_t *fragment = &fragments[i];
+        valid = fragment->depth >= -CELESTIAL_CLOSURE_DEPTH_MAX &&
+                fragment->depth <= CELESTIAL_CLOSURE_DEPTH_MAX && fragment->width != 0 &&
+                fragment->height != 0 && fragment->x + fragment->width <= window_width &&
+                fragment->y + fragment->height <= window_height && fragment->values != NULL;
+        for (size_t j = 0; valid && j < (size_t)fragment->width * fragment->height; j++) {
+            valid = celestial_closure_value_valid(fragment->values[j]);
+        }
+    }
     if (valid) {
         closure->index = calloc((size_t)CELESTIAL_CLOSURE_DEPTHS * index_cells(closure),
                                 sizeof(*closure->index));
@@ -79,21 +91,14 @@ static bool closure_build(celestial_closure_t *closure, uint32_t generation, int
     }
     for (size_t i = 0; valid && i < count; i++) {
         const celestial_closure_fragment_t *fragment = &fragments[i];
-        valid = fragment->depth >= -CELESTIAL_CLOSURE_DEPTH_MAX &&
-                fragment->depth <= CELESTIAL_CLOSURE_DEPTH_MAX && fragment->width != 0 &&
-                fragment->height != 0 && fragment->x + fragment->width <= window_width &&
-                fragment->y + fragment->height <= window_height && fragment->values != NULL;
-        uint16_t *depth = valid ? &closure->index[(size_t)(fragment->depth +
-                                                           CELESTIAL_CLOSURE_DEPTH_MAX) *
-                                                  index_cells(closure)]
-                                : NULL;
+        uint16_t *depth =
+            &closure->index[(size_t)(fragment->depth + CELESTIAL_CLOSURE_DEPTH_MAX) *
+                            index_cells(closure)];
         for (int y = 0; valid && y < fragment->height; y++) {
             for (int x = 0; valid && x < fragment->width; x++) {
                 uint16_t *cell = &depth[(size_t)(fragment->x + x) +
                                         (size_t)window_width * (fragment->y + y)];
-                valid = *cell == 0 &&
-                        celestial_closure_value_valid(
-                            fragment->values[(size_t)x + (size_t)fragment->width * y]);
+                valid = *cell == 0;
                 *cell = (uint16_t)(i + 1);
             }
         }
