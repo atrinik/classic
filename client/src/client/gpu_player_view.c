@@ -4549,7 +4549,7 @@ static bool gpu_player_view_lifecycle(SDL_Window *window,
     }
 
     action_started = gpu_player_view_lifecycle_action_begin();
-    socket_command_map(transition_snapshot, transition_snapshot_size, 0);
+    socket_command_map_replay(transition_snapshot, transition_snapshot_size, 0);
     if (!gpu_player_view_render_complete()) {
         return false;
     }
@@ -4583,7 +4583,7 @@ static bool gpu_player_view_lifecycle(SDL_Window *window,
     }
     popup_destroy_all();
     cpl.state = ST_PLAY;
-    socket_command_map(snapshot, snapshot_size, 0);
+    socket_command_map_replay(snapshot, snapshot_size, 0);
     if (!gpu_player_view_render_complete()) {
         return false;
     }
@@ -5037,7 +5037,7 @@ int gpu_player_view_main(int argc, char *argv[]) {
         widget_map_ui_test_begin();
     }
 #endif
-    socket_command_map(snapshot, snapshot_size, 0);
+    socket_command_map_replay(snapshot, snapshot_size, 0);
     bool timed_light_lifecycle = MapData.light_keyframe_valid;
     uint64_t timed_midpoint_seconds = 0;
     if (timed_light_lifecycle) {
@@ -5068,7 +5068,7 @@ int gpu_player_view_main(int argc, char *argv[]) {
         /* The relocation and seam suites replace the complete published
          * map. Restore the immutable fixture before the existing fade checks
          * and every later retained-render or pixel comparison. */
-        socket_command_map(snapshot, snapshot_size, 0);
+        socket_command_map_replay(snapshot, snapshot_size, 0);
         if (!actor_relocation || !connected_seam || !widget_map_visibility_test()) {
             fprintf(stderr, "gpu-player-view: visibility fade regression failed\n");
             goto cleanup;
@@ -5139,7 +5139,7 @@ int gpu_player_view_main(int argc, char *argv[]) {
 #if defined(ATRINIK_WIDGET_TESTS) && defined(ATRINIK_GPU_CONFORMANCE_TESTS)
     if (manifest.soft_clear_fade_test) {
         bool fade = widget_map_soft_clear_fade_test(snapshot, snapshot_size);
-        socket_command_map(snapshot, snapshot_size, 0);
+        socket_command_map_replay(snapshot, snapshot_size, 0);
         if (!fade || !gpu_player_view_render(map_widget, manifest.widget_render)) {
             fprintf(stderr,
                     "gpu-player-view: soft-clear fade regression failed: %s\n",
@@ -5149,7 +5149,7 @@ int gpu_player_view_main(int argc, char *argv[]) {
     }
     if (manifest.ground_coverage_test) {
         bool coverage = widget_map_ground_coverage_test();
-        socket_command_map(snapshot, snapshot_size, 0);
+        socket_command_map_replay(snapshot, snapshot_size, 0);
         if (!coverage || !gpu_player_view_render(map_widget, manifest.widget_render)) {
             fprintf(stderr, "gpu-player-view: ground coverage regression failed: %s\n", SDL_GetError());
             goto cleanup;
@@ -5157,7 +5157,7 @@ int gpu_player_view_main(int argc, char *argv[]) {
     }
     if (manifest.floor_composition_test) {
         bool composition = widget_map_floor_composition_test();
-        socket_command_map(snapshot, snapshot_size, 0);
+        socket_command_map_replay(snapshot, snapshot_size, 0);
         if (!composition || !gpu_player_view_render(map_widget, manifest.widget_render)) {
             fprintf(stderr,
                     "gpu-player-view: floor composition regression failed: %s\n",
@@ -5359,7 +5359,7 @@ int gpu_player_view_main(int argc, char *argv[]) {
         int origin_y = MapData.posy;
         for (size_t i = 0; i < arraysize(movement_fixture.packets); i++) {
             LastTick += PLAYER_VIEW_MOVEMENT_TICK_MS;
-            socket_command_map(movement_fixture.packets[i].data,
+            socket_command_map_replay(movement_fixture.packets[i].data,
                                movement_fixture.packets[i].size,
                                0);
             if (image_missing_faces_detected() ||
@@ -5400,7 +5400,7 @@ int gpu_player_view_main(int argc, char *argv[]) {
             goto cleanup;
         }
         uint32_t transition_ui_clock = client_ui_ticks();
-        socket_command_map(transition_snapshot, transition_snapshot_size, 0);
+        socket_command_map_replay(transition_snapshot, transition_snapshot_size, 0);
         if (image_missing_faces_detected() ||
             !gpu_player_view_render_map_transition(map_widget,
                                                    manifest.widget_render,
@@ -5411,7 +5411,7 @@ int gpu_player_view_main(int argc, char *argv[]) {
                     SDL_GetError());
             goto cleanup;
         }
-        socket_command_map(snapshot, snapshot_size, 0);
+        socket_command_map_replay(snapshot, snapshot_size, 0);
         if (image_missing_faces_detected() ||
             !gpu_player_view_render_map_transition(map_widget,
                                                    manifest.widget_render,
@@ -5423,7 +5423,7 @@ int gpu_player_view_main(int argc, char *argv[]) {
         }
     } else if (next_snapshot != NULL) {
         LastTick = 0;
-        socket_command_map(next_snapshot, next_snapshot_size, 0);
+        socket_command_map_replay(next_snapshot, next_snapshot_size, 0);
         LastTick = manifest.clock_ms;
 #ifdef ATRINIK_WIDGET_TESTS
         if (manifest.damage_animation || manifest.kill_animation) {

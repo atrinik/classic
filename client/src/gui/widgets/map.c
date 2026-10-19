@@ -11096,7 +11096,7 @@ static bool map_actor_relocation_test_send(uint8_t mapstat,
         map_actor_relocation_test_packet(mapstat, posx, posy, continuation, base, upper);
     bool valid = packet_writer_finish(packet);
     if (valid) {
-        socket_command_map(packet->data, packet->len, 0);
+        socket_command_map_replay(packet->data, packet->len, 0);
     } else {
         fprintf(stderr,
                 "map actor relocation test: %s packet writer failed "
@@ -12174,7 +12174,7 @@ bool widget_map_soft_clear_fade_test(uint8_t *snapshot, size_t snapshot_size) {
      * 3 scroll; 4 partial entry; 5 authored alpha; 6 identical positive update. */
     for (variant = 0; variant < 7; variant++) {
         LastTick = saved_tick;
-        socket_command_map(snapshot, snapshot_size, 0);
+        socket_command_map_replay(snapshot, snapshot_size, 0);
         SOFT_CLEAR_CHECK(map_select_level(0, false));
         uint8_t posx = MapData.posx, posy = MapData.posy;
         int pixels[3][2];

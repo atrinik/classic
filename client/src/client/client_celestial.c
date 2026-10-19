@@ -15,6 +15,7 @@
 #include <string.h>
 
 #include <toolkit/datetime.h>
+#include <toolkit/packet.h>
 
 /** Region inputs of one CELESTIAL payload, with the sources derived from them. */
 typedef struct client_celestial_slots {
@@ -194,9 +195,55 @@ static bool client_celestial_staged_pair(void) {
     return true;
 }
 
+bool client_celestial_staged(void) {
+    return client_celestial.staged_slots_valid || client_celestial.staged_closure_valid;
+}
+
 bool client_celestial_publishable(void) {
-    return (!client_celestial.staged_slots_valid && !client_celestial.staged_closure_valid) ||
-           client_celestial_staged_pair();
+    /* A connection's first MAP2 update always comes with its pair: before
+     * any publication, an update without one would present a base that
+     * excludes celestial light with no celestial field at all. */
+    if (!client_celestial_staged()) {
+        return client_celestial.slots.generation != 0;
+    }
+    return client_celestial_staged_pair();
+}
+
+void client_celestial_reject_staged(void) {
+    client_celestial.reconnect = true;
+    client_celestial_discard_staged();
+}
+
+bool client_celestial_stage_empty(int window_width, int window_height) {
+    /* Through the real codecs, as a server with nothing celestial in view
+     * would send it: no profiles and no closure cells. */
+    uint32_t generation = MAX(client_celestial.slots.generation,
+                              MAX(client_celestial.staged_slots_valid
+                                      ? client_celestial.staged_slots.generation
+                                      : 0,
+                                  client_celestial.staged_closure_valid
+                                      ? client_celestial.staged_closure.generation
+                                      : 0));
+    if (generation == UINT32_MAX) {
+        return false;
+    }
+    generation++;
+    packet_struct *packet = packet_new(0, 32, 0);
+    bool staged = celestial_protocol_write(packet, generation, 0, NULL, 0) &&
+                  client_celestial_apply(packet->data, packet->len);
+    packet_free(packet);
+    celestial_closure_t closure;
+    if (!staged ||
+        !celestial_closure_build(&closure, generation, window_width, window_height, NULL, 0)) {
+        return false;
+    }
+    packet = packet_new(0, 32, 0);
+    staged = celestial_closure_write(packet, &closure) &&
+             client_celestial_apply_structure(packet->data, packet->len, window_width,
+                                              window_height);
+    packet_free(packet);
+    celestial_closure_free(&closure);
+    return staged;
 }
 
 bool client_celestial_publish(client_celestial_cell_fn cell, void *context) {

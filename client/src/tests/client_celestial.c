@@ -396,7 +396,8 @@ static void test_publishable_matches_publish(void) {
     /* The MAP2 commit checks the staged pair first: only nothing staged or a
      * consistent pair lets the update commit. */
     client_celestial_reset();
-    TEST_CHECK(client_celestial_publishable());
+    /* Before any publication, a MAP2 update must bring its pair. */
+    TEST_CHECK(!client_celestial_publishable());
     celestial_protocol_slot_t slot = slot_at(9, 12, 500);
     packet_struct *packet = encode(1, &slot, 1);
     TEST_CHECK(client_celestial_apply(packet->data, packet->len));
@@ -420,7 +421,22 @@ static void test_publishable_matches_publish(void) {
     TEST_CHECK(stage_closure(4, NULL, 0));
     TEST_CHECK(client_celestial_publishable());
     TEST_CHECK(client_celestial_publish(NULL, NULL));
+    /* Once one is published, an update may omit an unchanged pair. */
     TEST_CHECK(client_celestial_publishable());
+    TEST_CHECK(!client_celestial_take_reconnect());
+    /* A rejected update discards what is staged and resets the link. */
+    packet = encode(5, &slot, 1);
+    TEST_CHECK(client_celestial_apply(packet->data, packet->len));
+    packet_free(packet);
+    client_celestial_reject_staged();
+    TEST_CHECK(!client_celestial_staged() && client_celestial_take_reconnect());
+    /* An offline replay stages the empty publication a server with nothing
+     * celestial in view sends, and it publishes. */
+    client_celestial_reset();
+    TEST_CHECK(client_celestial_stage_empty(9, 9) && client_celestial_staged() &&
+               client_celestial_publishable());
+    TEST_CHECK(client_celestial_publish(NULL, NULL));
+    TEST_CHECK(client_celestial_generation() == 1 && client_celestial_closure()->count == 0);
     TEST_CHECK(!client_celestial_take_reconnect());
 }
 

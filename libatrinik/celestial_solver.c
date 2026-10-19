@@ -524,10 +524,12 @@ static uint16_t relax_spill(int x, int y, int dx, int dy, void *context) {
                                (neighbor > 4 ? neighbor - 1 : neighbor)];
 }
 
-/** One row of a sun or moon transport. */
+/** One row of a sun or moon transport; *lit is set when an aperture value
+ * of the row is nonzero. */
 static void transport_row(const celestial_solver_lattice_t *lattice, void *map,
                           const celestial_model_t *model, int map_width, int map_height,
-                          int width, int y, int32_t *values, int32_t *apertures, bool moon) {
+                          int width, int y, int32_t *values, int32_t *apertures, bool moon,
+                          bool *lit) {
     for (int x = 0; x < width; x++) {
         celestial_solver_ray_t ray;
         halo_ray(lattice, &ray, map, map_width, map_height, x, y,
@@ -539,6 +541,7 @@ static void transport_row(const celestial_solver_lattice_t *lattice, void *map,
         int index = x + width * y;
         values[index] =
             celestial_solver_ray_value(&ray, moon ? model->moon : model->direct, &apertures[index]);
+        *lit |= apertures[index] != 0;
     }
 }
 
@@ -571,6 +574,10 @@ struct celestial_solver_job {
     /** Next row of the stage, and the field and pass being relaxed. */
     int row;
     int relaxed, pass;
+    /** Whether each relaxed field (diffuse, aperture direct, starlight) has a
+     * nonzero cell, noted as its rays are written so no stage rescans a
+     * whole grid; relaxing one field never changes another. */
+    bool lit[3];
 };
 
 /* A relaxation's passes alternate grids and end on the field's own. */
@@ -582,20 +589,10 @@ static int32_t *job_relaxed(celestial_solver_job_t *job, int relaxed) {
     return relaxed == 0 ? job->diffuse : relaxed == 1 ? job->aperture_direct : job->starlight;
 }
 
-static bool grid_lit(const int32_t *values, size_t cells) {
-    for (size_t i = 0; i < cells; i++) {
-        if (values[i] != 0) {
-            return true;
-        }
-    }
-    return false;
-}
-
 /** Advance to the next lit relaxed field from relaxed on, or to the
  * publish; an unlit field relaxes to itself. */
 static void job_next_relaxed(celestial_solver_job_t *job, int relaxed) {
-    size_t cells = (size_t)job->width * job->height;
-    while (relaxed < 3 && !grid_lit(job_relaxed(job, relaxed), cells)) {
+    while (relaxed < 3 && !job->lit[relaxed]) {
         relaxed++;
     }
     job->relaxed = relaxed;
@@ -667,16 +664,21 @@ celestial_solver_status_t celestial_solver_job_step(celestial_solver_job_t *job)
             }
             job->diffuse[index] = celestial_solver_ray_value(&ray, model->diffuse, NULL);
             job->starlight[index] = celestial_solver_ray_value(&ray, model->starlight, NULL);
+            job->lit[0] |= job->diffuse[index] != 0;
+            job->lit[2] |= job->starlight[index] != 0;
         }
         break;
     case STAGE_SUN:
         transport_row(lattice, job->map, model, job->map_width, job->map_height, width, job->row,
-                      job->direct, job->aperture_direct, false);
+                      job->direct, job->aperture_direct, false, &job->lit[1]);
         break;
-    case STAGE_MOON:
+    case STAGE_MOON: {
+        /* Moon light is never relaxed. */
+        bool moon_lit = false;
         transport_row(lattice, job->map, model, job->map_width, job->map_height, width, job->row,
-                      job->moon, job->moon_aperture, true);
+                      job->moon, job->moon_aperture, true, &moon_lit);
         break;
+    }
     case STAGE_SPILL:
         if (job->row == 0) {
             spill_table_allocate(&job->spill);
@@ -733,12 +735,8 @@ celestial_solver_status_t celestial_solver_job_step(celestial_solver_job_t *job)
         if (job->stage == STAGE_MOON && model->moon == 0) {
             job->stage++;
         }
-        if (job->stage == STAGE_SPILL) {
-            size_t cells = (size_t)width * job->height;
-            if (!grid_lit(job->diffuse, cells) && !grid_lit(job->aperture_direct, cells) &&
-                !grid_lit(job->starlight, cells)) {
-                job_next_relaxed(job, 3);
-            }
+        if (job->stage == STAGE_SPILL && !job->lit[0] && !job->lit[1] && !job->lit[2]) {
+            job_next_relaxed(job, 3);
         }
     }
     return CELESTIAL_SOLVER_PENDING;

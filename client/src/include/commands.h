@@ -86,6 +86,11 @@ extern void socket_command_player_status(uint8_t *data, size_t len, size_t pos);
 extern void socket_command_mapstats(uint8_t *data, size_t len, size_t pos);
 
 extern void socket_command_map(uint8_t *data, size_t len, size_t pos);
+/** socket_command_map() for offline and test replays of MAP2 packets, which
+ * carry no celestial commands: before the first publication it stages the
+ * empty one (client_celestial_stage_empty()) a server with nothing
+ * celestial in view would send. */
+extern void socket_command_map_replay(uint8_t *data, size_t len, size_t pos);
 /** Main-thread count of completely committed MAP2 publications. */
 uint64_t socket_command_map_publication_generation(void);
 /** Roll back an unpublished multi-envelope MAP2 update. */

@@ -69,10 +69,28 @@ typedef void (*client_celestial_cell_fn)(void *context, int depth, int x, int y,
  */
 bool client_celestial_publish(client_celestial_cell_fn cell, void *context);
 
-/** Whether client_celestial_publish() would accept what is staged: nothing,
- * or a consistent pair. A MAP2 update checks it before committing, so an
- * inconsistent pair fails the update instead of following it. */
+/** Whether a payload half is staged. */
+bool client_celestial_staged(void);
+
+/** Whether a MAP2 update may commit with what is staged: a consistent
+ * pair, or nothing once a pair has been published (a connection's first
+ * update always comes with one). A MAP2 update checks it before committing,
+ * so an inconsistent or missing pair fails the update instead of following
+ * it. */
 bool client_celestial_publishable(void);
+
+/** Discard what is staged and flag a reconnect: the update it belonged to
+ * was rejected, and the server will not resend its publication. */
+void client_celestial_reject_staged(void);
+
+/**
+ * Stage an empty publication (no profiles, no closure cells) with the next
+ * generation, through the real codecs, as a server with nothing celestial
+ * in view would send it. For offline replays, which carry no celestial
+ * commands.
+ * @return Whether both halves were staged.
+ */
+bool client_celestial_stage_empty(int window_width, int window_height);
 
 /**
  * Solve fragments of the published closure until the budget is spent, in

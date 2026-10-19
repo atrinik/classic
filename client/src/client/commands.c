@@ -1643,7 +1643,8 @@ static void socket_command_map_apply(uint8_t *data, size_t len, size_t pos) {
      * commits: an inconsistent pair fails the whole update (and reconnects),
      * so no consumer ever sees it complete. */
     if (!client_celestial_publishable()) {
-        LOG(ERROR, "Rejected an inconsistent celestial publication.");
+        LOG(ERROR, "Rejected a map update without a consistent celestial publication.");
+        client_celestial_reject_staged();
         socket_command_map_abort_pending();
         return;
     }
@@ -1682,6 +1683,17 @@ static void socket_command_map_apply(uint8_t *data, size_t len, size_t pos) {
     map_publication_generation++;
     map_continuation_visible_change = false;
     map_continuation_region_fow_update = false;
+}
+
+void socket_command_map_replay(uint8_t *data, size_t len, size_t pos) {
+    /* A replay carries no celestial commands: before the first publication,
+     * stage the empty one a server with nothing celestial in view sends. */
+    if (client_celestial_generation() == 0 && !client_celestial_staged()) {
+        int wire_width = MAP_LOOK_TO_WIRE_SIZE(setting_get_int(OPT_CAT_MAP, OPT_MAP_WIDTH));
+        int wire_height = MAP_LOOK_TO_WIRE_SIZE(setting_get_int(OPT_CAT_MAP, OPT_MAP_HEIGHT));
+        (void)client_celestial_stage_empty(wire_width, wire_height);
+    }
+    socket_command_map(data, len, pos);
 }
 
 /** @copydoc socket_command_struct::handle_func */
@@ -1842,27 +1854,27 @@ bool socket_command_map_connected_seam_test(void) {
         goto cleanup;
     }
     uint64_t generation = map_publication_generation;
-    socket_command_map(source->data, source->len, 0);
+    socket_command_map_replay(source->data, source->len, 0);
     success = map_seam_test_state(false, ++generation, false);
-    socket_command_map(complete->data, complete->len, 0);
+    socket_command_map_replay(complete->data, complete->len, 0);
     success = map_seam_test_state(true, ++generation, false) && success;
 
-    socket_command_map(source->data, source->len, 0);
+    socket_command_map_replay(source->data, source->len, 0);
     success = map_seam_test_state(false, ++generation, false) && success;
-    socket_command_map(first->data, first->len, 0);
+    socket_command_map_replay(first->data, first->len, 0);
     success = map_seam_test_state(false, generation, true) && success;
-    socket_command_map(last->data, last->len, 0);
+    socket_command_map_replay(last->data, last->len, 0);
     success = map_seam_test_state(true, ++generation, false) && success;
 
-    socket_command_map(source->data, source->len, 0);
+    socket_command_map_replay(source->data, source->len, 0);
     success = map_seam_test_state(false, ++generation, false) && success;
-    socket_command_map(first->data, first->len, 0);
+    socket_command_map_replay(first->data, first->len, 0);
     success = map_seam_test_state(false, generation, true) && success;
     /* Truncate the declared level payload: neither metadata nor position may publish. */
-    socket_command_map(last->data, last->len - 1, 0);
+    socket_command_map_replay(last->data, last->len - 1, 0);
     success = map_seam_test_state(false, generation, false) && success;
     /* The rejected generation must not poison the next valid seam publication. */
-    socket_command_map(complete->data, complete->len, 0);
+    socket_command_map_replay(complete->data, complete->len, 0);
     success = map_seam_test_state(true, ++generation, false) && success;
 cleanup:
     socket_command_map_abort_pending();
