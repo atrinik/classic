@@ -101,13 +101,16 @@ typedef struct celestial_solver_ops {
      * the solver rejects a lattice reporting anything else. */
     void (*dimensions)(void *context, void *map, int *width, int *height);
     /** Whether an upward face, as met walking from the receiver, leaves for
-     * the sky. */
+     * the sky. Its 'to' cell may be unresolved (map NULL): that is how a ray
+     * reaches the sky above the topmost level, and sky must accept it. */
     bool (*sky)(void *context, const celestial_solver_face_t *face);
-    /** Whether light may cross the face between its two cells. */
+    /** Whether light may cross the face between its two cells. Called only
+     * with both cells resolved: a face with an unresolved cell that sky does
+     * not claim ends the ray. */
     bool (*continuous)(void *context, const celestial_solver_face_t *face);
     /** Light coefficient 0..256 of light crossing the face from 'from' to
-     * 'to'; *aperture (when not NULL) reports a door, gate or authored
-     * transmission on it. */
+     * 'to', both resolved, for a face continuous accepted; *aperture (when
+     * not NULL) reports a door, gate or authored transmission on it. */
     uint16_t (*light)(void *context, const celestial_solver_face_t *face, bool *aperture);
     /** Charge the optional spill table a solve may build; false declines it
      * and the solve evaluates spill coefficients again on each pass. May be
@@ -230,7 +233,7 @@ celestial_solver_job_t *celestial_solver_job_create(const celestial_solver_latti
 
 /**
  * Run one step: one scratch row of the sky, sun or moon rays, of the spill
- * table, or of one diffuse relaxation pass, or the publish, so the work per
+ * table, of one diffuse relaxation pass, or of the publish, so the work per
  * call is bounded by one row of the window. Steps after DONE return DONE
  * again.
  */

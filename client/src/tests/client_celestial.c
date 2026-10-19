@@ -156,6 +156,30 @@ static void test_encoder_rejects_what_decoders_reject(void) {
     padded.next.lunar_age = clean.next.lunar_age;
     TEST_CHECK(celestial_protocol_write(packet, 1, 0, &padded, 1));
     packet->len = 0;
+    /* The interval starts on an hour boundary: the client keeps it as an
+     * hour, so any other start is malformed on both sides. */
+    slots[0] = slot_at(3, 5, 200);
+    TEST_CHECK(!celestial_protocol_write(packet, 1, 3601, slots, 1));
+    TEST_CHECK(packet->len == 0);
+    TEST_CHECK(celestial_protocol_write(packet, 1, 7200, slots, 1));
+    packet->data[11]++;
+    uint32_t generation;
+    uint64_t start;
+    size_t parsed;
+    celestial_protocol_slot_t decoded[CELESTIAL_PROTOCOL_SLOTS_MAX];
+    TEST_CHECK(!celestial_protocol_read(packet->data, packet->len, &generation, &start, decoded,
+                                        &parsed));
+    packet_free(packet);
+    /* A write that runs out of room is rolled back and fails; a packet
+     * already in error is refused. */
+    packet = packet_new(0, 64, 0);
+    packet_writer_write_uint8(packet, 0xab);
+    packet_writer_set_limit(packet, 20);
+    TEST_CHECK(!celestial_protocol_write(packet, 1, 0, slots, 1));
+    TEST_CHECK(packet->len == 1 && packet->data[0] == 0xab);
+    TEST_CHECK(packet_writer_error(packet) != PACKET_ERROR_NONE);
+    TEST_CHECK(!celestial_protocol_write(packet, 1, 0, NULL, 0));
+    TEST_CHECK(packet->len == 1);
     packet_free(packet);
 }
 

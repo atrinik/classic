@@ -250,7 +250,7 @@ outside the closure, or no map resolves, is open air under an open sky.
 
 The client solves a publication a few milliseconds a frame, in solver steps
 of one scratch row each: a row of the sky, sun or moon rays, of the spill
-table, or of one diffuse relaxation pass, or the publish
+table, of one diffuse relaxation pass, or of the publish
 (`celestial_closure_solve_begin()` and `_step()`). A fragment's current hour
 is solved and kept first, then its following hour, and then its cells are
 reported. A newer publication supersedes the rest, and a closure has at most

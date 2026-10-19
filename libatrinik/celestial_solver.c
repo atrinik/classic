@@ -257,7 +257,11 @@ void celestial_solver_ray_step(const celestial_solver_lattice_t *lattice,
             sky = true;
             continue;
         }
-        if (!lattice->ops->continuous(lattice->context, &face)) {
+        /* An unresolved cell (a ray reaching a missing map) can only be
+         * left for the sky: otherwise the ray ends there, so continuous and
+         * light only ever see resolved cells. */
+        if (face.from.map == NULL || face.to.map == NULL ||
+            !lattice->ops->continuous(lattice->context, &face)) {
             ray->done = true;
             return;
         }
@@ -685,16 +689,18 @@ celestial_solver_status_t celestial_solver_job_step(celestial_solver_job_t *job)
         return CELESTIAL_SOLVER_PENDING;
     }
     case STAGE_PUBLISH:
-        for (int y = 0; y < job->map_height; y++) {
-            for (int x = 0; x < job->map_width; x++) {
-                int index = x + CELESTIAL_MODEL_SPILL_PASSES +
-                            width * (y + CELESTIAL_MODEL_SPILL_PASSES);
-                size_t output = (size_t)x + (size_t)job->map_width * y;
-                celestial_model_publish(model, job->direct[index], job->diffuse[index],
-                                        job->aperture_direct[index], job->moon[index],
-                                        job->moon_aperture[index], job->starlight[index],
-                                        &job->values[output], job->rgb[output]);
-            }
+        /* One output row per step, like every other stage. */
+        for (int x = 0; x < job->map_width; x++) {
+            int index = x + CELESTIAL_MODEL_SPILL_PASSES +
+                        width * (job->row + CELESTIAL_MODEL_SPILL_PASSES);
+            size_t output = (size_t)x + (size_t)job->map_width * job->row;
+            celestial_model_publish(model, job->direct[index], job->diffuse[index],
+                                    job->aperture_direct[index], job->moon[index],
+                                    job->moon_aperture[index], job->starlight[index],
+                                    &job->values[output], job->rgb[output]);
+        }
+        if (++job->row < job->map_height) {
+            return CELESTIAL_SOLVER_PENDING;
         }
         job->stage = STAGE_DONE;
         return CELESTIAL_SOLVER_DONE;

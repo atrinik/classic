@@ -248,7 +248,9 @@ struct packet_struct;
  * of the current hour in game seconds, then the slots in strictly increasing
  * slot order.
  * @return False, writing nothing, for invalid slots or more than
- * CELESTIAL_PROTOCOL_SLOTS_MAX of them.
+ * CELESTIAL_PROTOCOL_SLOTS_MAX of them, a start not on an hour boundary, a
+ * packet already carrying a writer error, or a write that fails part way
+ * (its limit or an allocation), which is rolled back.
  */
 bool celestial_protocol_write(struct packet_struct *packet,
                               uint32_t generation,
@@ -258,8 +260,9 @@ bool celestial_protocol_write(struct packet_struct *packet,
 
 /**
  * Parse and validate a complete CELESTIAL payload. Rejects truncation,
- * trailing bytes, unordered or out-of-range slots, more than
- * CELESTIAL_PROTOCOL_SLOTS_MAX slots and invalid model inputs.
+ * trailing bytes, a start not on an hour boundary, unordered or
+ * out-of-range slots, more than CELESTIAL_PROTOCOL_SLOTS_MAX slots and
+ * invalid model inputs.
  * @param slots Receives up to CELESTIAL_PROTOCOL_SLOTS_MAX slots; unchanged
  * on failure.
  */

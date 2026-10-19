@@ -197,8 +197,8 @@ celestial_closure_job_t *celestial_closure_solve_begin(const celestial_closure_t
                                                        int32_t *values, int32_t (*rgb)[3]);
 
 /** Run one step, as celestial_solver_job_step(): one scratch row of a ray,
- * spill or relaxation stage, or the publish, which also clears cells outside
- * the closure. */
+ * spill, relaxation or publish stage. The publish's last row also clears
+ * the cells outside the closure. */
 celestial_solver_status_t celestial_closure_solve_step(celestial_closure_job_t *job);
 
 /** Free a job at any step; NULL is ignored. */

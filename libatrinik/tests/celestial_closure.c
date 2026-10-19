@@ -349,6 +349,49 @@ static void counting_release(void *context, size_t bytes) {
     lattice->released_bytes += bytes;
 }
 
+/** Set when continuous or light receives an unresolved cell. */
+static bool permissive_saw_unresolved;
+
+static bool permissive_sky(void *context, const celestial_solver_face_t *face) {
+    (void)context;
+    (void)face;
+    return false;
+}
+
+static bool permissive_continuous(void *context, const celestial_solver_face_t *face) {
+    (void)context;
+    permissive_saw_unresolved |= face->from.map == NULL || face->to.map == NULL;
+    return true;
+}
+
+static uint16_t permissive_light(void *context, const celestial_solver_face_t *face,
+                                 bool *aperture) {
+    (void)context;
+    permissive_saw_unresolved |= face->from.map == NULL || face->to.map == NULL;
+    if (aperture != NULL) {
+        *aperture = false;
+    }
+    return CELESTIAL_MODEL_SCALE;
+}
+
+static int test_unresolved_cells_end_rays(void) {
+    /* Rays leave the 3 x 3 map into unresolved space, which this lattice's
+     * sky never claims and its continuous would let through: the solver ends
+     * them there, so neither callback ever sees an unresolved cell. */
+    celestial_model_t model;
+    model_at(12, &model);
+    static const celestial_solver_ops_t permissive = {
+        .resolve = counting_resolve, .dimensions = counting_dimensions, .sky = permissive_sky,
+        .continuous = permissive_continuous, .light = permissive_light};
+    counting_lattice counts = {0};
+    celestial_solver_lattice_t lattice = {.ops = &permissive, .context = &counts};
+    int32_t values[9], rgb[9][3];
+    permissive_saw_unresolved = false;
+    require(celestial_solver_solve(&lattice, &counts.map, &model, values, rgb));
+    require(!permissive_saw_unresolved);
+    return 0;
+}
+
 static int test_release_pairs_with_reserve(void) {
     celestial_model_t model;
     model_at(12, &model);
@@ -702,6 +745,9 @@ int main(void) {
     }
     if (result == 0) {
         result = test_release_pairs_with_reserve();
+    }
+    if (result == 0) {
+        result = test_unresolved_cells_end_rays();
     }
     if (result == 0) {
         result = test_invalid_inputs_fail_without_crashing();

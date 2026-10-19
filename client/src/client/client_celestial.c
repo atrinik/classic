@@ -215,7 +215,7 @@ bool client_celestial_publish(client_celestial_cell_fn cell, void *context) {
 /**
  * Take one bounded step of solving fragment i: start an hour, or run one
  * solver step of it (a row of rays, spill coefficients or a relaxation
- * pass, or the publish). Its
+ * pass, or of the publish). Its
  * current hour is held once solved; once its next hour is too, its closure
  * cells are reported.
  * @return False when an allocation fails; the hour is retried later.

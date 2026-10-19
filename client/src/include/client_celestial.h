@@ -72,7 +72,7 @@ bool client_celestial_publish(client_celestial_cell_fn cell, void *context);
 /**
  * Solve fragments of the published closure until the budget is spent, in
  * solver steps of one scratch row of rays, spill coefficients or a
- * relaxation pass, or the publish: a fragment's cells are reported once
+ * relaxation pass, or of the publish: a fragment's cells are reported once
  * both its hours are solved. A step is the smallest unit, so the first
  * always runs.
  * @return Whether every fragment is solved.

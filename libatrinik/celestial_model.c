@@ -394,7 +394,10 @@ bool celestial_protocol_write(packet_struct *packet,
                               uint64_t start_seconds,
                               const celestial_protocol_slot_t *slots,
                               size_t count) {
-    if (packet == NULL || count > CELESTIAL_PROTOCOL_SLOTS_MAX || (count != 0 && slots == NULL)) {
+    /* The interval starts on an hour boundary, which the client keeps as
+     * an hour; a packet already in error is refused unwritten. */
+    if (packet == NULL || count > CELESTIAL_PROTOCOL_SLOTS_MAX || (count != 0 && slots == NULL) ||
+        start_seconds % 3600 != 0 || packet_writer_error(packet) != PACKET_ERROR_NONE) {
         return false;
     }
     for (size_t i = 0; i < count; i++) {
@@ -406,6 +409,8 @@ bool celestial_protocol_write(packet_struct *packet,
             return false;
         }
     }
+    packet_writer_mark_t mark;
+    packet_writer_mark(packet, &mark);
     packet_writer_write_uint32(packet, generation);
     packet_writer_write_uint64(packet, start_seconds);
     packet_writer_write_uint8(packet, (uint8_t)count);
@@ -423,6 +428,11 @@ bool celestial_protocol_write(packet_struct *packet,
         packet_writer_write_uint16(packet, profile->lunar_period);
         celestial_protocol_write_phases(packet, &slots[i].current);
         celestial_protocol_write_phases(packet, &slots[i].next);
+    }
+    if (packet_writer_error(packet) != PACKET_ERROR_NONE) {
+        /* A partial payload is never left behind. */
+        packet_writer_rollback(packet, &mark);
+        return false;
     }
     return true;
 }
@@ -455,7 +465,8 @@ bool celestial_protocol_read(const uint8_t *data,
     uint32_t parsed_generation = packet_reader_read_uint32(&reader);
     uint64_t start = packet_reader_read_uint64(&reader);
     uint8_t parsed = packet_reader_read_uint8(&reader);
-    if (packet_reader_error(&reader) != PACKET_ERROR_NONE || parsed > CELESTIAL_PROTOCOL_SLOTS_MAX) {
+    if (packet_reader_error(&reader) != PACKET_ERROR_NONE || parsed > CELESTIAL_PROTOCOL_SLOTS_MAX ||
+        start % 3600 != 0) {
         return false;
     }
     celestial_protocol_slot_t staged[CELESTIAL_PROTOCOL_SLOTS_MAX];
