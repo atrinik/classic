@@ -240,8 +240,11 @@ links: topology, continuity, sky exits and authored cover come from the maps,
 the faces the viewer was shown from the disclosed records, and every cell
 outside the closure, or no map resolves, is open air under an open sky.
 
-The client solves a publication a few milliseconds a frame, one fragment and
-both hours at a time; a newer publication supersedes the rest. Each cell's
+The client solves a publication a few milliseconds a frame, one hour of one
+fragment per step: the first step solves and keeps the current hour, the next
+solves the following hour and reports the fragment's cells. A newer
+publication supersedes the rest, and a closure of more than 256 fragments is
+coalesced per depth, so a step is at most one fragment's hourly solve. Each cell's
 field lives in its map cache header, which scrolls with the map and survives
 fog, so a cell keeps its last field until it is solved again. An optimized
 build solves one hourly field of a full 32×32 window over 13 depths in about
