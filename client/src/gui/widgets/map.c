@@ -3518,7 +3518,9 @@ void map_clear_cell(int x, int y, bool hard) {
     if (cell != NULL && cell->emitters != NULL) {
         map_emitter_revoke_cell(current_level_index, cell);
     } else if (hard && map_cell_effective_occluder(&cells->headers[index]) != 0) {
-        map_emitter_revision_bump(current_level_index);
+        /* As a changed occluder: every field whose light crossed it, on any
+         * level within reach, fails closed until rebuilt. */
+        map_emitter_revoke_reach(current_level_index, LIGHT_PROFILE_RADIUS_MAX);
     }
     map_cell_clear_client_light(index, hard);
     if (cell == NULL) {
@@ -4215,6 +4217,7 @@ static void map_temporal_lighting_update(void) {
 }
 
 static void map_flicker_lighting_update(void);
+static void map_flicker_carry_forward(void);
 
 void map_animate(void) {
     int x, y, layer;
@@ -5983,28 +5986,47 @@ static void map_client_lighting_rebuild(map_client_lighting_field_t *field) {
     free(occluders);
 }
 
+/** Whether a shown level flickers, so the next frame must be drawn too. */
+static bool map_flicker_carry;
+
+static bool map_flicker_level(size_t level) {
+    return map_client_lighting_fields[level].valid && map_client_lighting_fields[level].has_flicker &&
+           (map_level_mask & (UINT16_C(1) << level));
+}
+
 /** Relight levels whose emitter field flickers; flicker needs no server traffic. */
 static void map_flicker_lighting_update(void) {
+    bool flickering = false;
+    for (size_t level = 0; level < MAP2_LEVELS && !flickering; level++) {
+        flickering = map_flicker_level(level);
+    }
+    map_flicker_carry = flickering;
     /* Driven by presentation frames as well as the animation tick, so the
      * interpolated gain is shown between its 125 ms keys. */
     static uint32_t last_tick;
-    if (LastTick - last_tick < 16) {
+    if (!flickering || LastTick - last_tick < 16) {
         return;
     }
     last_tick = LastTick;
-    bool flickering = false;
     for (size_t level = 0; level < MAP2_LEVELS; level++) {
-        if (map_client_lighting_fields[level].valid && map_client_lighting_fields[level].has_flicker &&
-            (map_level_mask & (UINT16_C(1) << level))) {
+        if (map_flicker_level(level)) {
             level_lighting_revision[level]++;
-            flickering = true;
         }
     }
-    if (flickering) {
+    map_redraw_request(MAP_REDRAW_REASON_LIGHTING);
+    /* A dynamic minimap retains its own target: advance its flicker too, at
+     * its own throttle. */
+    minimap_redraw_request();
+}
+
+/**
+ * A redraw requested while drawing is consumed with that frame, so a static
+ * scene would only advance flicker on the 125 ms animation tick: after a
+ * presented frame, request the next one while a shown level flickers.
+ */
+static void map_flicker_carry_forward(void) {
+    if (map_flicker_carry) {
         map_redraw_request(MAP_REDRAW_REASON_LIGHTING);
-        /* A dynamic minimap retains its own target: advance its flicker too,
-         * at its own throttle. */
-        minimap_redraw_request();
     }
 }
 
@@ -7179,6 +7201,11 @@ bool widget_map_client_lighting_state_test(void) {
     map_client_lighting_fields[above].valid = true;
     map_set_occluder(7, 8, MAP2_OCCLUDER_BLOCKSVIEW, 0, 0);
     success = success && !map_client_lighting_fields[above].valid;
+    /* So does a hard clear of an occluder-only cell, on every level within
+     * reach, since their fields read this level's occluders too. */
+    map_client_lighting_fields[above].valid = true;
+    map_clear_cell(7, 8, true);
+    success = success && !map_client_lighting_fields[above].valid;
     map_set_occluder(7, 8, 0, 0, 0);
     map_set_layer_emitter(8, 8, layer, 2, 0, UINT32_C(0xffffff));
     map_client_lighting_fields[above].valid = true;
@@ -7203,6 +7230,23 @@ bool widget_map_client_lighting_state_test(void) {
               stored[0] == 500 && stored[3] == 600;
     map_clear_cell(10, 8, true);
     success = success && !map_celestial_field(celestial_depth, 10, 8, false, stored);
+    /* A frame drawn while a shown level flickers requests the next one,
+     * although the draw consumed the request its own update raised. */
+    map_client_lighting_field_t *flicker_field = &map_client_lighting_fields[current_level_index];
+    bool flicker_valid = flicker_field->valid, flicker_had = flicker_field->has_flicker;
+    flicker_field->valid = true;
+    flicker_field->has_flicker = true;
+    map_flicker_lighting_update();
+    map_redraw_consume();
+    map_flicker_carry_forward();
+    success = success && map_redraw_due();
+    flicker_field->has_flicker = false;
+    map_flicker_lighting_update();
+    map_redraw_consume();
+    map_flicker_carry_forward();
+    success = success && !map_redraw_due();
+    flicker_field->valid = flicker_valid;
+    flicker_field->has_flicker = flicker_had;
     /* A published closure that leaves the cell out retires its field. */
     map_celestial_store(NULL, celestial_depth, 10, 8, sky, sky);
     celestial_closure_t empty_closure;
@@ -10519,11 +10563,13 @@ static void widget_draw(widgetdata *widget) {
     if (!map_state_transaction_active() && map_redraw_due()) {
         map_draw_map(widget->surface);
         map_redraw_consume();
+        map_flicker_carry_forward();
         map_emitter_frame_end();
         effect_sprites_play();
     } else if (!map_state_transaction_active() && map_animation_redraw_due()) {
         map_draw_map(widget->surface);
         map_animation_redraw_consume();
+        map_flicker_carry_forward();
         map_emitter_frame_end();
         effect_sprites_play();
     }

@@ -67,6 +67,8 @@ extern void light_local_forget(mapstruct *map);
 /** Coarse-light topology walks performed so far. */
 extern uint64_t light_local_walks_for_test(void);
 extern uint64_t light_local_rehashes_for_test(void);
+/** Set the coarse walk's region bound, returning the previous one. */
+extern size_t light_local_regions_max_exchange_for_test(size_t max);
 #endif
 
 /** The signed coarse level of a block's strongest positive and negative raw

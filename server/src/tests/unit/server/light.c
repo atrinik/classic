@@ -1735,6 +1735,29 @@ START_TEST(test_client_lighting_local_cache_survives_unrelated_frees) {
 }
 END_TEST
 
+START_TEST(test_client_lighting_local_failed_walk_retries_after_topology_shrinks) {
+    /* A walk past the region bound fails closed and records no dependency
+     * set; once the topology shrinks below the bound it walks again rather
+     * than keep the failed level under the new epoch. */
+    mapstruct *map = get_empty_map(9, 9);
+    mapstruct *east = get_empty_map(9, 9);
+    link_horizontal_maps(map, east);
+    add_colored_light(map, 4, 4, 13, LIGHT_COLOR_WHITE);
+    size_t limit = light_local_regions_max_exchange_for_test(1);
+    ck_assert_int_eq(light_local_level(map, 4, 4), 0);
+    /* Unchanged topology keeps the failed level without walking again. */
+    uint64_t walks = light_local_walks_for_test();
+    add_colored_light(map, 4, 4, 13, LIGHT_COLOR_WHITE);
+    ck_assert_int_eq(light_local_level(map, 4, 4), 0);
+    ck_assert_uint_eq(light_local_walks_for_test(), walks);
+    map->tile_map[TILED_EAST] = NULL;
+    east->tile_map[TILED_WEST] = NULL;
+    light_local_topology_changed();
+    ck_assert_int_gt(light_local_level(map, 4, 4), 0);
+    (void)light_local_regions_max_exchange_for_test(limit);
+}
+END_TEST
+
 START_TEST(test_client_lighting_local_cache_retires_one_way_links_to_freed_maps) {
     /* A dependency's one-way link to a map the walk never placed is still
      * read by revalidation, so freeing that map retires the cache too. */
@@ -2150,6 +2173,7 @@ static Suite *suite(void) {
     tcase_add_test(tc_core, test_client_lighting_local_cache_ignores_unrelated_geometry);
     tcase_add_test(tc_core, test_client_lighting_local_level_pools_levels_of_other_dimensions);
     tcase_add_test(tc_core, test_client_lighting_local_cache_retires_one_way_links_to_freed_maps);
+    tcase_add_test(tc_core, test_client_lighting_local_failed_walk_retries_after_topology_shrinks);
     tcase_add_test(tc_core, test_client_lighting_local_cache_ignores_unreachable_sources);
     tcase_add_test(tc_core, test_client_lighting_local_cache_survives_unrelated_frees);
     tcase_add_test(tc_core, test_client_lighting_local_level_fails_closed_on_unbounded_cycles);

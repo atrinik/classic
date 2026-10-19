@@ -1596,6 +1596,16 @@ typedef struct light_local_region {
  * the levels of such a component still agree.
  */
 #define LIGHT_LOCAL_REGIONS_MAX 4096
+/** The bound in force; a test may lower it. */
+static size_t light_local_regions_max = LIGHT_LOCAL_REGIONS_MAX;
+
+#ifdef ATRINIK_TESTING
+size_t light_local_regions_max_exchange_for_test(size_t max) {
+    size_t previous = light_local_regions_max;
+    light_local_regions_max = max;
+    return previous;
+}
+#endif
 
 /* Open-addressed sets, cleared by advancing a stamp, so a walk and its
  * distinct-map listing stay linear in the regions they place. Sized above
@@ -1649,6 +1659,9 @@ typedef struct light_local_cache_entry {
      * when the level was last confirmed current. */
     uint64_t validated, validated_all;
     int8_t level;
+    /** The walk exceeded the region bound: the level failed closed, and no
+     * dependency set describes it, so only a topology change revalidates it. */
+    bool walk_failed;
 } light_local_cache_entry;
 
 /** The position of dep in a map's ordered dependency set, or where it
@@ -1803,15 +1816,25 @@ int8_t light_local_level(mapstruct *map, int x, int y) {
             entry->geometry_epoch == geometry) {
             return entry->level;
         }
+        if (entry->walk_failed) {
+            /* No source can lift a failed walk, but a smaller topology may
+             * let it succeed: it walks again only when the topology moved. */
+            if (entry->geometry_epoch == geometry) {
+                entry->validated = map->light_local_reach_generation;
+                entry->validated_all = light_local_generation_all;
+                return entry->level;
+            }
+        } else {
 #ifdef ATRINIK_TESTING
-        light_local_rehashes++;
+            light_local_rehashes++;
 #endif
-        if (light_local_deps_hash(map->light_local_deps, map->light_local_deps_count) ==
-            entry->source_hash) {
-            entry->validated = map->light_local_reach_generation;
-            entry->validated_all = light_local_generation_all;
-            entry->geometry_epoch = geometry;
-            return entry->level;
+            if (light_local_deps_hash(map->light_local_deps, map->light_local_deps_count) ==
+                entry->source_hash) {
+                entry->validated = map->light_local_reach_generation;
+                entry->validated_all = light_local_generation_all;
+                entry->geometry_epoch = geometry;
+                return entry->level;
+            }
         }
     }
     const light_local_region *regions;
@@ -1820,7 +1843,8 @@ int8_t light_local_level(mapstruct *map, int x, int y) {
 #ifdef ATRINIK_TESTING
     light_local_walks++;
 #endif
-    if (light_local_walk(map, bx, ex, by, ey, &regions, &count)) {
+    bool walked = light_local_walk(map, bx, ex, by, ey, &regions, &count);
+    if (walked) {
         level = light_local_level_pool(regions, count, bx, ex, by, ey);
         /* Into the map's shared set: a superset of this block's maps is a
          * conservative signature, and a set that grows sends the other
@@ -1836,6 +1860,7 @@ int8_t light_local_level(mapstruct *map, int x, int y) {
     entry->validated = map->light_local_reach_generation;
     entry->validated_all = light_local_generation_all;
     entry->level = level;
+    entry->walk_failed = !walked;
     return level;
 }
 
@@ -1955,11 +1980,11 @@ static bool light_local_walk(mapstruct *map, int bx, int ex, int by, int ey,
                 continue;
             }
             /* Fail closed for the whole component past the bound. */
-            if (count == LIGHT_LOCAL_REGIONS_MAX &&
+            if (count == light_local_regions_max &&
                 light_local_set_insert(light_local_visited, next.map, next.ox, next.oy)) {
                 return false;
             }
-            if (count < LIGHT_LOCAL_REGIONS_MAX &&
+            if (count < light_local_regions_max &&
                 light_local_set_insert(light_local_visited, next.map, next.ox, next.oy)) {
                 if (count == capacity) {
                     capacity *= 2;
