@@ -3621,9 +3621,10 @@ void map_set_layer_emitter(int x, int y, int layer, int8_t radius, uint8_t flags
     map_cell_store_trim_slot(cells, index);
     level_lighting_revision[current_level_index]++;
     map_emitter_revision_bump(current_level_index);
-    if (present && radius == 0) {
-        /* A removed emitter changes its cell's summed profile: every level
-         * within the full profile reach fails closed. */
+    if (present) {
+        /* A removed or replaced emitter changes its cell's summed profile,
+         * perhaps its sign or reach: every level within the full profile
+         * reach fails closed rather than keep the old contribution. */
         map_emitter_revoke_reach(current_level_index, LIGHT_PROFILE_RADIUS_MAX);
     }
 }
@@ -7147,6 +7148,11 @@ bool widget_map_client_lighting_state_test(void) {
     map_set_layer_emitter(8, 8, layer, -2, 0, 0);
     map_client_lighting_fields[above].valid = true;
     map_set_layer_emitter(8, 8, layer, 0, 0, 0);
+    success = success && !map_client_lighting_fields[above].valid;
+    map_set_layer_emitter(8, 8, layer, 2, 0, UINT32_C(0xffffff));
+    /* Replacing one nonzero emitter with another revokes the reach too. */
+    map_client_lighting_fields[above].valid = true;
+    map_set_layer_emitter(8, 8, layer, -2, 0, 0);
     success = success && !map_client_lighting_fields[above].valid;
     map_set_layer_emitter(8, 8, layer, 2, 0, UINT32_C(0xffffff));
     map_client_lighting_fields[above].valid = true;
