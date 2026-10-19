@@ -76,7 +76,12 @@ typedef struct celestial_closure_fragment {
     uint32_t *values;
 } celestial_closure_fragment_t;
 
-/** A decoded closure, with the lookup the solver's lattice uses. */
+/** A decoded closure, with the lookup the solver's lattice uses. Once built
+ * by celestial_closure_build() or _read(), everything it points to (the
+ * fragment array, each fragment's fields and values, the index and the
+ * lattice) is immutable until celestial_closure_free(): the index and the
+ * lattice are derived from the fragments, so changing them desynchronizes
+ * the lookups. The struct itself may be moved by value. */
 typedef struct celestial_closure {
     uint32_t generation;
     int window_width, window_height;
@@ -153,7 +158,7 @@ uint32_t celestial_closure_value(const celestial_closure_t *closure, int depth, 
  * width × height values and RGB triples in the fragment's row-major order;
  * cells outside the closure are written as zero. Solves only read the
  * closure, so several may share one at once, on any threads, while it is
- * neither freed nor rebuilt.
+ * neither freed, rebuilt nor modified.
  * @return False for a NULL argument, a fragment index out of range or a
  * closure not made by celestial_closure_build() or _read() (invalid calls a
  * retry cannot fix), or when an allocation fails.
