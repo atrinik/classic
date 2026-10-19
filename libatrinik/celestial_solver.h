@@ -200,4 +200,40 @@ bool celestial_solver_solve(const celestial_solver_lattice_t *lattice, void *map
                             const celestial_model_t *model, int32_t *values,
                             int32_t (*rgb)[3]);
 
+/** A celestial_solver_solve() run in bounded steps (opaque). */
+typedef struct celestial_solver_job celestial_solver_job_t;
+
+/** Progress of a stepped solve. */
+typedef enum celestial_solver_status {
+    /** More steps remain. */
+    CELESTIAL_SOLVER_PENDING,
+    /** The outputs are written. */
+    CELESTIAL_SOLVER_DONE,
+    /** An allocation failed; the outputs are unspecified. */
+    CELESTIAL_SOLVER_FAILED,
+} celestial_solver_status_t;
+
+/**
+ * Start a stepped solve with celestial_solver_solve()'s inputs and result.
+ * The job keeps copies of the lattice handle and the model, but the
+ * lattice's context, the map and both outputs must outlive it, and the
+ * lattice must answer the same until the job is freed.
+ * @return NULL when the lattice reports invalid dimensions or an
+ * allocation fails.
+ */
+celestial_solver_job_t *celestial_solver_job_create(const celestial_solver_lattice_t *lattice,
+                                                    void *map, const celestial_model_t *model,
+                                                    int32_t *values, int32_t (*rgb)[3]);
+
+/**
+ * Run one step: one scratch row of the sky, sun or moon rays, of the spill
+ * table, or of one diffuse relaxation pass, or the publish, so the work per
+ * call is bounded by one row of the window. Steps after DONE return DONE
+ * again.
+ */
+celestial_solver_status_t celestial_solver_job_step(celestial_solver_job_t *job);
+
+/** Free a job at any step; NULL is ignored. */
+void celestial_solver_job_free(celestial_solver_job_t *job);
+
 #endif

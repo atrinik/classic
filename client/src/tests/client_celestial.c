@@ -399,13 +399,17 @@ static void test_publication_solves_every_closure_cell(void) {
     TEST_CHECK(stage_closure(1, fragments, 2));
     published_cells cells = {0};
     TEST_CHECK(client_celestial_publish(record_cell, &cells));
-    /* One hour of one fragment per step, one step at least per call: the
-     * fragment is reported once its next hour is solved too. */
+    /* One bounded solver step per call at least (a row of rays, a
+     * relaxation or the publish), so an hour takes many calls: the fragment
+     * is reported once its next hour is solved too. */
     TEST_CHECK(cells.count == 0);
-    TEST_CHECK(!client_celestial_process(0));
-    TEST_CHECK(cells.count == 0);
-    TEST_CHECK(!client_celestial_process(0));
+    size_t calls = 0;
+    while (cells.count == 0 && calls < 1000) {
+        TEST_CHECK(!client_celestial_process(0));
+        calls++;
+    }
     TEST_CHECK(cells.count == 5);
+    TEST_CHECK(calls > 8);
     TEST_CHECK(client_celestial_process(UINT64_MAX));
     /* Five closure cells of the first fragment, four of the second. */
     TEST_CHECK(cells.count == 9);

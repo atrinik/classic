@@ -224,8 +224,15 @@ static int test_covered_cell_is_darker_and_glass_transmits(void) {
     /* A sealed cover with no sky exit admits only spill through open sides. */
     uint32_t covered = OPEN_AIR & ~(CELESTIAL_CLOSURE_COVER_OPEN | CELESTIAL_CLOSURE_SKY_EXIT);
     celestial_closure_t closure;
-    require(build_one(&closure, 0, 2, 2, 5, 5, OPEN_AIR));
-    closure.fragments[0].values[12] = covered;
+    /* A built closure is immutable, so the covered cell is set before. */
+    celestial_closure_fragment_t *open_fragment = calloc(1, sizeof(*open_fragment));
+    require(open_fragment != NULL);
+    *open_fragment = (celestial_closure_fragment_t){.depth = 0, .x = 2, .y = 2, .width = 5,
+                                                    .height = 5, .slot = 3};
+    open_fragment->values = values_of(25, OPEN_AIR);
+    require(open_fragment->values != NULL);
+    open_fragment->values[12] = covered;
+    require(celestial_closure_build(&closure, 7, 9, 9, open_fragment, 1));
     int32_t open[25], open_rgb[25][3];
     require(celestial_closure_solve(&closure, 0, &model, open, open_rgb));
     require(open[12] < open[0]);
@@ -582,6 +589,102 @@ static int test_invalid_inputs_fail_without_crashing(void) {
     return 0;
 }
 
+/** A payload of count one-cell fragments over distinct cells of a 32x32
+ * window. */
+static size_t encode_cells(uint8_t *out, size_t count) {
+    size_t len = 0;
+    out[len++] = 0;
+    out[len++] = 0;
+    out[len++] = 0;
+    out[len++] = 1;
+    out[len++] = (uint8_t)(count >> 8);
+    out[len++] = (uint8_t)count;
+    for (size_t i = 0; i < count; i++) {
+        const uint8_t fragment[] = {0, (uint8_t)(i % 32), (uint8_t)(i / 32), 1, 1, 3,
+                                    1, 0x00, 0x00, 0x80, 0x00};
+        memcpy(&out[len], fragment, sizeof(fragment));
+        len += sizeof(fragment);
+    }
+    return len;
+}
+
+static int test_fragment_count_is_capped(void) {
+    static uint8_t payload[6 + (CELESTIAL_CLOSURE_FRAGMENTS_MAX + 1) * 11];
+    celestial_closure_t closure;
+    require(celestial_closure_read(payload, encode_cells(payload, CELESTIAL_CLOSURE_FRAGMENTS_MAX),
+                                   32, 32, &closure));
+    require(closure.count == CELESTIAL_CLOSURE_FRAGMENTS_MAX);
+    celestial_closure_free(&closure);
+    /* One more fragment would multiply the client's solver work past what
+     * the server ever sends: it is malformed, not out of memory. */
+    bool out_of_memory = true;
+    require(!celestial_closure_decode(payload,
+                                      encode_cells(payload, CELESTIAL_CLOSURE_FRAGMENTS_MAX + 1),
+                                      32, 32, &closure, &out_of_memory));
+    require(!out_of_memory);
+    celestial_closure_fragment_t *fragments =
+        calloc(CELESTIAL_CLOSURE_FRAGMENTS_MAX + 1, sizeof(*fragments));
+    require(fragments != NULL);
+    for (size_t i = 0; i <= CELESTIAL_CLOSURE_FRAGMENTS_MAX; i++) {
+        fragments[i] = (celestial_closure_fragment_t){.x = (uint8_t)(i % 32),
+                                                      .y = (uint8_t)(i / 32), .width = 1,
+                                                      .height = 1, .slot = 3};
+        fragments[i].values = values_of(1, OPEN_AIR);
+    }
+    require(!celestial_closure_build(&closure, 1, 32, 32, fragments,
+                                     CELESTIAL_CLOSURE_FRAGMENTS_MAX + 1));
+    return 0;
+}
+
+static int test_stepped_solve_matches_one_shot(void) {
+    celestial_model_t model;
+    model_at(20, &model);
+    require(model.moon != 0);
+    uint32_t covered = OPEN_AIR & ~(CELESTIAL_CLOSURE_COVER_OPEN | CELESTIAL_CLOSURE_SKY_EXIT);
+    celestial_closure_fragment_t *fragment = calloc(1, sizeof(*fragment));
+    require(fragment != NULL);
+    *fragment = (celestial_closure_fragment_t){.depth = 0, .x = 1, .y = 1, .width = 6,
+                                               .height = 5, .slot = 3};
+    fragment->values = values_of(30, OPEN_AIR);
+    require(fragment->values != NULL);
+    fragment->values[8] = covered;
+    fragment->values[9] = covered;
+    fragment->values[29] = 0;
+    celestial_closure_t closure;
+    require(celestial_closure_build(&closure, 1, 9, 9, fragment, 1));
+    int32_t whole[30], whole_rgb[30][3];
+    require(celestial_closure_solve(&closure, 0, &model, whole, whole_rgb));
+    int32_t stepped[30], stepped_rgb[30][3];
+    memset(stepped, 0x55, sizeof(stepped));
+    celestial_closure_job_t *job =
+        celestial_closure_solve_begin(&closure, 0, &model, stepped, stepped_rgb);
+    require(job != NULL);
+    size_t steps = 0;
+    celestial_solver_status_t status;
+    do {
+        status = celestial_closure_solve_step(job);
+        steps++;
+    } while (status == CELESTIAL_SOLVER_PENDING);
+    require(status == CELESTIAL_SOLVER_DONE);
+    /* Every scratch row of the sky, sun and moon rays is its own step, then
+     * three relaxations and the publish. */
+    require(steps > 3 * 5 + 4);
+    require(celestial_closure_solve_step(job) == CELESTIAL_SOLVER_DONE);
+    celestial_closure_solve_free(job);
+    require(memcmp(whole, stepped, sizeof(whole)) == 0);
+    require(memcmp(whole_rgb, stepped_rgb, sizeof(whole_rgb)) == 0);
+    require(stepped[29] == 0);
+    /* A job abandoned part way frees cleanly. */
+    job = celestial_closure_solve_begin(&closure, 0, &model, stepped, stepped_rgb);
+    require(job != NULL);
+    require(celestial_closure_solve_step(job) == CELESTIAL_SOLVER_PENDING);
+    celestial_closure_solve_free(job);
+    celestial_closure_solve_free(NULL);
+    require(celestial_closure_solve_begin(&closure, 1, &model, stepped, stepped_rgb) == NULL);
+    celestial_closure_free(&closure);
+    return 0;
+}
+
 int main(void) {
     toolkit_import(packet);
     int result = test_round_trip();
@@ -611,6 +714,12 @@ int main(void) {
     }
     if (result == 0) {
         result = test_seams_between_profiles_are_closed();
+    }
+    if (result == 0) {
+        result = test_fragment_count_is_capped();
+    }
+    if (result == 0) {
+        result = test_stepped_solve_matches_one_shot();
     }
     toolkit_deinit();
     return result;

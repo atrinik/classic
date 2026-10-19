@@ -128,7 +128,7 @@ fragments, one per map and depth, in network byte order:
 | Field | Type | Meaning |
 | --- | --- | --- |
 | generation | `uint32` | the `CELESTIAL` payload whose slots it references |
-| count | `uint16` | number of fragments |
+| count | `uint16` | number of fragments, at most 256 |
 | per fragment: depth | `int8` | `-6..6`, relative to the viewer |
 | x, y, width, height | `uint8` each | the bounding rectangle of the map's closure cells in the MAP2 window, nonempty and inside it |
 | slot | `uint8` | profile slot of the fragment's map, or 255 |
@@ -162,12 +162,13 @@ Bits 24–26 are read only while the cell above is outside the closure. They
 are what shades an indoor viewer: the ceiling above the room is cut away from
 view, so its cell is not authorized, but it is the authorized room's own
 roof. Doors and gates in it count as closed, so no unseen state is disclosed.
-Decoders reject truncation, trailing bytes, a run of length 0, a run or
-rectangle exceeding its bounds, overlap, a nonzero value without bit 15, a
-sky exit that also continues upward or has a closure cell other than an
-outside record above it, an outside record with any other bit, and reserved
-bits, before replacing the closure. The fragment's slot selects the model that solves its cells, as the
-server selects a model per map.
+Decoders reject truncation, trailing bytes, more than 256 fragments (the
+server coalesces above that, so a larger count is malformed), a run of
+length 0, a run or rectangle exceeding its bounds, overlap, a nonzero value
+without bit 15, a sky exit that also continues upward or has a closure cell
+other than an outside record above it, an outside record with any other bit,
+and reserved bits, before replacing the closure. The fragment's slot selects
+the model that solves its cells, as the server selects a model per map.
 
 A run costs 5 bytes, and runs compress the open air that dominates upper
 levels: a 32×32 window filled over all 13 depths encodes in 409 bytes. A
@@ -187,8 +188,17 @@ with the same generation and the next MAP2 update has been applied
 transactionally, so neither the closure nor the map cache is ever presented
 with the other's window. A malformed payload, or a MAP2 update that fails to
 apply, discards the staged pair, while a stale one (an older generation) is
-ignored without touching it; either way the client keeps the previous
-published pair until a complete matching pair and its update arrive.
+ignored without touching it, and the client keeps the previous published
+pair meanwhile.
+The server considers a publication delivered once it sends it and never sends
+an unchanged pair again, so a discarded one is lost. A client must therefore
+close the connection and reconnect, starting again at generation 0, whenever
+it discards a staged half: a malformed or undecodable payload, a half the
+next MAP2 update leaves unpaired (a missing half or mismatched generations),
+a closure naming a slot its `CELESTIAL` omits, or a MAP2 update that fails to
+apply while a half is staged. Only an ignored stale payload needs no
+reconnect. Waiting for another pair instead would keep a stale closure
+indefinitely.
 A fragment of a schema-0 map always carries slot 255: the server computes no
 celestial field for legacy maps, so neither does the client.
 
@@ -240,16 +250,20 @@ links: topology, continuity, sky exits and authored cover come from the maps,
 the faces the viewer was shown from the disclosed records, and every cell
 outside the closure, or no map resolves, is open air under an open sky.
 
-The client solves a publication a few milliseconds a frame, one hour of one
-fragment per step: the first step solves and keeps the current hour, the next
-solves the following hour and reports the fragment's cells. A newer
-publication supersedes the rest, and a closure of more than 256 fragments is
-coalesced per depth, so a step is at most one fragment's hourly solve. Each cell's
-field lives in its map cache header, which scrolls with the map and survives
-fog, so a cell keeps its last field until it is solved again. An optimized
-build solves one hourly field of a full 32×32 window over 13 depths in about
-29 ms, a 17×17 one in about 11 ms; authored Brynknot views of 300–900 closure
-cells take a few milliseconds. Against the gameplay field, the client
+The client solves a publication a few milliseconds a frame, in solver steps
+of one scratch row each: a row of the sky, sun or moon rays, of the spill
+table, or of one diffuse relaxation pass, or the publish
+(`celestial_closure_solve_begin()` and `_step()`). A fragment's current hour
+is solved and kept first, then its following hour, and then its cells are
+reported. A newer publication supersedes the rest, and a closure has at most
+256 fragments, coalesced per depth above that, so the number of solves stays
+bounded. Each cell's field lives in its map cache header, which scrolls with
+the map and survives fog, so a cell keeps its last field until it is solved
+again. An optimized build solves one hourly field of a full 32×32 window over
+13 depths in about 29 ms, a 17×17 one in about 11 ms, and authored Brynknot
+views of 300–900 closure cells in a few milliseconds; split into steps, the
+costliest step of a 32×32 fragment is about 1/40 of its hourly solve, so the
+frame budget bounds the work. Against the gameplay field, the client
 differs only where sun, sky or spill light reaches an authorized tile through
 cells outside the closure or through a remembered door that has since changed.
 
@@ -314,9 +328,9 @@ exact.
 
 - `CELESTIAL` round-trips every slot id; encoders and decoders reject the same
   malformed payloads; a payload replaces the whole slot table; stale
-  generations and malformed payloads keep the previous state; a new connection
-  resets slots and generation; the server sends a payload only when its
-  encoding changes (step 1).
+  generations keep the previous state, and a malformed payload keeps it while
+  forcing a reconnect; a new connection resets slots and generation; the
+  server sends a payload only when its encoding changes (step 1).
 - the shared solver reproduces the server's gameplay field bit for bit
   (golden digests of every Brynknot stack at six times of day); the client's
   solve of the received closure matches the server solver on the disclosed
@@ -326,8 +340,12 @@ exact.
   visible door's change sends the next pair, an unchanged view sends none, an
   invisible object contributes nothing, and a remembered door that changes out
   of sight keeps its record and sends nothing; the client publishes only a
-  matching pair after its MAP2 update, discards it when the update fails, and
-  gives slot 255 zero celestial light (step 2).
+  matching pair after its MAP2 update; it discards the staged pair and
+  reconnects when that update fails, when a half is malformed, undecodable or
+  left unpaired, or when a closure names a slot its `CELESTIAL` omits; it
+  gives slot 255 zero celestial light; decoders reject more than 256
+  fragments; and a stepped solve equals the one-shot solve bit for bit
+  (step 2).
 
 ## Decisions recorded
 

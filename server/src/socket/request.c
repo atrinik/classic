@@ -1129,10 +1129,9 @@ static uint8_t map2_closure_slot(const mapstruct *map, const map2_celestial_maps
  * sets to exercise the open-air fallback. */
 static size_t map2_closure_payload_max = PACKET_PAYLOAD_MAX;
 
-/** Most fragments a closure keeps before coalescing per depth: the client
- * solves each fragment's two hours separately, so a view over countless
- * tiny maps would otherwise multiply its solver work. A test may lower it. */
-static size_t map2_closure_fragments_max = 256;
+/** Most fragments a closure keeps before coalescing per depth, which the
+ * client enforces (CELESTIAL_CLOSURE_FRAGMENTS_MAX). A test may lower it. */
+static size_t map2_closure_fragments_max = CELESTIAL_CLOSURE_FRAGMENTS_MAX;
 
 #ifdef ATRINIK_TESTING
 size_t map2_closure_fragments_max_exchange_for_test(size_t max) {
