@@ -5139,6 +5139,48 @@ START_TEST(test_celestial_closure_fallback_resends_membership_changes) {
 }
 END_TEST
 
+START_TEST(test_celestial_closure_splits_maps_repeated_by_a_link_cycle) {
+    /* Two narrow maps linked east and west into a cycle alternate across the
+     * window, so each map's bounding rectangle covers the other's cells:
+     * the depth is sent as non-overlapping row runs, and MAP2 publishes. */
+    mapstruct *old_map;
+    object *pl;
+    check_setup_env_pl(&old_map, &pl);
+    unsigned long saved_hour = todtick;
+    todtick = 5 * HOURS_PER_MONTH + 12;
+    mapstruct *a = get_empty_map(3, 64);
+    mapstruct *b = get_empty_map(3, 64);
+    FREE_AND_COPY_HASH(a->path, "/closure/cycle-a");
+    FREE_AND_COPY_HASH(b->path, "/closure/cycle-b");
+    closure_fixture_schema(a);
+    closure_fixture_schema(b);
+    a->tile_map[TILED_EAST] = b;
+    a->tile_map[TILED_WEST] = b;
+    b->tile_map[TILED_EAST] = a;
+    b->tile_map[TILED_WEST] = a;
+    for (int y = 28; y <= 36; y++) {
+        for (int x = 0; x < 3; x++) {
+            closure_structure(a, x, y, MISC_OBJECT, -1, NULL, NULL);
+            closure_structure(b, x, y, MISC_OBJECT, -1, NULL, NULL);
+        }
+    }
+    request_move_player(&pl, a, 1, 32);
+    closure_redraw(pl);
+    celestial_closure_t closure;
+    ck_assert(closure_last(pl, &closure));
+    size_t depth0 = 0;
+    for (size_t i = 0; i < closure.count; i++) {
+        depth0 += closure.fragments[i].depth == 0;
+    }
+    /* More than one fragment per map: the placements are separated. */
+    ck_assert_uint_gt(depth0, 2);
+    celestial_closure_free(&closure);
+    a->tile_map[TILED_EAST] = a->tile_map[TILED_WEST] = NULL;
+    b->tile_map[TILED_EAST] = b->tile_map[TILED_WEST] = NULL;
+    todtick = saved_hour;
+}
+END_TEST
+
 START_TEST(test_celestial_closure_headers_too_large_coalesce_by_depth) {
     mapstruct *old_map;
     object *pl;
@@ -5259,6 +5301,7 @@ static Suite *suite(void) {
     tcase_add_test(tc_closure, test_celestial_closure_is_resent_when_the_window_moves);
     tcase_add_test(tc_closure, test_celestial_closure_too_large_is_sent_as_open_air);
     tcase_add_test(tc_closure, test_celestial_closure_headers_too_large_coalesce_by_depth);
+    tcase_add_test(tc_closure, test_celestial_closure_splits_maps_repeated_by_a_link_cycle);
     tcase_add_test(tc_closure, test_celestial_closure_fallback_resends_membership_changes);
     tcase_add_test(tc_core, test_removed_player_connection_keeps_servicing_queued_output);
     tcase_add_test(tc_core, test_map_name_metadata_handles_transient_unnamed_maps);

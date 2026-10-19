@@ -48,6 +48,9 @@ static struct {
     celestial_closure_job_t *job;
     int32_t *job_values;
     int32_t (*job_rgb)[3];
+    /** Next row of a fragment solved for both hours to report: one row per
+     * step, so reporting stays within the budget too. */
+    int report_row;
     /** A structure payload could not be decoded for lack of memory. */
     bool reconnect;
 } client_celestial;
@@ -70,6 +73,7 @@ static void client_celestial_partial_free(void) {
     free(client_celestial.partial_rgb);
     client_celestial.partial_values = NULL;
     client_celestial.partial_rgb = NULL;
+    client_celestial.report_row = 0;
 }
 
 static bool client_celestial_assigned(const client_celestial_slots_t *slots, uint8_t slot) {
@@ -283,7 +287,7 @@ bool client_celestial_publish(client_celestial_cell_fn cell, void *context) {
  * solver step of it (a row of rays, spill coefficients or a relaxation
  * pass, or of the publish). Its
  * current hour is held once solved; once its next hour is too, its closure
- * cells are reported.
+ * cells are reported one row per step.
  * @return False when an allocation fails; the hour is retried later.
  */
 static bool client_celestial_solve_step(size_t i, bool *done) {
@@ -339,18 +343,20 @@ static bool client_celestial_solve_step(size_t i, bool *done) {
     const int32_t (*rgb)[3] = (const int32_t (*)[3])client_celestial.partial_rgb;
     const int32_t *next_values = client_celestial.job_values;
     const int32_t (*next_rgb)[3] = (const int32_t (*)[3])client_celestial.job_rgb;
-    for (int y = 0; y < fragment->height; y++) {
-        for (int x = 0; x < fragment->width; x++) {
-            size_t index = (size_t)x + (size_t)fragment->width * y;
-            if (fragment->values[index] == 0) {
-                continue;
-            }
-            int32_t current[4] = {values[index], rgb[index][0], rgb[index][1], rgb[index][2]};
-            int32_t following[4] = {next_values[index], next_rgb[index][0], next_rgb[index][1],
-                                    next_rgb[index][2]};
-            client_celestial.cell(client_celestial.context, fragment->depth, fragment->x + x,
-                                  fragment->y + y, current, following);
+    int y = client_celestial.report_row;
+    for (int x = 0; x < fragment->width; x++) {
+        size_t index = (size_t)x + (size_t)fragment->width * y;
+        if (fragment->values[index] == 0) {
+            continue;
         }
+        int32_t current[4] = {values[index], rgb[index][0], rgb[index][1], rgb[index][2]};
+        int32_t following[4] = {next_values[index], next_rgb[index][0], next_rgb[index][1],
+                                next_rgb[index][2]};
+        client_celestial.cell(client_celestial.context, fragment->depth, fragment->x + x,
+                              fragment->y + y, current, following);
+    }
+    if (++client_celestial.report_row < fragment->height) {
+        return true;
     }
     client_celestial_partial_free();
     *done = true;

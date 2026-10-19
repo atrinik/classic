@@ -101,8 +101,9 @@ typedef struct celestial_solver_ops {
      * the solver rejects a lattice reporting anything else. */
     void (*dimensions)(void *context, void *map, int *width, int *height);
     /** Whether an upward face, as met walking from the receiver, leaves for
-     * the sky. Its 'to' cell may be unresolved (map NULL): that is how a ray
-     * reaches the sky above the topmost level, and sky must accept it. */
+     * the sky. Its 'from' cell is always resolved; its 'to' cell may be
+     * unresolved (map NULL): that is how a ray reaches the sky above the
+     * topmost level, and sky must accept it. */
     bool (*sky)(void *context, const celestial_solver_face_t *face);
     /** Whether light may cross the face between its two cells. Called only
      * with both cells resolved: a face with an unresolved cell ends the ray,

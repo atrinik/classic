@@ -1273,6 +1273,20 @@ static size_t map2_closure_by_depth(socket_struct *cs, const map2_celestial_maps
     return count;
 }
 
+/** Whether any two fragment rectangles share a cell. */
+static bool map2_fragments_overlap(const celestial_closure_fragment_t *fragments, size_t count) {
+    for (size_t i = 0; i < count; i++) {
+        for (size_t j = i + 1; j < count; j++) {
+            const celestial_closure_fragment_t *a = &fragments[i], *b = &fragments[j];
+            if (a->x < b->x + b->width && b->x < a->x + a->width && a->y < b->y + b->height &&
+                b->y < a->y + a->height) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
 static bool map2_closure_collect(socket_struct *cs, const map2_celestial_maps_t *seen,
                                  const int *slot_of, celestial_closure_t *closure) {
     celestial_closure_fragment_t *fragments = NULL;
@@ -1327,6 +1341,40 @@ static bool map2_closure_collect(socket_struct *cs, const map2_celestial_maps_t 
                 grown->y = (uint8_t)min_y;
                 grown->width = (uint8_t)(max_x - min_x + 1);
                 grown->height = (uint8_t)(max_y - min_y + 1);
+            }
+        }
+        /* A linked-map cycle can show one map at several offsets with
+         * another between them, so per-map bounding rectangles overlap:
+         * such a depth is described by row runs of one map instead, which
+         * never overlap. */
+        if (!by_depth && map2_fragments_overlap(&fragments[first], count - first)) {
+            count = first;
+            for (int ay = 0; ay < cs->mapy && !by_depth; ay++) {
+                for (int ax = 0; ax < cs->mapx;) {
+                    const mapstruct *map = map2_closure_maps[index][ax][ay];
+                    if (map == NULL) {
+                        ax++;
+                        continue;
+                    }
+                    int start = ax;
+                    while (ax < cs->mapx && map2_closure_maps[index][ax][ay] == map) {
+                        ax++;
+                    }
+                    if (count == map2_closure_fragments_max) {
+                        by_depth = true;
+                        break;
+                    }
+                    if (count == capacity) {
+                        capacity = capacity == 0 ? 16 : capacity * 2;
+                        fragments = xrealloc(fragments, capacity * sizeof(*fragments));
+                        owners = xrealloc(owners, capacity * sizeof(*owners));
+                    }
+                    owners[count] = map;
+                    fragments[count++] = (celestial_closure_fragment_t){
+                        .depth = (int8_t)depth, .x = (uint8_t)start, .y = (uint8_t)ay,
+                        .width = (uint8_t)(ax - start), .height = 1,
+                        .slot = map2_closure_slot(map, seen, slot_of)};
+                }
             }
         }
         for (size_t fragment = first; !by_depth && fragment < count; fragment++) {

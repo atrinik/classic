@@ -3463,6 +3463,8 @@ void map_celestial_retire_outside(const celestial_closure_t *closure) {
         if (changed) {
             level_lighting_revision[level]++;
             map_redraw_request(MAP_REDRAW_REASON_LIGHTING);
+            /* The dynamic minimap retains its own target. */
+            minimap_redraw_request();
         }
     }
 }
@@ -7260,9 +7262,11 @@ bool widget_map_client_lighting_state_test(void) {
     celestial_closure_t empty_closure;
     success = success && map_celestial_field(celestial_depth, 10, 8, false, stored) &&
               celestial_closure_build(&empty_closure, 1, map_width, map_height, NULL, 0);
+    minimap_redraw_flag = 0;
     map_celestial_retire_outside(&empty_closure);
     celestial_closure_free(&empty_closure);
-    success = success && !map_celestial_field(celestial_depth, 10, 8, false, stored);
+    success = success && !map_celestial_field(celestial_depth, 10, 8, false, stored) &&
+              minimap_redraw_flag != 0;
     /* The hourly blend rounds half away from zero, in signed arithmetic. */
     map_cell_header_t blend = {0};
     blend.celestial[0][0] = 100;

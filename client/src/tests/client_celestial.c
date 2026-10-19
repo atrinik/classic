@@ -509,10 +509,11 @@ static void test_publication_solves_every_closure_cell(void) {
      * many calls: the fragment is reported once its next hour is solved too. */
     TEST_CHECK(cells.count == 0 && !client_celestial_solved());
     size_t calls = 0;
-    while (cells.count == 0 && calls < 1000) {
+    while (cells.count < 5 && calls < 1000) {
         TEST_CHECK(!client_celestial_process(0));
         calls++;
     }
+    /* Its cells are reported a row per step as well. */
     TEST_CHECK(cells.count == 5 && !client_celestial_solved());
     TEST_CHECK(calls > 8);
     TEST_CHECK(client_celestial_process(UINT64_MAX) && client_celestial_solved());

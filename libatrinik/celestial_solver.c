@@ -257,7 +257,9 @@ void celestial_solver_ray_step(const celestial_solver_lattice_t *lattice,
      * open sky themselves and must not cancel the exit. */
     bool leaves[sizeof(event.faces) / sizeof(event.faces[0])] = {false};
     for (size_t i = 0; i < event.face_count; i++) {
-        if (event.faces[i].normal[2] > 0 &&
+        /* Only a resolved cell can leave for the sky: an upward face from
+         * an unresolved one is itself in the unresolved space it grazes. */
+        if (event.faces[i].normal[2] > 0 && event.faces[i].from.map != NULL &&
             lattice->ops->sky(lattice->context, &event.faces[i])) {
             leaves[i] = true;
             sky = true;
