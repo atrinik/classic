@@ -75,8 +75,13 @@ bool client_celestial_publish(client_celestial_cell_fn cell, void *context);
  */
 bool client_celestial_process(uint64_t budget_us);
 
-/** Drop staged payloads, as when the MAP2 update that follows fails. */
+/** Drop staged payloads. */
 void client_celestial_discard_staged(void);
+
+/** Drop staged payloads because the MAP2 update they belong to failed: the
+ * server considers that publication delivered, so a staged half also flags
+ * a reconnect (client_celestial_take_reconnect()). */
+void client_celestial_abandon_staged(void);
 
 /** The published closure. */
 const celestial_closure_t *client_celestial_closure(void);
@@ -90,9 +95,10 @@ bool client_celestial_model(uint8_t slot, bool next, celestial_model_t *model);
 /** Start of the current hour in game seconds, as last received. */
 uint64_t client_celestial_start_seconds(void);
 
-/** Whether the last rejected structure payload failed only for lack of
- * memory, clearing the flag: the connection must then be reset, since the
- * server will not resend a pair it considers delivered. */
+/** Whether a malformed or undecodable payload, or a failed update holding a
+ * staged half, lost a publication the server considers delivered, clearing
+ * the flag: the connection must then be reset, since the server will not
+ * resend it. */
 bool client_celestial_take_reconnect(void);
 
 /** Generation of the published pair; 0 before the first one. */
