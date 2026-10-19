@@ -1456,7 +1456,8 @@ static bool map2_send_celestial(socket_struct *cs, const map2_celestial_maps_t *
     (void)written;
     cs->celestial_structure_digest = structure_digest;
     celestial_closure_free(&closure);
-    socket_send_packet(cs, packet);    return true;
+    socket_send_packet(cs, packet);
+    return true;
 }
 
 /** Chunk boundary of a level payload: the wire's, or a smaller one a test

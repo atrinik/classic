@@ -60,7 +60,9 @@ typedef void (*client_celestial_cell_fn)(void *context, int depth, int x, int y,
  * Publish the staged pair after the MAP2 update that follows it applied:
  * only both payloads with the same generation replace the published ones.
  * Anything else staged is discarded, since each half belongs only to the
- * update right after it.
+ * update right after it; a staged half discarded this way, or a pair whose
+ * closure names a slot its CELESTIAL omits, flags a reconnect
+ * (client_celestial_take_reconnect()).
  * Every cell of the new closure is then solved by client_celestial_process()
  * and reported through cell; a newer publication supersedes the rest.
  * @return Whether a pair was published.
@@ -106,8 +108,9 @@ uint64_t client_celestial_start_seconds(void);
  * solve was cancelled for a moved window, which the next pair replaces). */
 bool client_celestial_solved(void);
 
-/** Whether a malformed or undecodable payload, or a failed update holding a
- * staged half, lost a publication the server considers delivered, clearing
+/** Whether a malformed or undecodable payload, a failed update holding a
+ * staged half, or a staged publication that could not be published, lost a
+ * publication the server considers delivered, clearing
  * the flag: the connection must then be reset, since the server will not
  * resend it. */
 bool client_celestial_take_reconnect(void);
