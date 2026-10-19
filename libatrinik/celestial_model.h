@@ -203,7 +203,8 @@ typedef uint16_t (*celestial_model_spill_fn)(int x, int y, int dx, int dy, void 
  * CELESTIAL_MODEL_SPILL_PASSES passes: each cell keeps the maximum of its own
  * value and its eight neighbors' values transmitted through the spill
  * coefficient and the cardinal (192) or diagonal (181) falloff.
- * @return False if scratch memory could not be allocated; values are then
+ * @return False for a non-positive or oversized width or height, values
+ * untouched, or if scratch memory could not be allocated; values are then
  * unchanged.
  */
 bool celestial_model_relax(int32_t *values,

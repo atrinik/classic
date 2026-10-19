@@ -1799,6 +1799,17 @@ START_TEST(test_client_lighting_local_cache_retires_one_way_links_to_freed_maps)
 }
 END_TEST
 
+START_TEST(test_client_lighting_local_level_pools_levels_of_other_dimensions) {
+    /* Linked levels share their origin: a hidden source on a larger upper
+     * level reaches the lower level's coarse light over their overlap. */
+    mapstruct *lower = get_empty_map(9, 9);
+    mapstruct *upper = get_empty_map(12, 12);
+    link_stacked_maps(lower, upper);
+    add_colored_light(upper, 4, 4, 13, LIGHT_COLOR_WHITE);
+    ck_assert_int_gt(light_local_level(lower, 4, 4), 0);
+}
+END_TEST
+
 START_TEST(test_client_lighting_local_cache_ignores_unrelated_geometry) {
     /* A blocker change anywhere leaves a cached block on the constant-time
      * path, since coarse light reads only topology; a link change on one of
@@ -2185,6 +2196,7 @@ static Suite *suite(void) {
     tcase_add_test(tc_core, test_client_lighting_local_level_shares_tall_stacks);
     tcase_add_test(tc_core, test_client_lighting_local_source_epochs_are_per_map);
     tcase_add_test(tc_core, test_client_lighting_local_cache_ignores_unrelated_geometry);
+    tcase_add_test(tc_core, test_client_lighting_local_level_pools_levels_of_other_dimensions);
     tcase_add_test(tc_core, test_client_lighting_local_cache_retires_one_way_links_to_freed_maps);
     tcase_add_test(tc_core, test_client_lighting_local_cache_ignores_unreachable_sources);
     tcase_add_test(tc_core, test_client_lighting_local_cache_survives_unrelated_frees);

@@ -209,8 +209,21 @@ static void test_reset_forgets_slots_and_generation(void) {
     TEST_CHECK(apply(1, &slot, 1));
 }
 
+static void test_model_helpers_reject_edge_inputs(void) {
+    /* Half-up rounding holds at the largest denominator too. */
+    TEST_CHECK(celestial_model_round(0, UINT64_MAX) == 0);
+    TEST_CHECK(celestial_model_round(UINT64_MAX / 2, UINT64_MAX) == 0);
+    TEST_CHECK(celestial_model_round(UINT64_MAX / 2 + 1, UINT64_MAX) == 1);
+    TEST_CHECK(celestial_model_round(5, 2) == 3 && celestial_model_round(4, 3) == 1);
+    /* Relaxation rejects invalid dimensions before reading the grid. */
+    int32_t one = 1;
+    TEST_CHECK(!celestial_model_relax(&one, -1, 1, NULL, NULL));
+    TEST_CHECK(!celestial_model_relax(&one, 1, 0, NULL, NULL));
+}
+
 int main(void) {
     toolkit_import(packet);
+    test_model_helpers_reject_edge_inputs();
     test_payload_round_trips_every_slot_id();
     test_encoder_rejects_what_decoders_reject();
     test_payload_replaces_the_slot_table();
