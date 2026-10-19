@@ -105,8 +105,9 @@ typedef struct celestial_solver_ops {
      * reaches the sky above the topmost level, and sky must accept it. */
     bool (*sky)(void *context, const celestial_solver_face_t *face);
     /** Whether light may cross the face between its two cells. Called only
-     * with both cells resolved: a face with an unresolved cell that sky does
-     * not claim ends the ray. */
+     * with both cells resolved: a face with an unresolved cell ends the ray,
+     * unless another face of the same crossing leaves for the sky, which
+     * makes it open sky. */
     bool (*continuous)(void *context, const celestial_solver_face_t *face);
     /** Light coefficient 0..256 of light crossing the face from 'from' to
      * 'to', both resolved, for a face continuous accepted; *aperture (when

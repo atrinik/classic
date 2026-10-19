@@ -402,6 +402,29 @@ static int test_unresolved_cells_end_rays(void) {
     return 0;
 }
 
+static int test_tied_sky_exits_survive_grazing_faces(void) {
+    /* At a tied direction an event leaves for the sky and, at once, crosses
+     * a grazing face between the unresolved cells above the top level: the
+     * exit still holds, so an open cell sees the sun. */
+    static const celestial_solver_ops_t open = {
+        .resolve = counting_resolve, .dimensions = counting_dimensions, .sky = counting_sky,
+        .continuous = counting_continuous, .light = counting_light};
+    counting_lattice counts = {0};
+    celestial_solver_lattice_t lattice = {.ops = &open, .context = &counts};
+    for (int32_t elevation = 23169; elevation <= 23171; elevation++) {
+        for (uint8_t direction = CELESTIAL_MODEL_NORTH; direction <= CELESTIAL_MODEL_NORTHWEST;
+             direction++) {
+            celestial_solver_ray_t ray;
+            celestial_solver_ray_init(&lattice, &ray, &counts.map, 1, 1, direction, elevation);
+            while (!ray.done) {
+                celestial_solver_ray_step(&lattice, &ray);
+            }
+            require(ray.sky);
+        }
+    }
+    return 0;
+}
+
 static int test_release_pairs_with_reserve(void) {
     celestial_model_t model;
     model_at(12, &model);
@@ -758,6 +781,9 @@ int main(void) {
     }
     if (result == 0) {
         result = test_unresolved_cells_end_rays();
+    }
+    if (result == 0) {
+        result = test_tied_sky_exits_survive_grazing_faces();
     }
     if (result == 0) {
         result = test_invalid_inputs_fail_without_crashing();

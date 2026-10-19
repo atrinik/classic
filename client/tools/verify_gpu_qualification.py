@@ -34,7 +34,7 @@ ANIMATION_INSTANCE_UPLOADS_PER_FRAME = 128
 ANIMATION_INSTANCE_BYTES_PER_FRAME = 16 * 1024
 PRODUCTION_FIXTURES = (
     "smooth", "radial-light-smooth", "exit-cues", "living-outline-translucent",
-    "living-outline-retained-fow", "timed-light", "map-overlay-linked-depth",
+    "living-outline-retained-fow", "map-overlay-linked-depth",
     "map-overlay-widget-state", "map-overlay-elevated", "visibility-fade-centered",
     "brynknot-movement", "gpu-qualification-town-25x25",
     "gpu-ui-closure",
@@ -846,21 +846,13 @@ def validate_production_record(record: dict) -> bool:
     _require(isinstance(record.get("borrowed_temporal_light_samples"), int) and
              record["borrowed_temporal_light_samples"] >= 0,
              "timed-light borrowing count is invalid")
-    if timed:
-        _require(record.get("fixture") == "timed-light", "unexpected timed-light lifecycle")
-        _require(bool(HEX_64.fullmatch(str(record.get("timed_endpoint_pixels_sha256", "")))),
-                 "timed-light endpoint checkpoint is absent")
-        _require(record["timed_endpoint_pixels_sha256"] != record["initial_pixels_sha256"],
-                 "timed-light midpoint and endpoint are indistinguishable")
-        _require(record["pixels_sha256"] == record["initial_pixels_sha256"],
-                 "timed-light lifecycle did not restore the initial midpoint")
-        _require(record["borrowed_temporal_light_samples"] > 0,
-                 "timed FOW borrowing was not exercised")
-    else:
-        _require(record.get("timed_endpoint_pixels_sha256") == "",
-                 "unexpected timed-light endpoint checkpoint")
-        _require(record["borrowed_temporal_light_samples"] == 0,
-                 "unexpected timed-light borrowing count")
+    # Protocol 1085 retired the timed-light descriptor, so no fixture has a
+    # timed-light lifecycle any more.
+    _require(not timed, "the timed-light lifecycle is retired in protocol 1085")
+    _require(record.get("timed_endpoint_pixels_sha256") == "",
+             "unexpected timed-light endpoint checkpoint")
+    _require(record["borrowed_temporal_light_samples"] == 0,
+             "unexpected timed-light borrowing count")
     for field in ("archived_software_pixels_sha256", "archived_software_ui_pixels_sha256"):
         value = record.get(field)
         _require(value == "" or bool(HEX_64.fullmatch(str(value))),
@@ -986,12 +978,8 @@ def _validate_approved_goldens(records: list[dict]) -> None:
         else:
             _require(expected.get("transition") is None,
                      f"{record['fixture']} {backend} has an unexpected transition golden")
-        if record["timed_light_lifecycle"]:
-            _require(expected.get("timed_endpoint") == record["timed_endpoint_pixels_sha256"],
-                     f"{record['fixture']} {backend} timed endpoint golden mismatch")
-        else:
-            _require(expected.get("timed_endpoint") is None,
-                     f"{record['fixture']} {backend} has an unexpected timed endpoint golden")
+        _require(expected.get("timed_endpoint") is None,
+                 f"{record['fixture']} {backend} has an unexpected timed endpoint golden")
         if record["fixture"] == "gpu-ui-closure":
             expected_states = expected.get("ui_closure", {})
             _require(set(expected_states) == set(UI_CLOSURE_STATES),

@@ -1363,7 +1363,6 @@ if (BUILD_TESTING)
         living-outline-retained-fow
         remembered-floor-smooth
         remembered-floor-discrete
-        timed-light
         map-overlay-linked-depth
         map-overlay-widget-state
         map-overlay-elevated

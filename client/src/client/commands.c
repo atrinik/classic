@@ -1801,24 +1801,13 @@ static packet_struct *map_seam_test_packet(uint8_t mapstat, uint16_t continuatio
     packet_writer_write_uint8(packet, mapstat == MAP_UPDATE_CMD_NEW ? 23 : 0);
     packet_writer_write_uint8(packet, 18);
     packet_writer_write_uint8(packet, 0);
-    packet_writer_write_uint16(
-        packet,
-        continuation | (mapstat == MAP_UPDATE_CMD_PARTIAL ? 0 : MAP2_CONTINUATION_TIMED_LIGHT));
-    if (mapstat != MAP_UPDATE_CMD_PARTIAL) {
-        packet_writer_write_uint64(packet, mapstat == MAP_UPDATE_CMD_NEW ? 700 : 701);
-        packet_writer_write_uint64(packet, 3600);
-        packet_writer_write_uint64(packet, 7200);
-        packet_writer_write_uint8(packet, MAP2_LIGHT_KEYFRAME_CONTINUOUS);
-    }
+    packet_writer_write_uint16(packet, continuation);
     packet_writer_write_uint8(packet, 1);
     packet_writer_write_int8(packet, 0);
     packet_struct *level = packet_new(0, 32, 32);
     packet_writer_write_uint16(level, MAP2_MASK_LIGHT_LEVEL);
     packet_writer_write_uint16(level, 200);
     packet_writer_write_uint8(level, 0);
-    packet_writer_write_uint8(level, MAP2_FLAG_EXT_LIGHT_KEYFRAME);
-    packet_writer_write_uint8(level, 1);
-    packet_writer_write_uint16(level, 300);
     packet_writer_write_uint8(level, 0);
     packet_writer_write_uint32(packet, (uint32_t)level->len);
     packet_writer_write_packet(packet, level);
@@ -1832,10 +1821,7 @@ static bool map_seam_test_state(bool destination, uint64_t generation, bool buff
                   destination ? "/shattered_islands/world_1_68"
                               : "/shattered_islands/world_0_68") == 0 &&
            strcmp(MapData.name_new, "Brynknot") == 0 && MapData.posx == (destination ? 0 : 23) &&
-           MapData.posy == 18 && MapData.light_keyframe_valid &&
-           MapData.light_keyframe_generation == (destination ? 701 : 700) &&
-           MapData.light_keyframe_start_seconds == 3600 &&
-           MapData.light_keyframe_end_seconds == 7200 && !map_state_transaction_active() &&
+           MapData.posy == 18 && !MapData.light_keyframe_valid && !map_state_transaction_active() &&
            !MapData.continuation.pending &&
            socket_command_map_buffered_generation_test_pending() == buffered;
 }

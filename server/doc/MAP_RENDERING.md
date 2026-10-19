@@ -2048,24 +2048,12 @@ clock generation.
 
 The server sends the ordinary `CMD_MAPSTATS_TIME` clock sample and rate after
 both NEW map publications (login and teleport) and CONNECTED tile transitions.
-The existing periodic clock updates continue unchanged. Under protocol 1085
-the server never sets the MAP2 timed-light descriptor bit and sends no
-timed-light endpoints: celestial light reaches the client only as `CELESTIAL`
-and `CELESTIAL_STRUCTURE` (CLIENT_CELESTIAL.md). The client still decodes and
-validates a descriptor that does arrive, by the rules below. A timed-light MAP2
-endpoint describes celestial samples; it does not establish the client's world
-clock or replace that synchronization message.
-Every timed-light record's RGB endpoint bitmap is a subset of its scalar
-endpoint bitmap. The producer includes the corresponding scalar even for an
-unchanged colored endpoint carried with another refreshed sub-layer; a
-CONNECTED publication may reuse the generation and translated endpoint cache.
-The decoder rejects records that violate this ownership contract before
-applying map metadata or geometry.
-Endpoint aggregation compares both celestial scalar and RGB values; equal
-scalar intensity does not imply equal color. A refreshed descriptor compares
-cached endpoint RGB channels as well as scalar, generation, knowledge, and
-bitmap state. A hue-only change is published once, while an unchanged repeat
-retains the cached endpoint without another tile update.
+The existing periodic clock updates continue unchanged. Protocol 1085 retires
+the MAP2 timed-light descriptor (the envelope's 0x8000 continuation bit) and
+the timed-light endpoint extension (`ext_flags` 4): celestial light reaches
+the client only as `CELESTIAL` and `CELESTIAL_STRUCTURE` (CLIENT_CELESTIAL.md),
+so the server never sends either form and the shared validator rejects a
+packet carrying one as malformed, before any metadata or geometry is applied.
 
 ### Fixed visibility and light transfer
 
@@ -2256,7 +2244,7 @@ The single-tile record has these stages and fields:
 | `state` | `visible`, `remembered`, `fogged`, `stale`, `missing`, and `cleared` flags for the requested tile/depth. |
 | `source` / `received` | The current viewer-authorized server MAP2 aggregate and whether its scalar endpoint is present. No source position, emitter, component, or hidden object is included. |
 | `unit` / `scalar` / `rgb` | Unsigned wire words in Q5.11; a sample word represents `sample / 2048`. RGB values are the received aggregate channels, not an inferred source color. |
-| `keyframe` / `next` | The optional bounded MAP2 timed endpoint, generation, interval, and next scalar/RGB words. `replaced` means the timed endpoint supersedes the provisional current target. A protocol-1085 server sends none, so these stay absent. |
+| `keyframe` / `next` | The retired MAP2 timed endpoint, generation, interval, and next scalar/RGB words; protocol 1085 rejects that wire form, so these stay absent. |
 | `working` | The client value after temporal interpolation and the existing bounded nearest-known-ring fallback. On a visible primary-depth tile it also includes the presentation-only local-player field. `interpolated` and `borrowed` identify those transformations. |
 | `presentation` | Smooth mode reports tone-mapped sRGB illumination RGB and neutral brightness; discrete mode reports the existing scalar level lookup and neutral RGB. This is illumination presentation, not a texture/albedo pixel. |
 | `reasons` | Comma-separated `zero`, `unavailable`, `stale`, `clamped`, `replaced`, and `borrowed` explanations; `none` means no listed condition. |

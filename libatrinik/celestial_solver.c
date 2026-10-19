@@ -251,17 +251,34 @@ void celestial_solver_ray_step(const celestial_solver_lattice_t *lattice,
     }
     uint16_t coefficient = CELESTIAL_MODEL_SCALE;
     bool aperture = false, sky = false;
+    /* Sky is asked once per upward face, before anything else: an event
+     * that leaves for the sky also crosses, on a tied direction, grazing
+     * faces between the unresolved cells above the top level, which are
+     * open sky themselves and must not cancel the exit. */
+    bool leaves[sizeof(event.faces) / sizeof(event.faces[0])] = {false};
+    for (size_t i = 0; i < event.face_count; i++) {
+        if (event.faces[i].normal[2] > 0 &&
+            lattice->ops->sky(lattice->context, &event.faces[i])) {
+            leaves[i] = true;
+            sky = true;
+        }
+    }
     for (size_t i = 0; i < event.face_count; i++) {
         celestial_solver_face_t face = event.faces[i];
-        if (face.normal[2] > 0 && lattice->ops->sky(lattice->context, &face)) {
-            sky = true;
+        if (leaves[i]) {
             continue;
         }
-        /* An unresolved cell (a ray reaching a missing map) can only be
-         * left for the sky: otherwise the ray ends there, so continuous and
-         * light only ever see resolved cells. */
-        if (face.from.map == NULL || face.to.map == NULL ||
-            !lattice->ops->continuous(lattice->context, &face)) {
+        /* An unresolved cell (a ray reaching a missing map) is crossed only
+         * on the way to a claimed sky; otherwise the ray ends there, so
+         * continuous and light only ever see resolved cells. */
+        if (face.from.map == NULL || face.to.map == NULL) {
+            if (sky) {
+                continue;
+            }
+            ray->done = true;
+            return;
+        }
+        if (!lattice->ops->continuous(lattice->context, &face)) {
             ray->done = true;
             return;
         }

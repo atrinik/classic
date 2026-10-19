@@ -313,7 +313,7 @@ jobs:
               --source-root "${GITHUB_WORKSPACE}" -- atrinik)
           fi
           for fixture in smooth radial-light-smooth exit-cues \
-            living-outline-translucent living-outline-retained-fow timed-light \
+            living-outline-translucent living-outline-retained-fow \
             map-overlay-linked-depth map-overlay-widget-state map-overlay-elevated \
             visibility-fade-centered brynknot-movement \
             gpu-qualification-town-25x25 gpu-ui-closure; do

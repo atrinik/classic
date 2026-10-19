@@ -76,9 +76,12 @@ static inline uint64_t client_lighting_occluder(uint16_t bits, uint16_t horizont
  * occluders of the cells between. Every emitter is evaluated; none is
  * dropped for capacity.
  * @param occluders client_lighting_occluder() words, level by level, each in
- * row-major order, or NULL for open geometry. Level z + 1 lies above z.
- * @param emitters Emitters with their level in z.
- * @param cells Output of width * height cells of the target level.
+ * row-major order (levels * width * height), or NULL for open geometry.
+ * Level z + 1 lies above z.
+ * @param emitters Emitters with their level in z: count elements, mandatory
+ * when count is positive (an unchecked precondition).
+ * @param cells Output of width * height cells of the target level,
+ * mandatory for a positive grid (an unchecked precondition).
  */
 void client_lighting_evaluate_stack(int levels,
                                     int target,

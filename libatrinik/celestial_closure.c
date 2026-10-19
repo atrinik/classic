@@ -603,6 +603,8 @@ struct celestial_closure_job {
     const celestial_closure_fragment_t *fragment;
     int32_t *values;
     int32_t (*rgb)[3];
+    /** Next output row whose cells outside the closure are cleared. */
+    int clear_row;
 };
 
 celestial_closure_job_t *celestial_closure_solve_begin(const celestial_closure_t *closure,
@@ -632,23 +634,29 @@ celestial_closure_job_t *celestial_closure_solve_begin(const celestial_closure_t
 }
 
 celestial_solver_status_t celestial_closure_solve_step(celestial_closure_job_t *job) {
-    if (job->solver == NULL) {
-        return CELESTIAL_SOLVER_DONE;
-    }
-    celestial_solver_status_t status = celestial_solver_job_step(job->solver);
-    if (status == CELESTIAL_SOLVER_DONE) {
-        size_t cells = (size_t)job->fragment->width * job->fragment->height;
-        for (size_t cell = 0; cell < cells; cell++) {
-            if (job->fragment->values[cell] == 0) {
-                job->values[cell] = 0;
-                memset(job->rgb[cell], 0, sizeof(job->rgb[cell]));
-            }
+    const celestial_closure_fragment_t *fragment = job->fragment;
+    if (job->solver != NULL) {
+        celestial_solver_status_t status = celestial_solver_job_step(job->solver);
+        if (status != CELESTIAL_SOLVER_DONE) {
+            return status;
         }
         /* The solver's scratch is released as soon as the outputs are. */
         celestial_solver_job_free(job->solver);
         job->solver = NULL;
     }
-    return status;
+    /* Cells outside the closure are cleared one row per step as well, so
+     * no step exceeds the stepped API's one-row bound. */
+    if (job->clear_row < fragment->height) {
+        size_t row = (size_t)job->clear_row * fragment->width;
+        for (size_t cell = row; cell < row + fragment->width; cell++) {
+            if (fragment->values[cell] == 0) {
+                job->values[cell] = 0;
+                memset(job->rgb[cell], 0, sizeof(job->rgb[cell]));
+            }
+        }
+        job->clear_row++;
+    }
+    return job->clear_row < fragment->height ? CELESTIAL_SOLVER_PENDING : CELESTIAL_SOLVER_DONE;
 }
 
 void celestial_closure_solve_free(celestial_closure_job_t *job) {
