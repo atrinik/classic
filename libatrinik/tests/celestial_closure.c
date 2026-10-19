@@ -519,6 +519,9 @@ static int test_invalid_inputs_fail_without_crashing(void) {
     require(!celestial_closure_decode(truncated_runs, sizeof(truncated_runs), 255, 255,
                                       &decoded, &out_of_memory));
     require(!out_of_memory);
+    /* The out-of-memory report is optional. */
+    require(!celestial_closure_decode(truncated_runs, sizeof(truncated_runs), 255, 255,
+                                      &decoded, NULL));
     /* A well-formed first fragment before a malformed second one: the whole
      * payload is framed before anything is allocated. */
     static const uint8_t bad_second[] = {0, 0, 0, 1, 0, 2, 0, 0, 0, 2, 2, 3, 4, 0, 0, 0x80, 0,

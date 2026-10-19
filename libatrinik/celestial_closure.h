@@ -120,16 +120,18 @@ size_t celestial_closure_size(const celestial_closure_t *closure);
  * Decode CELESTIAL_STRUCTURE for a window of the given size.
  * @return False, leaving *closure empty, for truncation, trailing bytes, a
  * run of length 0, a run or rectangle exceeding its bounds, overlap, or a
- * value outside the closure value rules. *closure is overwritten, never
- * freed: pass an empty one, freeing a populated closure first.
+ * value outside the closure value rules, and also when an allocation fails;
+ * celestial_closure_decode() tells the two apart. *closure is overwritten,
+ * never freed: pass an empty one, freeing a populated closure first.
  */
 bool celestial_closure_read(const uint8_t *data, size_t len, int window_width, int window_height,
                             celestial_closure_t *closure);
 
 /**
  * As celestial_closure_read(), telling an allocation failure from a malformed
- * payload: *out_of_memory is set when the payload failed only because memory
- * ran out, so a caller can retry or fail rather than discard it as invalid.
+ * payload: *out_of_memory, when out_of_memory is not NULL, is set when the
+ * payload failed only because memory ran out, so a caller can retry or fail
+ * rather than discard it as invalid.
  */
 bool celestial_closure_decode(const uint8_t *data, size_t len, int window_width,
                               int window_height, celestial_closure_t *closure,
