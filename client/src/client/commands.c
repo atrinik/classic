@@ -763,6 +763,11 @@ void socket_command_celestial_structure(uint8_t *data, size_t len, size_t pos) {
     int wire_height = MAP_LOOK_TO_WIRE_SIZE(setting_get_int(OPT_CAT_MAP, OPT_MAP_HEIGHT));
     if (pos > len ||
         !client_celestial_apply_structure(data + pos, len - pos, wire_width, wire_height)) {
+        if (client_celestial_take_reconnect()) {
+            LOG(ERROR, "Out of memory decoding celestial structure; reconnecting.");
+            client_socket_close(&csocket);
+            return;
+        }
         LOG(PACKET, "Rejected malformed or stale celestial structure packet.");
     }
 }

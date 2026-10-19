@@ -11,7 +11,6 @@
 
 #include <client_celestial.h>
 
-#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -43,6 +42,8 @@ static struct {
      * hour waits for another step, so a step is at most one hourly solve. */
     int32_t *partial_values;
     int32_t (*partial_rgb)[3];
+    /** A structure payload could not be decoded for lack of memory. */
+    bool reconnect;
 } client_celestial;
 
 /** Drop a fragment solved for its current hour only. */
@@ -113,13 +114,10 @@ bool client_celestial_apply_structure(const uint8_t *data, size_t len, int windo
     bool out_of_memory;
     if (!celestial_closure_decode(data, len, window_width, window_height, &closure,
                                   &out_of_memory)) {
-        if (out_of_memory) {
-            /* A valid payload the server will not resend: running on without
-             * it would present a stale closure, so out of memory is fatal
-             * here as it is for every client allocation (xmalloc()). */
-            fputs("fatal: memory allocation failed\n", stderr);
-            abort();
-        }
+        /* Out of memory may hide a malformed payload, and a valid one the
+         * server will not resend: either way the caller reconnects rather
+         * than present a stale closure or abort on bad input. */
+        client_celestial.reconnect = out_of_memory;
         client_celestial_discard_staged();
         return false;
     }
@@ -274,6 +272,12 @@ const celestial_closure_t *client_celestial_closure(void) {
 
 uint64_t client_celestial_start_seconds(void) {
     return client_celestial.slots.start_seconds;
+}
+
+bool client_celestial_take_reconnect(void) {
+    bool reconnect = client_celestial.reconnect;
+    client_celestial.reconnect = false;
+    return reconnect;
 }
 
 uint32_t client_celestial_generation(void) {
