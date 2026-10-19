@@ -121,8 +121,10 @@ void client_celestial_abandon_staged(void);
 const celestial_closure_t *client_celestial_closure(void);
 
 /**
- * Sources of one slot for the current hour, or for the next one.
- * @return False if the slot is not assigned.
+ * Sources of one slot for the current hour, or for the next one. model is
+ * mandatory and must not be NULL (an unchecked precondition): it is written
+ * whenever the slot is assigned, so it cannot serve as an existence probe.
+ * @return False if the slot is not assigned; model is then unchanged.
  */
 bool client_celestial_model(uint8_t slot, bool next, celestial_model_t *model);
 

@@ -16,9 +16,13 @@
  * moon, sky and starlight sources and their fixed-point transport arithmetic
  * from identical code.
  *
- * Every function is pure: it reads only its arguments and immutable built-in
- * tables, allocates nothing except where documented, retains no state and is
- * safe to call from any thread.
+ * The model functions are pure: they read only their arguments and
+ * immutable built-in tables, allocate nothing except where documented
+ * (celestial_model_relax()'s scratch grid), retain no state and are safe to
+ * call from any thread. The CELESTIAL codec is not: celestial_protocol_write()
+ * appends to and may grow its caller-owned packet, which only one thread may
+ * use at a time; celestial_protocol_read() only reads its input and writes
+ * its outputs.
  */
 
 #ifndef TOOLKIT_CELESTIAL_MODEL_H
@@ -257,7 +261,9 @@ struct packet_struct;
  * Append a complete CELESTIAL payload: its publication generation, the start
  * of the current hour in game seconds, then the slots in strictly increasing
  * slot order.
- * @return False, writing nothing, for invalid slots or more than
+ * packet is mandatory, and slots may be NULL only when count is 0.
+ * @return False, writing nothing, for a NULL packet, NULL slots with a
+ * positive count, invalid slots or more than
  * CELESTIAL_PROTOCOL_SLOTS_MAX of them, a start not on an hour boundary or
  * above UINT64_MAX - 3600 (its following hour must be representable), a
  * packet already carrying a writer error, or a write that fails part way
@@ -270,7 +276,9 @@ bool celestial_protocol_write(struct packet_struct *packet,
                               size_t count);
 
 /**
- * Parse and validate a complete CELESTIAL payload. Rejects truncation,
+ * Parse and validate a complete CELESTIAL payload. Every pointer is
+ * mandatory: a NULL data, generation, start_seconds, slots or count is
+ * rejected, so no output is optional. Rejects truncation,
  * trailing bytes, a start not on an hour boundary or above
  * UINT64_MAX - 3600, unordered or
  * out-of-range slots, more than CELESTIAL_PROTOCOL_SLOTS_MAX slots and
