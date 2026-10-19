@@ -662,7 +662,8 @@ static uint64_t map_cell_content_hash(const map_cell_t *cell) {
 
     bool has_sparse_content = cell->layers != NULL || cell->sub_layers != NULL ||
                               cell->actors != NULL || cell->lights != NULL ||
-                              cell->light_keyframe != NULL || cell->stretch_dirty != 0 ||
+                              cell->light_keyframe != NULL || cell->emitters != NULL ||
+                              cell->stretch_dirty != 0 ||
                               cell->stretch_top_height != 0 || cell->stretch_upper_height != 0 ||
                               cell->level_support_height != 0 || cell->render_max_height != 0;
     if (!has_sparse_content) {
@@ -7127,6 +7128,12 @@ bool widget_map_client_lighting_state_test(void) {
     map_cell_snapshot(6, 6, &before);
     map_set_local_light(6, 6, map_protocol_local_light_encode(2, false));
     success = success && map_cell_changed(6, 6, &before);
+    /* An emitter that is the cell's only sparse record is a visible change
+     * too, so the update requests a redraw. */
+    map_cell_snapshot(2, 6, &before);
+    map_set_layer_emitter(2, 6, layer, 2, 0, UINT32_C(0xffffff));
+    success = success && map_cell_changed(2, 6, &before);
+    map_set_layer_emitter(2, 6, layer, 0, 0, 0);
 
     /* Composition adds client emitter light to the received signed base. */
     uint16_t composed_scalar = 0, composed_rgb[3];

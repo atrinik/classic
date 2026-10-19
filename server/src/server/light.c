@@ -1933,11 +1933,9 @@ static bool light_local_walk(mapstruct *map, int bx, int ex, int by, int ey,
                 continue;
             }
             if (tiles[t] == TILED_UP || tiles[t] == TILED_DOWN) {
-                /* Blocks align only across levels of the same dimensions. */
-                if (MAP_WIDTH(next.map) != MAP_WIDTH(region.map) ||
-                    MAP_HEIGHT(next.map) != MAP_HEIGHT(region.map)) {
-                    continue;
-                }
+                /* Linked levels share their origin, as spatial resolution
+                 * overlaps them: a level of other dimensions pools over its
+                 * overlap like any other, its own blocks clamped to it. */
             } else {
                 /* Diagonal seams move on both axes, as the light topology
                  * crosses them directly. */
