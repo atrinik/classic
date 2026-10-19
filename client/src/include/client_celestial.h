@@ -101,6 +101,11 @@ uint64_t client_celestial_start_seconds(void);
  * solve was cancelled for a moved window, which the next pair replaces). */
 bool client_celestial_solved(void);
 
+/** Whether the last rejected structure payload failed only for lack of
+ * memory, clearing the flag: the connection must then be reset, since the
+ * server will not resend a pair it considers delivered. */
+bool client_celestial_take_reconnect(void);
+
 /** Generation of the published pair; 0 before the first one. */
 uint32_t client_celestial_generation(void);
 

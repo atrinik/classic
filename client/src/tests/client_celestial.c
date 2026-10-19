@@ -354,6 +354,8 @@ static void test_malformed_half_discards_the_staged_pair(void) {
      * structure of its generation cannot pair with it. */
     static const uint8_t truncated[] = {0, 0, 0, 1, 0};
     TEST_CHECK(!client_celestial_apply_structure(truncated, sizeof(truncated), 9, 9));
+    /* A malformed payload is only rejected: the connection is not reset. */
+    TEST_CHECK(!client_celestial_take_reconnect());
     TEST_CHECK(stage_closure(1, NULL, 0));
     TEST_CHECK(!client_celestial_publish(NULL, NULL));
     TEST_CHECK(client_celestial_generation() == 0);
