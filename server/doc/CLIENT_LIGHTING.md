@@ -170,7 +170,8 @@ This design therefore raises the client's per-cell lighting storage cap to 72
 bytes. The server's per-socket cell keeps the 56 bytes of signed base and adds
 the 45 bytes of protocol-1085 state below, so its cap is 101 bytes per fully
 populated cell. The rollout qualifies client memory at 72 and server memory
-at 101 bytes, and its final step records both in MAP_RENDERING.md. With the base neutral, the
+at 101 bytes, and MAP_RENDERING.md records both (with the client's 20-byte
+celestial field, 92 bytes per client cell). With the base neutral, the
 server no longer sends base RGB words or next-hour endpoints and its
 per-socket cell drops the next-hour endpoint cache; a sent cell carries 27
 bytes of lighting state: 14 of scalar base, 7 coarse levels, 5 of occluder
@@ -185,8 +186,8 @@ occluder word (8 bytes, 5 of them meaningful), the 7 per-sub-layer coarse
 levels with their count byte and the known-state byte, which the delta
 encoding compares against for visible and remembered cells alike, and the 8
 bytes of the map cell the coordinate last authorized (map count and
-coordinates), which binds remembered fog to it. The rollout's final step records these figures in
-MAP_RENDERING.md.
+coordinates), which binds remembered fog to it. MAP_RENDERING.md records
+these figures.
 
 ### Validation
 
@@ -553,13 +554,13 @@ celestial light removed from the base (see Rollout).
 
 ## Contract change: visible emitters and structure
 
-MAP_RENDERING.md currently states that no visual change may disclose radiance
-source identity. This design deliberately narrows that invariant to **objects
+MAP_RENDERING.md stated that no visual change may disclose radiance source
+identity. This design deliberately narrows that invariant to **objects
 the viewer cannot see**. For a sent object, MAP2 now discloses whether it emits
 light, with its radius, flicker opt-in and color. Two visually identical sent
 objects with different light properties are therefore distinguishable. That is
-the price of computing presentation lighting on the client, and the rollout's
-final step updates MAP_RENDERING.md to say so.
+the price of computing presentation lighting on the client, and
+MAP_RENDERING.md now says so.
 
 A per-object opt-out (`light_private`, keeping a visible object's light
 server-side) is not part of this proposal. It can be added later without a

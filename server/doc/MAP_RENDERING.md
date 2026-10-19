@@ -49,8 +49,13 @@ harness have been removed from every build.
 
 Protocol 1085 replaces presentation lighting with client-computed lighting,
 the only lighting model, described in [CLIENT_LIGHTING.md](CLIENT_LIGHTING.md).
-There is no option, negotiation or legacy full-radiance path. Until its
-rollout lands, this section remains normative for what it does not replace.
+There is no option, negotiation or legacy full-radiance path. Its rollout has
+landed: the client solves and composes celestial light itself
+([CLIENT_CELESTIAL.md](CLIENT_CELESTIAL.md)), and the server's MAP2 lighting
+carries no celestial light. Where this section describes server-produced
+celestial radiance, MAP2 timed-light descriptors and endpoints, or 56-byte
+lighting caches, the protocol-1085 statements in it and those two documents
+supersede it; the rest remains normative.
 
 ### v1078 radiance contract
 
@@ -61,6 +66,11 @@ sample for every visible MAP2 sub-layer; it never serializes source positions,
 source identities, or ambient and emitter components separately.  Gameplay
 LOS, fog authorization, roof/cutaway policy, and hidden-object serialization
 are unchanged.
+Protocol 1085 narrows that invariant to objects the viewer cannot see
+(CLIENT_LIGHTING.md, Contract change): for a sent object, MAP2 discloses
+whether it emits light, with its radius, flicker opt-in and color, and the
+celestial closure discloses the static structure of authorized cells
+(CLIENT_CELESTIAL.md, Privacy). Neither describes an unsent or hidden object.
 
 | Item | Normative value |
 | --- | --- |
@@ -157,8 +167,11 @@ artwork.
 Before implementation lands, the following hard budgets apply: a complete
 MAP2 game payload remains at most 65,534 bytes; a full update uses at most
 4,096 continuations; each serialized sub-layer uses at most 8 lighting bytes
-(2 scalar + 6 RGB); server per-socket lighting cache growth is at most 56 bytes
-per map cell; client lighting storage is at most 56 bytes per map cell; the
+(2 scalar + 6 RGB); server per-socket lighting cache growth is at most 101
+bytes per map cell under protocol 1085 (56 of signed base plus 45 of emitter,
+occluder, coarse-level and known state; CLIENT_LIGHTING.md); client lighting
+storage is at most 92 bytes per map cell (72 of signed base and its header,
+plus the 20-byte client-solved celestial field; CLIENT_CELESTIAL.md); the
 256-entry Q16 forward LUT plus the 65,536-entry inverse byte LUT consume at
 most 66,048 bytes total; and the standard and large-viewport lighting passes
 may regress no more than 10% and 15%,
@@ -1314,10 +1327,11 @@ wrap is a fatal error, never an invitation to reuse a cache entry.
   A normal hour transition promotes a ready endpoint without solving it again.
   Missing current fields still use the synchronous fail-closed solver; initial
   loads, geometry edits and discontinuous time changes may require that work.
-  Pending camera samples use current=current with a SNAP descriptor. MAP2
-  carries the bounded descriptor on every celestial draw so independently
-  completed neighboring sources refresh their endpoints, while unchanged
-  tile endpoint payloads remain suppressed. Structural/topology/profile/hour
+  Under protocol 1085 this field serves gameplay only: MAP2 sends no
+  descriptor or endpoint, and instead prepares the next hour of every stack
+  whose content an update shows (`celestial_light_prepare_next()`), including
+  stacks a kept object's remote light sample reads, so the hour boundary
+  promotes it rather than solving it synchronously. Structural/topology/profile/hour
   changes cancel or fence queued work; map teardown cancels retained references
   before recycling storage.
   Admission reserves `sizeof(job) + 16 * stack_cells + 29 * largest_level_cells`
@@ -2034,7 +2048,11 @@ clock generation.
 
 The server sends the ordinary `CMD_MAPSTATS_TIME` clock sample and rate after
 both NEW map publications (login and teleport) and CONNECTED tile transitions.
-The existing periodic clock updates continue unchanged. A timed-light MAP2
+The existing periodic clock updates continue unchanged. Under protocol 1085
+the server never sets the MAP2 timed-light descriptor bit and sends no
+timed-light endpoints: celestial light reaches the client only as `CELESTIAL`
+and `CELESTIAL_STRUCTURE` (CLIENT_CELESTIAL.md). The client still decodes and
+validates a descriptor that does arrive, by the rules below. A timed-light MAP2
 endpoint describes celestial samples; it does not establish the client's world
 clock or replace that synchronization message.
 Every timed-light record's RGB endpoint bitmap is a subset of its scalar
@@ -2238,7 +2256,7 @@ The single-tile record has these stages and fields:
 | `state` | `visible`, `remembered`, `fogged`, `stale`, `missing`, and `cleared` flags for the requested tile/depth. |
 | `source` / `received` | The current viewer-authorized server MAP2 aggregate and whether its scalar endpoint is present. No source position, emitter, component, or hidden object is included. |
 | `unit` / `scalar` / `rgb` | Unsigned wire words in Q5.11; a sample word represents `sample / 2048`. RGB values are the received aggregate channels, not an inferred source color. |
-| `keyframe` / `next` | The optional bounded MAP2 timed endpoint, generation, interval, and next scalar/RGB words. `replaced` means the timed endpoint supersedes the provisional current target. |
+| `keyframe` / `next` | The optional bounded MAP2 timed endpoint, generation, interval, and next scalar/RGB words. `replaced` means the timed endpoint supersedes the provisional current target. A protocol-1085 server sends none, so these stay absent. |
 | `working` | The client value after temporal interpolation and the existing bounded nearest-known-ring fallback. On a visible primary-depth tile it also includes the presentation-only local-player field. `interpolated` and `borrowed` identify those transformations. |
 | `presentation` | Smooth mode reports tone-mapped sRGB illumination RGB and neutral brightness; discrete mode reports the existing scalar level lookup and neutral RGB. This is illumination presentation, not a texture/albedo pixel. |
 | `reasons` | Comma-separated `zero`, `unavailable`, `stale`, `clamped`, `replaced`, and `borrowed` explanations; `none` means no listed condition. |
@@ -2338,8 +2356,8 @@ projected-row lookup uploads only changed contiguous key runs after warmup.
 
 ### Optional shadows and dependency gates
 
-The server's aggregate celestial/local radiance and structural spill remain
-authoritative. Optional client contact or directional shadows may be proposed
+The server's local radiance, the client-solved celestial field
+(CLIENT_CELESTIAL.md) and structural spill remain authoritative. Optional client contact or directional shadows may be proposed
 only as a bounded presentation derived from visible authorized geometry and the
 already decoded aggregate field. They must not expose source positions,
 identities, hidden blockers, celestial profiles, or new MAP2 authority. #390
