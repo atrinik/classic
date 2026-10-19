@@ -290,8 +290,10 @@ what gameplay needs:
   field there.
 - **The next hour's field**, solved on the budgeted server-thread solver
   (`celestial_light_process_pending()`), so that the hour boundary promotes it
-  instead of rebuilding every shown stack inside MAP2. The view admits it once
-  per update, before MAP2 (`celestial_light_prepare_next()`), never per cell.
+  instead of rebuilding every shown stack inside MAP2. Each MAP2 update admits
+  the stacks it showed once, after it is published
+  (`celestial_light_prepare_next()`), never per cell, so it prepares the hour
+  for later updates rather than prewarming the one being sent.
 - **Dependency tracking** for both fields (`celestial_dependencies.c`), which
   invalidates them when a structure or link they read changes.
 - **The publication** of `CELESTIAL` and `CELESTIAL_STRUCTURE`, and the

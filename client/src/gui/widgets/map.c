@@ -3405,14 +3405,17 @@ static bool map_celestial_any_moving(uint64_t now) {
     return false;
 }
 
+/** The game minute the celestial fields were last relit for. */
+static uint64_t map_celestial_minute = UINT64_MAX;
+
 /** Relight once a game minute while a stored celestial field moves. */
 static void map_celestial_temporal_update(void) {
-    static uint64_t minute = UINT64_MAX;
     uint64_t now;
-    if (!map_celestial_moving || !telemetry_game_time_seconds(&now) || now / 60 == minute) {
+    if (!map_celestial_moving || !telemetry_game_time_seconds(&now) ||
+        now / 60 == map_celestial_minute) {
         return;
     }
-    minute = now / 60;
+    map_celestial_minute = now / 60;
     /* Equal endpoints, or an hour fully blended, present nothing new: once
      * none remain, relight a last time to land the final blend, then stop.
      * The scan is far cheaper than the relight it gates. */
@@ -3424,6 +3427,14 @@ static void map_celestial_temporal_update(void) {
     }
     map_redraw_request(MAP_REDRAW_REASON_LIGHTING);
     minimap_redraw_request();
+}
+
+void map_celestial_clock_changed(void) {
+    /* Fields may have been presented before the clock was known, at the
+     * start of their hour, or at another minute: the next frame relights
+     * them at the synchronized time, even within a minute already shown. */
+    map_celestial_minute = UINT64_MAX;
+    map_celestial_moving = true;
 }
 
 void map_celestial_retire_outside(const celestial_closure_t *closure) {
@@ -7222,6 +7233,15 @@ bool widget_map_client_lighting_state_test(void) {
     map_celestial_store(NULL, celestial_depth, 10, 8, sky, dusk);
     success = success && map_celestial_moving && map_celestial_any_moving(store_hour * 3600) &&
               !map_celestial_any_moving((store_hour + 1) * 3600);
+    /* Within a minute already relit nothing is redrawn, but a clock that
+     * becomes valid or jumps relights at once. */
+    map_celestial_temporal_update();
+    minimap_redraw_flag = 0;
+    map_celestial_temporal_update();
+    success = success && minimap_redraw_flag == 0;
+    map_celestial_clock_changed();
+    map_celestial_temporal_update();
+    success = success && minimap_redraw_flag != 0;
     map_clear_cell(10, 8, true);
     success = success && !map_celestial_any_moving(store_hour * 3600);
     /* A presented frame rebuilds at most its budget of out-of-date emitter

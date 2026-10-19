@@ -480,6 +480,9 @@ extern void map_celestial_store(void *context, int depth, int x, int y, const in
                                 const int32_t next[4]);
 /** The celestial field last solved for a MAP2 window cell, if any. */
 extern bool map_celestial_field(int depth, int x, int y, bool next, int16_t field[4]);
+/** The game clock became valid or moved to another minute: relight the
+ * celestial fields at the synchronized time. */
+extern void map_celestial_clock_changed(void);
 struct celestial_closure;
 /** Clear the celestial field of every window cell a newly published closure
  * leaves out. */

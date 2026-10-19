@@ -828,8 +828,15 @@ void socket_command_mapstats(uint8_t *data, size_t len, size_t pos) {
         } else if (type == CMD_MAPSTATS_TIME) {
             uint64_t game_seconds = packet_reader_read_uint64(&reader);
             uint32_t millis_per_game_minute = packet_reader_read_uint32(&reader);
+            uint64_t before, after;
+            bool known = telemetry_game_time_seconds(&before);
             telemetry_game_time_sync(game_seconds, millis_per_game_minute);
             WIDGET_REDRAW_ALL(GAME_TIME_ID);
+            /* A MAP2 update may have been presented before this sample
+             * arrived, its celestial light at the start of the hour. */
+            if (telemetry_game_time_seconds(&after) && (!known || before / 60 != after / 60)) {
+                map_celestial_clock_changed();
+            }
         } else {
             packet_reader_set_error(&reader, PACKET_ERROR_UNSUPPORTED);
         }
