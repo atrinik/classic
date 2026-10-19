@@ -188,6 +188,9 @@ int32_t celestial_model_transmit(int32_t value, uint16_t coefficient);
  * Value of a traced ray: the source if the ray reached the sky, transmitted
  * through each crossing from the source side to the receiver, rounding at
  * every crossing.
+ * @param coefficients, apertures The crossings' coefficients (0..256) and
+ * aperture flags, receiver side first: when count is positive both are
+ * mandatory and hold count elements (an unchecked precondition).
  * @param aperture If not NULL, receives the light that last passed an
  * aperture crossing, likewise transmitted to the receiver.
  */
@@ -206,6 +209,9 @@ typedef uint16_t (*celestial_model_spill_fn)(int x, int y, int dx, int dy, void 
  * CELESTIAL_MODEL_SPILL_PASSES passes: each cell keeps the maximum of its own
  * value and its eight neighbors' values transmitted through the spill
  * coefficient and the cardinal (192) or diagonal (181) falloff.
+ * values (width × height cells) and spill are mandatory and must not be NULL
+ * (an unchecked precondition); spill is first called only for a grid with a
+ * nonzero value.
  * @return False for a non-positive or oversized width or height, values
  * untouched, or if scratch memory could not be allocated; values are then
  * unchanged.

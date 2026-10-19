@@ -57,6 +57,13 @@ extern void cleanup(void);
 
 extern void init_globals(void);
 
+/** Largest world-clock hour: protocol time counts seconds in 64 bits, and
+ * the hour after this one must still start within the CELESTIAL bound
+ * (UINT64_MAX - 3600). Clocks are loaded, set and advanced within it. */
+#define TODCLOCK_MAX                                                                        \
+    ((UINT64_MAX - 3600) / 3600 - 1 < ULONG_MAX ? (unsigned long)((UINT64_MAX - 3600) / 3600 - 1) \
+                                                : ULONG_MAX)
+
 extern void write_todclock(void);
 bool write_todclock_checked(void);
 extern bool todclock_set(unsigned long value);

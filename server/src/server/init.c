@@ -1570,6 +1570,9 @@ void write_todclock(void) {
 }
 
 bool todclock_set(unsigned long value) {
+    if (value > TODCLOCK_MAX) {
+        return false;
+    }
     unsigned long previous = todtick;
     todtick = value;
     if (write_todclock_atomic()) {
@@ -1583,8 +1586,8 @@ bool todclock_set(unsigned long value) {
 /**
  * Parse a persisted world-clock value.
  *
- * Surrounding whitespace is accepted, but a sign, overflow, embedded junk, or
- * an empty value is rejected.
+ * Surrounding whitespace is accepted, but a sign, overflow, a value above
+ * TODCLOCK_MAX, embedded junk, or an empty value is rejected.
  *
  * @param input
  * NUL-terminated persisted value.
@@ -1608,7 +1611,7 @@ bool todclock_parse(const char *input, unsigned long *value) {
     errno = 0;
     char *end;
     unsigned long parsed = strtoul((const char *)cursor, &end, 10);
-    if (errno == ERANGE) {
+    if (errno == ERANGE || parsed > TODCLOCK_MAX) {
         return false;
     }
     while (isspace((unsigned char)*end)) {

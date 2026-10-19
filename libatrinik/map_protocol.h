@@ -64,7 +64,9 @@ bool map_protocol_continuation_matches(const map_protocol_continuation_state_t *
 void map_protocol_continuation_advance(map_protocol_continuation_state_t *state);
 
 /**
- * Validate one complete protocol-v1080 CLIENT_CMD_MAP payload.
+ * Validate one complete protocol-1085 CLIENT_CMD_MAP payload, including its
+ * signed radiance, emitter, local-light and occluder fields. Protocol 1085
+ * is the only layout accepted: no earlier wire format is supported.
  *
  * No endpoint state is changed. The caller supplies the negotiated wire look
  * dimensions used to bound tile coordinates.
@@ -83,7 +85,8 @@ bool map_protocol_validate(const uint8_t *data,
 uint8_t map_protocol_local_light_encode(int level, bool vision_floor);
 
 /**
- * Decode a protocol-1085 coarse local light byte.
+ * Decode a protocol-1085 coarse local light byte. level and vision_floor are
+ * mandatory and must not be NULL (an unchecked precondition).
  * @return False for reserved bits or the invalid level -16; outputs are then
  * unchanged.
  */

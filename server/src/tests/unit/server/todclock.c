@@ -240,6 +240,18 @@ START_TEST(test_parse_rejects_overflow) {
 
     ck_assert(!todclock_parse(overflow, &value));
     ck_assert_uint_eq(value, 17);
+    /* A clock whose protocol seconds would overflow is rejected too, on
+     * load and on set, while the bound itself is accepted. */
+    snprintf((overflow), sizeof((overflow)), "%lu", TODCLOCK_MAX + 1UL);
+    if (TODCLOCK_MAX < ULONG_MAX) {
+        ck_assert(!todclock_parse(overflow, &value));
+        ck_assert_uint_eq(value, 17);
+        ck_assert(!todclock_set(TODCLOCK_MAX + 1UL));
+    }
+    snprintf((overflow), sizeof((overflow)), "%lu", TODCLOCK_MAX);
+    ck_assert(todclock_parse(overflow, &value));
+    ck_assert_uint_eq(value, TODCLOCK_MAX);
+    ck_assert((uint64_t)TODCLOCK_MAX * 3600 <= UINT64_MAX - 3600 * 2);
 }
 END_TEST
 
