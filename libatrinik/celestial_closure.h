@@ -144,10 +144,10 @@ bool celestial_closure_read(const uint8_t *data, size_t len, int window_width, i
  * As celestial_closure_read(), telling an allocation failure from a malformed
  * payload: *out_of_memory, when out_of_memory is not NULL, is set when an
  * allocation failed, so a caller can retry or fail rather than discard the
- * payload as invalid. Framing, bounds and values are checked first; overlap
- * and sky exits need the index, so a payload that also breaks those rules
- * can report out_of_memory, and a retry that succeeds in allocating rejects
- * it as malformed.
+ * payload as invalid. Framing, depths, bounds and values are checked first;
+ * overlap and sky exits need the index, so a payload that also breaks those
+ * rules can report out_of_memory, and a retry that succeeds in allocating
+ * rejects it as malformed.
  */
 bool celestial_closure_decode(const uint8_t *data, size_t len, int window_width,
                               int window_height, celestial_closure_t *closure,
@@ -160,7 +160,8 @@ bool celestial_closure_value_valid(uint32_t value);
 uint32_t celestial_closure_value(const celestial_closure_t *closure, int depth, int x, int y);
 
 /**
- * Solve one fragment's cells under a model with the shared solver, every
+ * Solve one fragment's cells under a model with the shared solver (from
+ * celestial_model_evaluate(), as celestial_solver_solve() requires), every
  * cell outside the closure open air with an open sky exit. Writes
  * width × height values and RGB triples in the fragment's row-major order;
  * cells outside the closure are written as zero. Solves only read the

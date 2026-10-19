@@ -216,7 +216,9 @@ bool celestial_model_relax(int32_t *values,
 /**
  * One row y of one celestial_model_relax() pass: writes row y of next from
  * values, so a caller can run a pass row by row and swap the grids after.
- * The dimensions must be valid; values and next must not overlap.
+ * Unchecked preconditions: width and height are positive dimensions that
+ * celestial_model_relax() accepts, 0 <= y < height, values and next are
+ * non-NULL, non-overlapping width × height grids, and spill is non-NULL.
  */
 void celestial_model_relax_row(const int32_t *values,
                                int32_t *next,
