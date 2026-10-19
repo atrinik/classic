@@ -44,7 +44,9 @@ static const uint16_t season_factor[CELESTIAL_MODEL_MONTHS_PER_YEAR] = {
 
 uint64_t celestial_model_round(uint64_t numerator, uint64_t denominator) {
     HARD_ASSERT(denominator != 0);
-    return numerator / denominator + (numerator % denominator >= (denominator + 1) / 2 ? 1 : 0);
+    /* The ceiling of half the denominator, without overflowing at its top. */
+    uint64_t half = denominator / 2 + denominator % 2;
+    return numerator / denominator + (numerator % denominator >= half ? 1 : 0);
 }
 
 int32_t celestial_model_scale(int32_t value, uint32_t scale, uint32_t denominator) {
@@ -276,6 +278,10 @@ bool celestial_model_relax(int32_t *values,
                            int height,
                            celestial_model_spill_fn spill,
                            void *context) {
+    /* Invalid dimensions are rejected before the caller's grid is read. */
+    if (width <= 0 || height <= 0 || (size_t)width > SIZE_MAX / sizeof(int32_t) / (size_t)height) {
+        return false;
+    }
     size_t count = (size_t)width * height;
     bool active = false;
     for (size_t i = 0; i < count; i++) {
