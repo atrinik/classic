@@ -11,6 +11,7 @@
 
 #include <client_lighting.h>
 
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -367,8 +368,10 @@ void client_lighting_evaluate_stack(int levels,
                                     const client_lighting_emitter_t *emitters,
                                     size_t count,
                                     client_lighting_cell_t *cells) {
-    /* A grid without cells has no output to clear. */
-    if (width <= 0 || height <= 0) {
+    /* A grid without cells, or one whose byte size cannot be represented,
+     * has no output to clear. */
+    if (width <= 0 || height <= 0 ||
+        (size_t)width > SIZE_MAX / sizeof(*cells) / (size_t)height) {
         return;
     }
     size_t total = (size_t)width * height;

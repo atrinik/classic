@@ -13,6 +13,8 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <limits.h>
+#include <stdint.h>
 #include <string.h>
 
 #include <toolkit/light_profile.h>
@@ -418,6 +420,10 @@ static void test_invalid_grid_writes_nothing(void) {
     client_lighting_emitter_t emitter = {0};
     client_lighting_evaluate_stack(1, 0, -1, 4, NULL, &emitter, 1, sentinel);
     client_lighting_evaluate_stack(1, 0, 4, -1, NULL, &emitter, 1, sentinel);
+    /* So do dimensions whose byte size would overflow. */
+    if ((size_t)INT_MAX * (size_t)INT_MAX > SIZE_MAX / sizeof(client_lighting_cell_t)) {
+        client_lighting_evaluate_stack(1, 0, INT_MAX, INT_MAX, NULL, &emitter, 1, sentinel);
+    }
     const uint8_t *bytes = (const uint8_t *)sentinel;
     for (size_t i = 0; i < sizeof(sentinel); i++) {
         TEST_CHECK(bytes[i] == 0xab);

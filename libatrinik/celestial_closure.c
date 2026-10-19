@@ -248,6 +248,10 @@ static bool closure_payload_framed(const uint8_t *data, size_t len, int window_w
 bool celestial_closure_decode(const uint8_t *data, size_t len, int window_width,
                               int window_height, celestial_closure_t *closure,
                               bool *out_of_memory) {
+    bool ignored;
+    if (out_of_memory == NULL) {
+        out_of_memory = &ignored;
+    }
     *out_of_memory = false;
     if (closure == NULL) {
         return false;
@@ -332,9 +336,7 @@ bool celestial_closure_decode(const uint8_t *data, size_t len, int window_width,
 
 bool celestial_closure_read(const uint8_t *data, size_t len, int window_width, int window_height,
                             celestial_closure_t *closure) {
-    bool out_of_memory;
-    return celestial_closure_decode(data, len, window_width, window_height, closure,
-                                    &out_of_memory);
+    return celestial_closure_decode(data, len, window_width, window_height, closure, NULL);
 }
 
 uint32_t celestial_closure_value(const celestial_closure_t *closure, int depth, int x, int y) {
