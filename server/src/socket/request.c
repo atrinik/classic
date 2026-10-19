@@ -47,6 +47,7 @@
 #include <los.h>
 #include <spatial.h>
 #include <celestial_dependencies.h>
+#include <celestial_override.h>
 #include <light.h>
 #include <initialization.h>
 #include <animation.h>
@@ -1212,11 +1213,68 @@ static uint64_t map2_closure_identity(socket_struct *cs, const map2_celestial_ma
  * otherwise has none, so its cells are explicitly stored without celestial
  * light rather than under another map's profile.
  */
+/**
+ * Describe each depth's closure cells as one outside-record fragment over
+ * their bounds, keeping their shared profile slot or none, without building
+ * per-map fragments first.
+ * @param fragments Room for MAP2_LEVELS fragments, overwritten.
+ * @return The fragment count.
+ */
+static size_t map2_closure_by_depth(socket_struct *cs, const map2_celestial_maps_t *seen,
+                                    const int *slot_of, celestial_closure_fragment_t *fragments) {
+    size_t count = 0;
+    for (int index = 0; index < MAP2_LEVELS; index++) {
+        int min_x = INT_MAX, min_y = INT_MAX, max_x = -1, max_y = -1;
+        const mapstruct *last = NULL;
+        uint8_t slot = CELESTIAL_PROTOCOL_SLOT_NONE;
+        bool shared = true;
+        for (int ax = 0; ax < cs->mapx; ax++) {
+            for (int ay = 0; ay < cs->mapy; ay++) {
+                const mapstruct *map = map2_closure_maps[index][ax][ay];
+                if (map == NULL) {
+                    continue;
+                }
+                if (map != last) {
+                    uint8_t map_slot = map2_closure_slot(map, seen, slot_of);
+                    if (max_x < 0) {
+                        slot = map_slot;
+                    } else if (map_slot != slot) {
+                        shared = false;
+                    }
+                    last = map;
+                }
+                min_x = MIN(min_x, ax);
+                min_y = MIN(min_y, ay);
+                max_x = MAX(max_x, ax);
+                max_y = MAX(max_y, ay);
+            }
+        }
+        if (max_x < 0) {
+            continue;
+        }
+        celestial_closure_fragment_t *merged = &fragments[count++];
+        *merged = (celestial_closure_fragment_t){
+            .depth = (int8_t)(index - MAP2_MAX_DEPTH), .x = (uint8_t)min_x, .y = (uint8_t)min_y,
+            .width = (uint8_t)(max_x - min_x + 1), .height = (uint8_t)(max_y - min_y + 1),
+            .slot = shared ? slot : CELESTIAL_PROTOCOL_SLOT_NONE};
+        size_t cells = (size_t)merged->width * merged->height;
+        merged->values = xcalloc(cells, sizeof(*merged->values));
+        for (size_t cell = 0; cell < cells; cell++) {
+            merged->values[cell] = MAP2_CLOSURE_OPEN_AIR;
+        }
+    }
+    return count;
+}
+
 static bool map2_closure_collect(socket_struct *cs, const map2_celestial_maps_t *seen,
                                  const int *slot_of, celestial_closure_t *closure) {
     celestial_closure_fragment_t *fragments = NULL;
     const mapstruct **owners = NULL;
     size_t count = 0, capacity = 0;
+    /* Set once one fragment more than the cap is found: collection stops
+     * there, so the cap bounds the work, and each depth becomes one
+     * outside-record fragment below. */
+    bool by_depth = false;
     for (int index = 0; index < MAP2_LEVELS; index++) {
         int depth = index - MAP2_MAX_DEPTH;
         size_t first = count;
@@ -1231,11 +1289,18 @@ static bool map2_closure_collect(socket_struct *cs, const map2_celestial_maps_t 
                     map2_closure_maps[index][ax][ay] = NULL;
                     continue;
                 }
+                if (by_depth) {
+                    continue;
+                }
                 size_t fragment = first;
                 while (fragment < count && owners[fragment] != map) {
                     fragment++;
                 }
                 if (fragment == count) {
+                    if (count == map2_closure_fragments_max) {
+                        by_depth = true;
+                        continue;
+                    }
                     if (count == capacity) {
                         capacity = capacity == 0 ? 16 : capacity * 2;
                         fragments = xrealloc(fragments, capacity * sizeof(*fragments));
@@ -1257,7 +1322,7 @@ static bool map2_closure_collect(socket_struct *cs, const map2_celestial_maps_t 
                 grown->height = (uint8_t)(max_y - min_y + 1);
             }
         }
-        for (size_t fragment = first; fragment < count; fragment++) {
+        for (size_t fragment = first; !by_depth && fragment < count; fragment++) {
             celestial_closure_fragment_t *filled = &fragments[fragment];
             filled->values = xcalloc((size_t)filled->width * filled->height,
                                      sizeof(*filled->values));
@@ -1274,6 +1339,16 @@ static bool map2_closure_collect(socket_struct *cs, const map2_celestial_maps_t 
         }
     }
     free(owners);
+    if (by_depth) {
+        for (size_t i = 0; i < count; i++) {
+            free(fragments[i].values);
+        }
+        if (capacity < MAP2_LEVELS) {
+            fragments = xrealloc(fragments, MAP2_LEVELS * sizeof(*fragments));
+        }
+        count = map2_closure_by_depth(cs, seen, slot_of, fragments);
+        return celestial_closure_build(closure, 0, cs->mapx, cs->mapy, fragments, count);
+    }
     for (int farthest = MAP2_MAX_DEPTH; farthest >= 0; farthest--) {
         celestial_closure_t sized = {.count = count, .fragments = fragments};
         if (celestial_closure_size(&sized) <= map2_closure_payload_max) {
@@ -1332,6 +1407,29 @@ static uint64_t map2_packet_digest(const packet_struct *packet) {
     return digest;
 }
 
+/** Fold value into an FNV-1a style identity. */
+static void map2_identity_mix(uint64_t *identity, uint64_t value) {
+    *identity = (*identity ^ value) * UINT64_C(1099511628211);
+}
+
+/** Evaluate both hours of every assigned slot, in slot order. */
+static size_t map2_celestial_inputs(const map2_celestial_maps_t *seen, const int *slot_of,
+                                    celestial_protocol_slot_t *slots) {
+    size_t count = 0;
+    for (int slot = 0; slot < CELESTIAL_PROTOCOL_SLOT_NONE; slot++) {
+        for (size_t i = 0; i < seen->count; i++) {
+            if (slot_of[i] != slot) {
+                continue;
+            }
+            slots[count].slot = (uint8_t)slot;
+            celestial_light_model_inputs(seen->maps[i], (uint64_t)todtick, &slots[count].current);
+            celestial_light_model_inputs(seen->maps[i], (uint64_t)todtick + 1, &slots[count].next);
+            count++;
+        }
+    }
+    return count;
+}
+
 /**
  * Send the CELESTIAL inputs of the profiles this update shows when their
  * encoding differs from the last payload sent. A profile keeps its slot while
@@ -1380,29 +1478,46 @@ static bool map2_send_celestial(socket_struct *cs, const map2_celestial_maps_t *
         slot_of[i] = free_slot;
     }
 
+    /* A slot's inputs are a function of its profile (whose digest covers
+     * every constant), the hour and the lunar override: an unchanged
+     * identity encodes the CELESTIAL already sent, so it is not evaluated
+     * or encoded again. */
+    uint64_t identity = UINT64_C(1469598103934665603);
+    map2_identity_mix(&identity, todtick);
+    map2_identity_mix(&identity, celestial_override_revision());
     size_t count = 0;
     for (int slot = 0; slot < CELESTIAL_PROTOCOL_SLOT_NONE; slot++) {
         for (size_t i = 0; i < seen->count; i++) {
             if (slot_of[i] != slot) {
                 continue;
             }
-            slots[count].slot = (uint8_t)slot;
-            celestial_light_model_inputs(seen->maps[i], (uint64_t)todtick, &slots[count].current);
-            celestial_light_model_inputs(seen->maps[i], (uint64_t)todtick + 1, &slots[count].next);
+            map2_identity_mix(&identity, slot);
+            for (size_t byte = 0; byte < 32; byte += 8) {
+                uint64_t word;
+                memcpy(&word, &seen->profiles[i]->digest[byte], sizeof(word));
+                map2_identity_mix(&identity, word);
+            }
             count++;
         }
     }
+    map2_identity_mix(&identity, count);
 
     uint64_t start_seconds = (uint64_t)todtick * UINT64_C(3600);
-    /* Compare the encoding without the generation, which only advances. */
-    packet_struct *probe = packet_new(CLIENT_CMD_CELESTIAL, 16 + count * 43, 0);
-    if (!celestial_protocol_write(probe, 0, start_seconds, slots, count)) {
-        LOG(BUG, "Invalid celestial inputs; not sent.");
+    uint64_t digest = cs->celestial_sent_digest;
+    /* The slot table is shared by every socket: filled here or before a send. */
+    bool evaluated = !cs->celestial_sent || cs->celestial_inputs_identity != identity;
+    if (evaluated) {
+        (void)map2_celestial_inputs(seen, slot_of, slots);
+        /* Compare the encoding without the generation, which only advances. */
+        packet_struct *probe = packet_new(CLIENT_CMD_CELESTIAL, 16 + count * 43, 0);
+        if (!celestial_protocol_write(probe, 0, start_seconds, slots, count)) {
+            LOG(BUG, "Invalid celestial inputs; not sent.");
+            packet_free(probe);
+            return false;
+        }
+        digest = map2_packet_digest(probe);
         packet_free(probe);
-        return false;
     }
-    uint64_t digest = map2_packet_digest(probe);
-    packet_free(probe);
 
     /* The two payloads are one publication: either changing sends both. An
      * unchanged pair is decided from the closure's identity, before anything
@@ -1429,6 +1544,9 @@ static bool map2_send_celestial(socket_struct *cs, const map2_celestial_maps_t *
         return false;
     }
     cs->celestial_generation++;
+    if (!evaluated) {
+        (void)map2_celestial_inputs(seen, slot_of, slots);
+    }
     packet_struct *packet = packet_new(CLIENT_CMD_CELESTIAL, 16 + count * 43, 0);
     packet_debug_data(packet, 0, "Celestial inputs");
     /* The probe already validated these inputs; the write must still run
@@ -1439,6 +1557,7 @@ static bool map2_send_celestial(socket_struct *cs, const map2_celestial_maps_t *
     (void)written;
     cs->celestial_sent = true;
     cs->celestial_sent_digest = digest;
+    cs->celestial_inputs_identity = identity;
     socket_send_packet(cs, packet);
 
     closure.generation = cs->celestial_generation;

@@ -287,6 +287,9 @@ typedef struct socket_struct {
      * whose generation is celestial_generation. */
     uint64_t celestial_sent_digest;
     uint64_t celestial_structure_digest;
+    /** Identity of the inputs the sent CELESTIAL encodes: the hour, the
+     * lunar override revision and each slot's profile digest. */
+    uint64_t celestial_inputs_identity;
     uint32_t celestial_generation;
     bool celestial_sent;
 

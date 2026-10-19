@@ -3049,6 +3049,35 @@ START_TEST(test_celestial_inputs_precede_map_and_resend_only_on_change) {
     ck_assert_uint_eq(generation, 2);
     ck_assert_uint_eq(count, 1);
     ck_assert_uint_eq(slots[0].slot, 0);
+
+    /* A lunar override changes the inputs within the hour: the cached input
+     * identity notices, and they are sent again. */
+    celestial_model_inputs_t before;
+    celestial_light_model_inputs(map, (uint64_t)todtick, &before);
+    ck_assert(celestial_override_set_phase(CELESTIAL_LUNAR_FULL));
+    celestial_light_model_inputs(map, (uint64_t)todtick, &current);
+    if (current.lunar_age == before.lunar_age) {
+        ck_assert(celestial_override_set_phase(CELESTIAL_LUNAR_NEW));
+        celestial_light_model_inputs(map, (uint64_t)todtick, &current);
+    }
+    ck_assert_uint_ne(current.lunar_age, before.lunar_age);
+    socket_buffer_clear(cs);
+    CONTR(pl)->map_update_cmd = MAP_UPDATE_CMD_SAME;
+    draw_client_map2(pl);
+    celestial = queued_command_payload_find(cs, CLIENT_CMD_CELESTIAL);
+    ck_assert_ptr_nonnull(celestial);
+    ck_assert(celestial_protocol_read(celestial->data, celestial->len, &generation, &start, slots,
+                                      &count));
+    ck_assert_uint_eq(generation, 3);
+    ck_assert(memcmp(&slots[0].current, &current, sizeof(current)) == 0);
+    ck_assert(celestial_override_clear());
+    socket_buffer_clear(cs);
+    draw_client_map2(pl);
+    ck_assert_ptr_nonnull(queued_command_payload_find(cs, CLIENT_CMD_CELESTIAL));
+    /* Unchanged again: nothing is sent. */
+    socket_buffer_clear(cs);
+    draw_client_map2(pl);
+    ck_assert_ptr_null(queued_command_payload_find(cs, CLIENT_CMD_CELESTIAL));
     todtick = saved_hour;
 }
 END_TEST
@@ -5157,9 +5186,24 @@ START_TEST(test_celestial_closure_headers_too_large_coalesce_by_depth) {
     closure_redraw(pl);
     (void)map2_closure_fragments_max_exchange_for_test(fragments_limit);
     ck_assert(closure_last(pl, &capped));
+    /* Collection stops at the cap and describes each depth directly, the
+     * same shape as the size fallback: one outside-record fragment per depth
+     * over its closure cells. */
     size_t capped_depth0 = 0;
     for (size_t i = 0; i < capped.count; i++) {
-        capped_depth0 += capped.fragments[i].depth == 0;
+        const celestial_closure_fragment_t *fragment = &capped.fragments[i];
+        for (size_t j = 0; j < i; j++) {
+            ck_assert_int_ne(capped.fragments[j].depth, fragment->depth);
+        }
+        for (size_t cell = 0; cell < (size_t)fragment->width * fragment->height; cell++) {
+            ck_assert_uint_eq(fragment->values[cell], CELESTIAL_CLOSURE_OUTSIDE_RECORD);
+        }
+        if (fragment->depth == 0) {
+            capped_depth0++;
+            int east_x = 64 - pl->x + CONTR(pl)->cs->mapx_2;
+            ck_assert_int_lt(fragment->x, east_x);
+            ck_assert_int_ge(fragment->x + fragment->width, east_x + 1);
+        }
     }
     ck_assert_uint_eq(capped_depth0, 1);
     celestial_closure_free(&capped);
