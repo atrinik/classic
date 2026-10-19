@@ -367,9 +367,13 @@ void client_lighting_evaluate_stack(int levels,
                                     const client_lighting_emitter_t *emitters,
                                     size_t count,
                                     client_lighting_cell_t *cells) {
+    /* A grid without cells has no output to clear. */
+    if (width <= 0 || height <= 0) {
+        return;
+    }
     size_t total = (size_t)width * height;
     memset(cells, 0, total * sizeof(*cells));
-    if (count == 0 || width <= 0 || height <= 0 || target < 0 || target >= levels) {
+    if (count == 0 || target < 0 || target >= levels) {
         return;
     }
     client_lighting_grid_t grid = {.levels = levels, .target = target, .width = width,

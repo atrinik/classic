@@ -3570,7 +3570,10 @@ void map_set_occluder(int x, int y, uint16_t bits, uint16_t horizontal, uint8_t 
     header->client_light_known |= 2U;
     level_lighting_revision[current_level_index]++;
     if (evaluated) {
-        map_emitter_revision_bump(current_level_index);
+        /* A changed occluder, such as a closing door, alters every field
+         * whose light crosses it: they fail closed to coarse light rather
+         * than keep the old transport while rebuilds are deferred. */
+        map_emitter_revoke_reach(current_level_index, LIGHT_PROFILE_RADIUS_MAX);
     }
 }
 
@@ -7023,6 +7026,11 @@ bool widget_map_client_lighting_state_test(void) {
     map_client_lighting_fields[above].valid = true;
     map_set_layer_emitter(8, 8, layer, -2, 0, 0);
     success = success && !map_client_lighting_fields[above].valid;
+    /* A changed occluder, such as a closing door, revokes them too. */
+    map_client_lighting_fields[above].valid = true;
+    map_set_occluder(7, 8, MAP2_OCCLUDER_BLOCKSVIEW, 0, 0);
+    success = success && !map_client_lighting_fields[above].valid;
+    map_set_occluder(7, 8, 0, 0, 0);
     map_set_layer_emitter(8, 8, layer, 2, 0, UINT32_C(0xffffff));
     map_client_lighting_fields[above].valid = true;
     map_clear_cell(8, 8, false);
