@@ -411,6 +411,19 @@ static void evaluate_level(const client_lighting_emitter_t *emitters, size_t cou
                                    cells);
 }
 
+static void test_invalid_grid_writes_nothing(void) {
+    /* Invalid dimensions return before the output is touched. */
+    client_lighting_cell_t sentinel[2];
+    memset(sentinel, 0xab, sizeof(sentinel));
+    client_lighting_emitter_t emitter = {0};
+    client_lighting_evaluate_stack(1, 0, -1, 4, NULL, &emitter, 1, sentinel);
+    client_lighting_evaluate_stack(1, 0, 4, -1, NULL, &emitter, 1, sentinel);
+    const uint8_t *bytes = (const uint8_t *)sentinel;
+    for (size_t i = 0; i < sizeof(sentinel); i++) {
+        TEST_CHECK(bytes[i] == 0xab);
+    }
+}
+
 static void test_light_crosses_levels_like_the_server(void) {
     memset(stack_occluders, 0, sizeof(stack_occluders));
     client_lighting_emitter_t torch = {.x = 4, .y = 4, .z = 0, .radius = 13, .color = 0xffffff};
@@ -482,5 +495,6 @@ int main(void) {
     test_many_emitters_are_all_evaluated();
     test_compose_by_sign_over_the_coarse_floor();
     test_light_crosses_levels_like_the_server();
+    test_invalid_grid_writes_nothing();
     return EXIT_SUCCESS;
 }
