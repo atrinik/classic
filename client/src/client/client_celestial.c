@@ -165,17 +165,25 @@ bool client_celestial_publish(client_celestial_cell_fn cell, void *context) {
         client_celestial.staged_slots.generation !=
             client_celestial.staged_closure.generation) {
         /* Each half belongs to the MAP update right after it: one left
-         * unmatched by that update can never pair with a later one. */
+         * unmatched by that update can never pair with a later one. The
+         * server sends both halves together and considers them delivered,
+         * so a staged half left unpaired means a lost publication, and the
+         * caller reconnects. An update with nothing staged is ordinary. */
+        if (client_celestial.staged_slots_valid || client_celestial.staged_closure_valid) {
+            client_celestial.reconnect = true;
+        }
         client_celestial_discard_staged();
         return false;
     }
     /* Only slot 255 means no profile: a fragment naming a slot its paired
      * CELESTIAL omits makes the pair malformed, and it is discarded rather
-     * than published as darkness that no later duplicate could repair. */
+     * than published as darkness that no later duplicate could repair; the
+     * caller reconnects. */
     for (size_t i = 0; i < client_celestial.staged_closure.count; i++) {
         uint8_t slot = client_celestial.staged_closure.fragments[i].slot;
         if (slot != CELESTIAL_PROTOCOL_SLOT_NONE &&
             !client_celestial_assigned(&client_celestial.staged_slots, slot)) {
+            client_celestial.reconnect = true;
             client_celestial_discard_staged();
             return false;
         }

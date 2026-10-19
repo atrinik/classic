@@ -268,21 +268,29 @@ static void test_pair_publishes_only_together(void) {
     TEST_CHECK(client_celestial_apply(packet->data, packet->len));
     packet_free(packet);
     /* A CELESTIAL payload alone is not published, and its MAP update then
-     * expires it: it can never pair with a later structure. */
+     * expires it: it can never pair with a later structure. The server
+     * considers it delivered, so the connection is reset. */
     TEST_CHECK(!client_celestial_publish(NULL, NULL));
+    TEST_CHECK(client_celestial_take_reconnect());
     TEST_CHECK(client_celestial_generation() == 0);
     celestial_model_t model;
     TEST_CHECK(!client_celestial_model(9, false, &model));
     TEST_CHECK(stage_closure(1, NULL, 0));
     TEST_CHECK(!client_celestial_publish(NULL, NULL));
+    TEST_CHECK(client_celestial_take_reconnect());
+    /* An update with nothing staged is ordinary. */
+    TEST_CHECK(!client_celestial_publish(NULL, NULL));
+    TEST_CHECK(!client_celestial_take_reconnect());
     /* Halves of different generations do not pair, and are both expired. */
     packet = encode(2, &slot, 1);
     TEST_CHECK(client_celestial_apply(packet->data, packet->len));
     packet_free(packet);
     TEST_CHECK(stage_closure(3, NULL, 0));
     TEST_CHECK(!client_celestial_publish(NULL, NULL));
+    TEST_CHECK(client_celestial_take_reconnect());
     TEST_CHECK(stage_closure(2, NULL, 0));
     TEST_CHECK(!client_celestial_publish(NULL, NULL));
+    TEST_CHECK(client_celestial_take_reconnect());
     /* A failed MAP2 update discards both. */
     packet = encode(4, &slot, 1);
     TEST_CHECK(client_celestial_apply(packet->data, packet->len));
@@ -290,12 +298,14 @@ static void test_pair_publishes_only_together(void) {
     TEST_CHECK(stage_closure(4, NULL, 0));
     client_celestial_discard_staged();
     TEST_CHECK(!client_celestial_publish(NULL, NULL));
+    TEST_CHECK(!client_celestial_take_reconnect());
     /* Both halves staged before one update publish together. */
     packet = encode(5, &slot, 1);
     TEST_CHECK(client_celestial_apply(packet->data, packet->len));
     packet_free(packet);
     TEST_CHECK(stage_closure(5, NULL, 0));
     TEST_CHECK(client_celestial_publish(NULL, NULL));
+    TEST_CHECK(!client_celestial_take_reconnect());
     TEST_CHECK(client_celestial_generation() == 5);
     TEST_CHECK(client_celestial_model(9, false, &model));
     /* Stale closures are rejected once a pair is published. */
@@ -339,9 +349,12 @@ static void test_fragments_must_name_published_slots(void) {
     TEST_CHECK(stage_closure(1, fragments, 1));
     TEST_CHECK(!client_celestial_publish(NULL, NULL));
     TEST_CHECK(client_celestial_generation() == 0);
+    /* The server considers the pair delivered, so the connection is reset. */
+    TEST_CHECK(client_celestial_take_reconnect());
     /* The pair was discarded, so its CELESTIAL half cannot pair again. */
     TEST_CHECK(stage_closure(1, NULL, 0));
     TEST_CHECK(!client_celestial_publish(NULL, NULL));
+    TEST_CHECK(client_celestial_take_reconnect());
 }
 
 static void test_malformed_half_discards_the_staged_pair(void) {

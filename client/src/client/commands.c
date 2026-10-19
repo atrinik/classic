@@ -1646,6 +1646,9 @@ static void socket_command_map_apply(uint8_t *data, size_t len, size_t pos) {
     /* The celestial pair staged before this update is published with it. */
     if (client_celestial_publish(map_celestial_store, NULL)) {
         map_celestial_retire_outside(client_celestial_closure());
+    } else if (client_celestial_take_reconnect()) {
+        LOG(ERROR, "Rejected an inconsistent celestial publication; reconnecting.");
+        client_socket_close(&csocket);
     }
     map_pending_effects_commit();
     map_publication_generation++;
