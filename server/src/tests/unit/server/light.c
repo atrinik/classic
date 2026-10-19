@@ -1782,6 +1782,23 @@ START_TEST(test_client_lighting_local_cache_survives_unrelated_frees) {
 }
 END_TEST
 
+START_TEST(test_client_lighting_local_cache_retires_one_way_links_to_freed_maps) {
+    /* A dependency's one-way link to a map the walk never placed is still
+     * read by revalidation, so freeing that map retires the cache too. */
+    mapstruct *map = get_empty_map(9, 9);
+    mapstruct *spur = get_empty_map(9, 9);
+    map->tile_map[TILED_EAST] = spur;
+    add_colored_light(map, 4, 4, 13, LIGHT_COLOR_WHITE);
+    int level = light_local_level(map, 4, 4);
+    ck_assert_int_gt(level, 0);
+    uint64_t walks = light_local_walks_for_test();
+    free_map(spur, 1);
+    map->tile_map[TILED_EAST] = NULL;
+    ck_assert_int_eq(light_local_level(map, 4, 4), level);
+    ck_assert_uint_gt(light_local_walks_for_test(), walks);
+}
+END_TEST
+
 START_TEST(test_client_lighting_local_cache_ignores_unrelated_geometry) {
     /* A blocker change anywhere leaves a cached block on the constant-time
      * path, since coarse light reads only topology; a link change on one of
@@ -2168,6 +2185,7 @@ static Suite *suite(void) {
     tcase_add_test(tc_core, test_client_lighting_local_level_shares_tall_stacks);
     tcase_add_test(tc_core, test_client_lighting_local_source_epochs_are_per_map);
     tcase_add_test(tc_core, test_client_lighting_local_cache_ignores_unrelated_geometry);
+    tcase_add_test(tc_core, test_client_lighting_local_cache_retires_one_way_links_to_freed_maps);
     tcase_add_test(tc_core, test_client_lighting_local_cache_ignores_unreachable_sources);
     tcase_add_test(tc_core, test_client_lighting_local_cache_survives_unrelated_frees);
     tcase_add_test(tc_core, test_client_lighting_local_level_fails_closed_on_unbounded_cycles);
