@@ -14,6 +14,14 @@
  * The celestial closure of a viewer (server/doc/CLIENT_CELESTIAL.md): the
  * CELESTIAL_STRUCTURE codec, and the lattice the shared solver reads to
  * solve the closure's cells, with every cell outside it open air.
+ *
+ * Every pointer argument is mandatory and must not be NULL unless its
+ * function says otherwise; a NULL one is not checked. The exceptions:
+ * celestial_closure_free() and celestial_closure_solve_free() ignore NULL,
+ * celestial_closure_write(), celestial_closure_solve() and
+ * celestial_closure_solve_begin() return false or NULL for one,
+ * celestial_closure_build() takes NULL fragments with a count of 0, and
+ * celestial_closure_decode()'s out_of_memory is optional.
  */
 
 #ifndef TOOLKIT_CELESTIAL_CLOSURE_H
