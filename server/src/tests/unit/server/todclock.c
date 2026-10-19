@@ -25,6 +25,7 @@
 #include <toolkit/path.h>
 #include <toolkit/packet.h>
 #include <tod.h>
+#include <weather.h>
 
 static bool queued_drawinfo_has(socket_struct *cs, const char *expected) {
     for (packet_struct *packet = cs->packets; packet != NULL; packet = packet->next) {
@@ -286,6 +287,22 @@ START_TEST(test_set_persists_clockdata) {
 }
 END_TEST
 
+START_TEST(test_clock_stops_at_its_bound_without_hourly_effects) {
+    /* At TODCLOCK_MAX the clock no longer advances, and a tick that cannot
+     * advance applies no hourly change again, so darkness never drifts. */
+    unsigned long saved = todtick;
+    int saved_darkness = world_darkness;
+    todtick = TODCLOCK_MAX;
+    int darkness = world_darkness;
+    tick_the_clock();
+    tick_the_clock();
+    ck_assert_uint_eq(todtick, TODCLOCK_MAX);
+    ck_assert_int_eq(world_darkness, darkness);
+    todtick = saved;
+    world_darkness = saved_darkness;
+}
+END_TEST
+
 START_TEST(test_persisted_tick_reconstructs_without_rewrite) {
     char filename[HUGE_BUF];
     snprintf((filename), sizeof((filename)), "%s/clockdata", settings.datapath);
@@ -449,6 +466,7 @@ static Suite *suite(void) {
     tcase_add_unchecked_fixture(tc_persistence, check_setup, check_teardown);
     tcase_add_test(tc_persistence, test_write_replaces_clockdata_with_complete_value);
     tcase_add_test(tc_persistence, test_set_persists_clockdata);
+    tcase_add_test(tc_persistence, test_clock_stops_at_its_bound_without_hourly_effects);
     tcase_add_test(tc_persistence, test_persisted_tick_reconstructs_without_rewrite);
     tcase_add_test(tc_persistence, test_checked_shutdown_clock_and_maplog_failures);
     tcase_add_test(tc_persistence, test_checked_swap_retains_map_after_save_failure);

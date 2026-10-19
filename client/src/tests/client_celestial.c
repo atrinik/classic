@@ -619,6 +619,15 @@ static void test_worst_case_closure_cost(void) {
 }
 
 static void test_model_helpers_reject_edge_inputs(void) {
+    /* The publish helper sums in 64 bits and saturates at the int32 range. */
+    celestial_model_t bright;
+    memset(&bright, 0, sizeof(bright));
+    bright.solar_brightness = 256;
+    bright.solar_color[0] = UINT16_MAX;
+    int32_t published, published_rgb[3];
+    celestial_model_publish(&bright, INT32_MAX, 1, 1, INT32_MAX, 1, INT32_MAX, &published,
+                            published_rgb);
+    TEST_CHECK(published == INT32_MAX && published_rgb[0] == INT32_MAX);
     /* Scaling saturates rather than narrow an out-of-range result. */
     TEST_CHECK(celestial_model_scale(INT32_MAX, 2, 1) == INT32_MAX);
     TEST_CHECK(celestial_model_scale(INT32_MAX, UINT32_MAX, 1) == INT32_MAX);

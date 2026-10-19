@@ -3635,10 +3635,11 @@ void map_set_layer_emitter(int x, int y, int layer, int8_t radius, uint8_t flags
     map_cell_store_trim_slot(cells, index);
     level_lighting_revision[current_level_index]++;
     map_emitter_revision_bump(current_level_index);
-    if (present) {
-        /* A removed or replaced emitter changes its cell's summed profile,
-         * perhaps its sign or reach: every level within the full profile
-         * reach fails closed rather than keep the old contribution. */
+    if (present || count != 0) {
+        /* A removed or replaced emitter, or one added beside others, changes
+         * its cell's summed profile, perhaps its sign or reach: every level
+         * within the full profile reach fails closed rather than keep the
+         * old contribution. */
         map_emitter_revoke_reach(current_level_index, LIGHT_PROFILE_RADIUS_MAX);
     }
 }
@@ -7197,6 +7198,13 @@ bool widget_map_client_lighting_state_test(void) {
     map_client_lighting_fields[above].valid = true;
     map_set_layer_emitter(8, 8, layer, -2, 0, 0);
     success = success && !map_client_lighting_fields[above].valid;
+    /* So does adding one beside it on another layer: the tile's summed
+     * profile, perhaps its sign, changes. */
+    int other_layer = GET_MAP_LAYER(LAYER_WALL, 0);
+    map_client_lighting_fields[above].valid = true;
+    map_set_layer_emitter(8, 8, other_layer, 3, 0, UINT32_C(0xffffff));
+    success = success && !map_client_lighting_fields[above].valid;
+    map_set_layer_emitter(8, 8, other_layer, 0, 0, 0);
     /* A changed occluder, such as a closing door, revokes them too. */
     map_client_lighting_fields[above].valid = true;
     map_set_occluder(7, 8, MAP2_OCCLUDER_BLOCKSVIEW, 0, 0);

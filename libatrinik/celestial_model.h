@@ -169,7 +169,8 @@ typedef struct celestial_model {
  */
 bool celestial_model_inputs_valid(const celestial_model_inputs_t *inputs);
 
-/** Derive the sources of one hour from valid inputs. */
+/** Derive the sources of one hour from valid inputs. inputs and model are
+ * mandatory and must not be NULL (an unchecked precondition). */
 void celestial_model_evaluate(const celestial_model_inputs_t *inputs, celestial_model_t *model);
 
 /** Divide, rounding half up. The denominator must be nonzero (a
@@ -284,7 +285,9 @@ bool celestial_protocol_read(const uint8_t *data,
                              celestial_protocol_slot_t *slots,
                              size_t *count);
 
-/** Final scalar and RGB of one cell from its transported components. */
+/** Final scalar and RGB of one cell from its transported components. model,
+ * value and rgb are mandatory and must not be NULL (an unchecked
+ * precondition); every sum saturates at the int32 range. */
 void celestial_model_publish(const celestial_model_t *model,
                              int32_t direct,
                              int32_t diffuse,

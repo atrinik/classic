@@ -138,7 +138,8 @@ size_t celestial_closure_size(const celestial_closure_t *closure);
 
 /**
  * Decode CELESTIAL_STRUCTURE for a window of the given size.
- * @return False, leaving *closure empty, for truncation, trailing bytes,
+ * @return False, leaving *closure empty, for a payload longer than
+ * PACKET_PAYLOAD_MAX, truncation, trailing bytes,
  * more than CELESTIAL_CLOSURE_FRAGMENTS_MAX fragments, a run of length 0, a
  * run or rectangle exceeding its bounds, overlap, or a value outside the
  * closure value rules, and also when an allocation fails;

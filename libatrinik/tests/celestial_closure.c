@@ -187,6 +187,16 @@ static int test_rejections(void) {
     static const uint8_t reserved[][5] = {{4, 0x10, 0x00, 0x80, 0x00}};
     require(!celestial_closure_read(buffer, encode(buffer, 0, 0, 0, 2, 2, reserved, 1), 4, 4,
                                     &closure));
+    /* A payload longer than any packet is rejected before framing. */
+    {
+        uint8_t *huge = calloc(PACKET_PAYLOAD_MAX + 1, 1);
+        require(huge != NULL);
+        bool out_of_memory = true;
+        require(!celestial_closure_decode(huge, PACKET_PAYLOAD_MAX + 1, 32, 32, &closure,
+                                          &out_of_memory));
+        require(!out_of_memory);
+        free(huge);
+    }
     /* Overlapping fragments of one depth. */
     uint8_t twice[64];
     size_t len = encode(twice, 0, 0, 0, 2, 2, ok, 1);

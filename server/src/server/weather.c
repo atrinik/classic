@@ -68,10 +68,12 @@ void init_world_darkness(void) {
 void tick_the_clock(void) {
     timeofday_t tod;
 
-    /* Protocol time must stay representable: the clock stops at its bound. */
-    if (todtick < TODCLOCK_MAX) {
-        todtick++;
+    /* Protocol time must stay representable: the clock stops at its bound,
+     * and a stopped clock applies no hourly effect again. */
+    if (todtick >= TODCLOCK_MAX) {
+        return;
     }
+    todtick++;
 
     if (todtick % 20 == 0) {
         write_todclock();

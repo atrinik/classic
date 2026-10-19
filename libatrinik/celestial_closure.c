@@ -265,7 +265,10 @@ bool celestial_closure_decode(const uint8_t *data, size_t len, int window_width,
         return false;
     }
     memset(closure, 0, sizeof(*closure));
-    if (data == NULL || !closure_payload_framed(data, len, window_width, window_height)) {
+    /* A payload larger than one packet's is one celestial_closure_write()
+     * could never produce: it is malformed, whatever its framing. */
+    if (data == NULL || len > PACKET_PAYLOAD_MAX ||
+        !closure_payload_framed(data, len, window_width, window_height)) {
         return false;
     }
     memset(closure, 0, sizeof(*closure));

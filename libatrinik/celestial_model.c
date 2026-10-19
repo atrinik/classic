@@ -342,6 +342,11 @@ bool celestial_model_relax(int32_t *values,
     return true;
 }
 
+/** Narrow a sum of int32 terms, saturating at the int32 range. */
+static int32_t celestial_model_saturate(int64_t value) {
+    return value > INT32_MAX ? INT32_MAX : value < INT32_MIN ? INT32_MIN : (int32_t)value;
+}
+
 void celestial_model_publish(const celestial_model_t *model,
                              int32_t direct,
                              int32_t diffuse,
@@ -351,15 +356,18 @@ void celestial_model_publish(const celestial_model_t *model,
                              int32_t starlight,
                              int32_t *value,
                              int32_t rgb[3]) {
-    int32_t solar =
-        celestial_model_scale(direct + diffuse + aperture_direct, model->solar_brightness, 256);
-    int32_t moon_value = moon + moon_aperture;
-    *value = solar + moon_value + starlight;
+    /* Sums are taken in 64 bits and saturate, so no input can overflow;
+     * within the int32 range they are exact. */
+    int32_t solar = celestial_model_scale(
+        celestial_model_saturate((int64_t)direct + diffuse + aperture_direct),
+        model->solar_brightness, 256);
+    int32_t moon_value = celestial_model_saturate((int64_t)moon + moon_aperture);
+    *value = celestial_model_saturate((int64_t)solar + moon_value + starlight);
     for (size_t channel = 0; channel < 3; channel++) {
-        rgb[channel] = celestial_model_scale(solar, model->solar_color[channel], UINT16_MAX);
-        rgb[channel] += celestial_model_scale(moon_value, model->moon_color[channel], UINT16_MAX);
-        rgb[channel] +=
-            celestial_model_scale(starlight, model->starlight_color[channel], UINT16_MAX);
+        rgb[channel] = celestial_model_saturate(
+            (int64_t)celestial_model_scale(solar, model->solar_color[channel], UINT16_MAX) +
+            celestial_model_scale(moon_value, model->moon_color[channel], UINT16_MAX) +
+            celestial_model_scale(starlight, model->starlight_color[channel], UINT16_MAX));
     }
 }
 
