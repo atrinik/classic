@@ -192,7 +192,10 @@ int celestial_solver_scratch_height(const celestial_solver_lattice_t *lattice, v
  * order. Writes width × height values and RGB triples, row-major.
  * The lattice, its ops with resolve, dimensions, sky, continuous and light
  * set, the model and both output buffers are mandatory and must not be NULL;
- * observe, reserve and release are optional.
+ * observe, reserve and release are optional. The model must come from
+ * celestial_model_evaluate() of valid inputs, such as a decoded CELESTIAL
+ * slot's: its source values are then bounded so the publish's sums cannot
+ * overflow, which a handcrafted model is not checked for.
  * Returns false only when the lattice reports invalid dimensions or an
  * allocation fails; the outputs are then unspecified.
  */

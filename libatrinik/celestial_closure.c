@@ -208,7 +208,7 @@ bool celestial_closure_write(packet_struct *packet, const celestial_closure_t *c
 
 /**
  * Check the whole payload's framing without allocating: every fragment's
- * header, bounds and runs, the cell total and the exact length. Only a
+ * header, depth, bounds and runs, the cell total and the exact length. Only a
  * framed payload is allocated, so running out of memory is reported for no
  * malformed framing; overlap and sky exits, which need the built index, are
  * checked once it exists.
@@ -227,11 +227,13 @@ static bool closure_payload_framed(const uint8_t *data, size_t len, int window_w
         if (len - pos < 6) {
             return false;
         }
+        int depth = (int8_t)data[pos];
         int x = data[pos + 1], y = data[pos + 2], width = data[pos + 3], height = data[pos + 4];
         size_t cells = (size_t)width * height;
         total += cells;
         pos += 6;
-        if (cells == 0 || x + width > window_width || y + height > window_height ||
+        if (depth < -CELESTIAL_CLOSURE_DEPTH_MAX || depth > CELESTIAL_CLOSURE_DEPTH_MAX ||
+            cells == 0 || x + width > window_width || y + height > window_height ||
             total > total_max) {
             return false;
         }
