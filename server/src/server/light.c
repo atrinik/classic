@@ -1720,6 +1720,14 @@ void light_local_forget(mapstruct *map) {
             continue;
         }
         (void)light_local_deps_find(other, map, &found);
+        /* Revalidation also reads the maps its dependencies link to, so a
+         * live dependency's link here, one-way or not, retires the set too.
+         * The dependencies are live: only their link pointers are read. */
+        for (size_t dep = 0; !found && dep < other->light_local_deps_count; dep++) {
+            for (int tile = 0; !found && tile < TILED_NUM; tile++) {
+                found = other->light_local_deps[dep]->tile_map[tile] == map;
+            }
+        }
         if (!found) {
             continue;
         }
