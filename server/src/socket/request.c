@@ -3430,12 +3430,6 @@ void draw_client_map2(object *pl) {
         view_socket->state == ST_DEAD || view_socket->state == ST_ZOMBIE) {
         goto abort_map;
     }
-    for (size_t i = 0; i < explored_count; i++) {
-        mapstruct *discovered = explored[i].map;
-        exploration_mark(view_socket, discovered->path, MAP_WIDTH(discovered),
-                         MAP_HEIGHT(discovered), explored[i].x, explored[i].y);
-    }
-    exploration_flush(view_socket, false);
     bool synchronize_time = CONTR(pl)->map_update_cmd == MAP_UPDATE_CMD_NEW ||
                             CONTR(pl)->map_update_cmd == MAP_UPDATE_CMD_CONNECTED;
     /* Celestial inputs precede the map update that shows their profiles; an
@@ -3443,6 +3437,13 @@ void draw_client_map2(object *pl) {
     if (!map2_send_celestial(CONTR(pl)->cs, &celestial_maps, pl)) {
         goto abort_map;
     }
+    /* Only an update that will be published commits what it shows. */
+    for (size_t i = 0; i < explored_count; i++) {
+        mapstruct *discovered = explored[i].map;
+        exploration_mark(view_socket, discovered->path, MAP_WIDTH(discovered),
+                         MAP_HEIGHT(discovered), explored[i].x, explored[i].y);
+    }
+    exploration_flush(view_socket, false);
     socket_send_packet(CONTR(pl)->cs, packet_header);
     for (uint16_t i = 0; i < continuation_packet_count; i++) {
         socket_send_packet(CONTR(pl)->cs, continuation_packets[i]);
