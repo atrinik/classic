@@ -519,6 +519,14 @@ static int test_invalid_inputs_fail_without_crashing(void) {
     require(!celestial_closure_decode(truncated_runs, sizeof(truncated_runs), 255, 255,
                                       &decoded, &out_of_memory));
     require(!out_of_memory);
+    /* A well-formed first fragment before a malformed second one: the whole
+     * payload is framed before anything is allocated. */
+    static const uint8_t bad_second[] = {0, 0, 0, 1, 0, 2, 0, 0, 0, 2, 2, 3, 4, 0, 0, 0x80, 0,
+                                         0, 0, 0, 0, 0, 3};
+    out_of_memory = true;
+    require(!celestial_closure_decode(bad_second, sizeof(bad_second), 9, 9, &decoded,
+                                      &out_of_memory));
+    require(!out_of_memory);
     /* Only a built closure is encoded. */
     celestial_closure_t unbuilt = {.window_width = 9, .window_height = 9};
     packet_struct *refused = packet_new(0, 64, 0);

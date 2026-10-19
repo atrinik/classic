@@ -79,6 +79,15 @@ typedef struct celestial_solver_cursor {
  * closure window, and far above the server's 64-cell maps. */
 #define CELESTIAL_SOLVER_DIMENSION_MAX 255
 
+/*
+ * Arguments: unless an entry point says otherwise, every pointer it takes
+ * (lattice, its ops, cursor, ray, event, model and output buffers) is
+ * mandatory and must not be NULL, and the ops must set resolve, dimensions,
+ * sky, continuous and light; observe, reserve and release are optional.
+ * Entry points validate values (sizes, directions, coordinates), not these
+ * preconditions.
+ */
+
 /** The structure a lattice exposes to the solver. */
 typedef struct celestial_solver_ops {
     /** Resolve a point given in the origin map's coordinates (z relative to

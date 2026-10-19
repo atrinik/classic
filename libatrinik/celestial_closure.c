@@ -201,24 +201,48 @@ bool celestial_closure_write(packet_struct *packet, const celestial_closure_t *c
 }
 
 /**
- * Check, without allocating, that the runs at data[pos] encode exactly cells
- * valid values: their framing and coverage are proven before a fragment's
- * array is allocated, so only a well-formed payload can run out of memory.
+ * Check the whole payload's framing without allocating: every fragment's
+ * header, bounds and runs, the cell total and the exact length. Only a
+ * framed payload is allocated, so running out of memory is reported for no
+ * malformed framing; overlap and sky exits, which need the built index, are
+ * checked once it exists.
  */
-static bool closure_runs_valid(const uint8_t *data, size_t len, size_t pos, size_t cells) {
-    for (size_t cell = 0; cell < cells; pos += 5) {
-        if (pos > len || len - pos < 5) {
-            return false;
-        }
-        uint8_t length = data[pos];
-        uint32_t value = (uint32_t)data[pos + 1] << 24 | (uint32_t)data[pos + 2] << 16 |
-                         (uint32_t)data[pos + 3] << 8 | data[pos + 4];
-        if (length == 0 || length > cells - cell || !celestial_closure_value_valid(value)) {
-            return false;
-        }
-        cell += length;
+static bool closure_payload_framed(const uint8_t *data, size_t len, int window_width,
+                                   int window_height) {
+    if (len < 6) {
+        return false;
     }
-    return true;
+    size_t count = (size_t)data[4] << 8 | data[5];
+    size_t pos = 6, total = 0;
+    size_t total_max = window_width > 0 && window_height > 0
+                           ? (size_t)window_width * window_height * CELESTIAL_CLOSURE_DEPTHS
+                           : 0;
+    for (size_t i = 0; i < count; i++) {
+        if (len - pos < 6) {
+            return false;
+        }
+        int x = data[pos + 1], y = data[pos + 2], width = data[pos + 3], height = data[pos + 4];
+        size_t cells = (size_t)width * height;
+        total += cells;
+        pos += 6;
+        if (cells == 0 || x + width > window_width || y + height > window_height ||
+            total > total_max) {
+            return false;
+        }
+        for (size_t cell = 0; cell < cells; pos += 5) {
+            if (len - pos < 5) {
+                return false;
+            }
+            uint8_t length = data[pos];
+            uint32_t value = (uint32_t)data[pos + 1] << 24 | (uint32_t)data[pos + 2] << 16 |
+                             (uint32_t)data[pos + 3] << 8 | data[pos + 4];
+            if (length == 0 || length > cells - cell || !celestial_closure_value_valid(value)) {
+                return false;
+            }
+            cell += length;
+        }
+    }
+    return pos == len;
 }
 
 bool celestial_closure_decode(const uint8_t *data, size_t len, int window_width,
@@ -226,6 +250,10 @@ bool celestial_closure_decode(const uint8_t *data, size_t len, int window_width,
                               bool *out_of_memory) {
     *out_of_memory = false;
     if (closure == NULL) {
+        return false;
+    }
+    memset(closure, 0, sizeof(*closure));
+    if (data == NULL || !closure_payload_framed(data, len, window_width, window_height)) {
         return false;
     }
     memset(closure, 0, sizeof(*closure));
@@ -273,8 +301,7 @@ bool celestial_closure_decode(const uint8_t *data, size_t len, int window_width,
         total += cells;
         valid = packet_reader_error(&reader) == PACKET_ERROR_NONE && cells != 0 &&
                 fragment->x + fragment->width <= window_width &&
-                fragment->y + fragment->height <= window_height && total <= total_max &&
-                closure_runs_valid(data, len, reader.pos, cells);
+                fragment->y + fragment->height <= window_height && total <= total_max;
         if (valid) {
             fragment->values = calloc(cells, sizeof(*fragment->values));
             valid = fragment->values != NULL;
@@ -420,7 +447,19 @@ static bool lattice_sky(void *context, const celestial_solver_face_t *face) {
     closure_lattice *lattice = context;
     uint32_t from = lattice_value(lattice, &face->from);
     if (from != 0) {
-        return (from & CELESTIAL_CLOSURE_SKY_EXIT) != 0;
+        if ((from & CELESTIAL_CLOSURE_SKY_EXIT) != 0) {
+            return true;
+        }
+        /* Above the top closure depth everything is open air, so a ray
+         * leaving it through a fully open cover and overhead face has
+         * reached the sky: light() would give that crossing full
+         * transmission and no aperture, and saving the crossing keeps a ray
+         * from the lowest depth within its event bound. */
+        const lattice_handle *to = face->to.map;
+        uint32_t open_up = CELESTIAL_CLOSURE_COVER_OPEN | CELESTIAL_CLOSURE_CONTINUOUS_UP |
+                           (UINT32_C(3) << CELESTIAL_CLOSURE_OVERHEAD_SHIFT);
+        return to != NULL && to->fragment == NULL && to->depth > CELESTIAL_CLOSURE_DEPTH_MAX &&
+               (from & open_up) == open_up && (from & CELESTIAL_CLOSURE_OVERHEAD_APERTURE) == 0;
     }
     /* Open air above open air is the sky. */
     return face->from.map != NULL && lattice_value(lattice, &face->to) == 0;
