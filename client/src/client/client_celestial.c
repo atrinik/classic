@@ -59,6 +59,15 @@ static bool client_celestial_assigned(const client_celestial_slots_t *slots, uin
            ((slots->assigned[slot / 64] >> (slot % 64)) & 1U);
 }
 
+void client_celestial_abandon_staged(void) {
+    /* A staged half belonged to the failed update; the server will not send
+     * that publication again. */
+    if (client_celestial.staged_slots_valid || client_celestial.staged_closure_valid) {
+        client_celestial.reconnect = true;
+    }
+    client_celestial_discard_staged();
+}
+
 void client_celestial_discard_staged(void) {
     client_celestial.staged_slots_valid = false;
     celestial_closure_free(&client_celestial.staged_closure);
@@ -85,8 +94,9 @@ bool client_celestial_apply(const uint8_t *data, size_t len) {
     uint64_t start_seconds;
     size_t count;
     if (!celestial_protocol_read(data, len, &generation, &start_seconds, slots, &count)) {
-        /* A malformed half voids the pair: its counterpart must not wait
-         * staged for a MAP2 update that cannot publish it. */
+        /* A malformed half voids the pair, and the server, which considers
+         * it delivered, would never resend it: the connection is reset. */
+        client_celestial.reconnect = true;
         client_celestial_discard_staged();
         return false;
     }
@@ -119,10 +129,11 @@ bool client_celestial_apply_structure(const uint8_t *data, size_t len, int windo
     bool out_of_memory;
     if (!celestial_closure_decode(data, len, window_width, window_height, &closure,
                                   &out_of_memory)) {
-        /* Out of memory may hide a malformed payload, and a valid one the
-         * server will not resend: either way the caller reconnects rather
+        /* Malformed or out of memory, the server considers the pair
+         * delivered and will not resend it: the caller reconnects rather
          * than present a stale closure or abort on bad input. */
-        client_celestial.reconnect = out_of_memory;
+        (void)out_of_memory;
+        client_celestial.reconnect = true;
         client_celestial_discard_staged();
         return false;
     }

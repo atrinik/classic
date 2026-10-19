@@ -4865,6 +4865,56 @@ START_TEST(test_celestial_closure_static_faces_read_only_selected_objects) {
 }
 END_TEST
 
+START_TEST(test_celestial_closure_static_faces_skip_camera_hidden_exits) {
+    mapstruct *old_map;
+    object *pl;
+    check_setup_env_pl(&old_map, &pl);
+    unsigned long saved_hour = todtick;
+    todtick = 5 * HOURS_PER_MONTH + 12;
+    mapstruct *lower = closure_open_world("/closure/exit-lower");
+    mapstruct *upper = get_empty_map(64, 64);
+    FREE_AND_COPY_HASH(upper->path, "/closure/exit-upper");
+    closure_fixture_schema(upper);
+    FREE_AND_COPY_HASH(lower->tile_path[TILED_UP], upper->path);
+    FREE_AND_COPY_HASH(upper->tile_path[TILED_DOWN], lower->path);
+    lower->tile_map[TILED_UP] = upper;
+    upper->tile_map[TILED_DOWN] = lower;
+    lower->celestial_sky_above = CELESTIAL_SKY_LINKED;
+    lower->celestial_boundary[TILED_UP] = CELESTIAL_BOUNDARY_CONTINUOUS;
+    upper->celestial_boundary[TILED_DOWN] = CELESTIAL_BOUNDARY_CONTINUOUS;
+    /* The viewer stands under a roof the camera cuts away; above (32, 31) is
+     * no roof but an exit that also counts as a floor. MAP2 withholds the
+     * exit there, so it must not shade the cell below either. */
+    for (int y = 29; y <= 33; y++) {
+        for (int x = 29; x <= 33; x++) {
+            if (x == 32 && y == 31) {
+                continue;
+            }
+            object *roof = arch_get("roof_thatch");
+            roof->x = x;
+            roof->y = y;
+            ck_assert_ptr_nonnull(object_insert_map(roof, upper, NULL, 0));
+        }
+    }
+    object *exit = arch_get("stairs_down");
+    exit->x = 32;
+    exit->y = 31;
+    SET_FLAG(exit, FLAG_IS_FLOOR);
+    exit = object_insert_map(exit, upper, NULL, 0);
+    ck_assert_ptr_nonnull(exit);
+    ck_assert_uint_ne(celestial_structure_faces(exit) & CELESTIAL_FACE_DOWN, 0);
+    request_move_player(&pl, lower, 31, 31);
+    closure_redraw(pl);
+    celestial_closure_t closure;
+    ck_assert(closure_last(pl, &closure));
+    uint32_t under_exit = closure_cell(pl, &closure, 32, 31);
+    ck_assert_uint_ne(under_exit, 0);
+    ck_assert_uint_eq((under_exit >> CELESTIAL_CLOSURE_OVERHEAD_SHIFT) & 3U, 3);
+    celestial_closure_free(&closure);
+    todtick = saved_hour;
+}
+END_TEST
+
 START_TEST(test_celestial_closure_is_resent_when_the_window_moves) {
     mapstruct *old_map;
     object *pl;
@@ -5096,6 +5146,7 @@ static Suite *suite(void) {
     tcase_add_test(tc_closure, test_celestial_closure_static_faces_read_only_selected_objects);
     tcase_add_test(tc_closure, test_hidden_door_state_does_not_reach_base_radiance);
     tcase_add_test(tc_closure, test_view_prepares_every_shown_stack_for_the_next_hour);
+    tcase_add_test(tc_closure, test_celestial_closure_static_faces_skip_camera_hidden_exits);
     tcase_add_test(tc_closure, test_celestial_closure_omits_cells_whose_objects_are_all_filtered);
     tcase_add_test(tc_closure, test_celestial_closure_is_resent_when_the_window_moves);
     tcase_add_test(tc_closure, test_celestial_closure_too_large_is_sent_as_open_air);

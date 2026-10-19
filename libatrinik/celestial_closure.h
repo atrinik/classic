@@ -97,7 +97,8 @@ void celestial_closure_free(celestial_closure_t *closure);
  * fragment array and of each fragment's value array. *closure is
  * overwritten, never freed: pass an empty one, freeing a populated closure
  * first.
- * @return False, freeing everything, for any fragment the codec would reject.
+ * @return False, freeing everything (the fragments included), for any
+ * fragment the codec would reject or when an allocation fails.
  */
 bool celestial_closure_build(celestial_closure_t *closure, uint32_t generation, int window_width,
                              int window_height, celestial_closure_fragment_t *fragments,

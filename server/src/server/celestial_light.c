@@ -305,8 +305,12 @@ static uint16_t closure_static_down(mapstruct *map, int x, int y, const object *
              * that may hide it is never disclosed here, where no plugin is
              * asked. */
             const object *head = HEAD(op);
+            /* MAP2 withholds an exit's whole layer under camera cover, so as
+             * not to reveal a portal beneath a roof; a sent exit reaches the
+             * closure through the accumulator, never through this scan. */
             if ((op->layer != LAYER_WALL && QUERY_FLAG(op, FLAG_HIDDEN)) ||
-                HAS_EVENT(head, EVENT_ASK_SHOW) || !map2_direction_shown(op, viewer, ax, ay)) {
+                HAS_EVENT(head, EVENT_ASK_SHOW) || head->type == EXIT ||
+                !map2_direction_shown(op, viewer, ax, ay)) {
                 continue;
             }
             uint8_t faces = celestial_structure_faces(op);

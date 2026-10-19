@@ -1159,6 +1159,53 @@ size_t map2_closure_payload_max_exchange_for_test(size_t max) {
 #define MAP2_CLOSURE_OPEN_AIR CELESTIAL_CLOSURE_OUTSIDE_RECORD
 
 /**
+ * Drop the records of cells outside this update's closure, and return the
+ * identity of everything the closure is built from: each kept cell's
+ * position, map, record and profile slot, the window anchor and the
+ * fallback limits. Equal identities build the same closure, so an unchanged
+ * one is never materialized, and membership a lossy fallback would encode
+ * as the same bytes still counts.
+ */
+static uint64_t map2_closure_identity(socket_struct *cs, const map2_celestial_maps_t *seen,
+                                      const int *slot_of, const object *pl) {
+    uint64_t identity = UINT64_C(1469598103934665603);
+#define MAP2_IDENTITY_MIX(value) \
+    (identity = (identity ^ (uint64_t)(value)) * UINT64_C(1099511628211))
+    for (int index = 0; index < MAP2_LEVELS; index++) {
+        int depth = index - MAP2_MAX_DEPTH;
+        for (int ax = 0; ax < cs->mapx; ax++) {
+            for (int ay = 0; ay < cs->mapy; ay++) {
+                const mapstruct *map = map2_closure_maps[index][ax][ay];
+                MapCell *cell = map_client_cache_cell(&cs->lastmap, depth, ax, ay, false);
+                if (map == NULL || cell == NULL || cell->celestial_structure == 0) {
+                    if (cell != NULL) {
+                        cell->celestial_structure = 0;
+                    }
+                    map2_closure_maps[index][ax][ay] = NULL;
+                    continue;
+                }
+                MAP2_IDENTITY_MIX((uint64_t)index << 16 | (uint64_t)ax << 8 | (uint64_t)ay);
+                MAP2_IDENTITY_MIX((uintptr_t)map);
+                MAP2_IDENTITY_MIX(map->count);
+                MAP2_IDENTITY_MIX(cell->celestial_structure);
+                MAP2_IDENTITY_MIX(map2_closure_slot(map, seen, slot_of));
+            }
+        }
+    }
+    /* The closure is relative to the window: the same records describe other
+     * cells once the window moves, so a move always sends a new pair. */
+    MAP2_IDENTITY_MIX((uintptr_t)pl->map);
+    MAP2_IDENTITY_MIX((uint32_t)pl->x);
+    MAP2_IDENTITY_MIX((uint32_t)pl->y);
+    MAP2_IDENTITY_MIX(cs->mapx);
+    MAP2_IDENTITY_MIX(cs->mapy);
+    MAP2_IDENTITY_MIX(map2_closure_payload_max);
+    MAP2_IDENTITY_MIX(map2_closure_fragments_max);
+#undef MAP2_IDENTITY_MIX
+    return identity;
+}
+
+/**
  * Collect this update's celestial closure from the per-socket records: one
  * fragment per map and depth, the bounding rectangle of its closure cells.
  * Records of cells outside the closure are dropped. A closure too large for
@@ -1173,11 +1220,7 @@ size_t map2_closure_payload_max_exchange_for_test(size_t max) {
  * light rather than under another map's profile.
  */
 static bool map2_closure_collect(socket_struct *cs, const map2_celestial_maps_t *seen,
-                                 const int *slot_of, celestial_closure_t *closure,
-                                 uint64_t *membership) {
-    /* Which cells hold records: a lossy fallback can encode a change of it
-     * as the same bytes, so the publication digest mixes it in too. */
-    *membership = UINT64_C(1469598103934665603);
+                                 const int *slot_of, celestial_closure_t *closure) {
     celestial_closure_fragment_t *fragments = NULL;
     const mapstruct **owners = NULL;
     size_t count = 0, capacity = 0;
@@ -1195,8 +1238,6 @@ static bool map2_closure_collect(socket_struct *cs, const map2_celestial_maps_t 
                     map2_closure_maps[index][ax][ay] = NULL;
                     continue;
                 }
-                uint64_t member = (uint64_t)index << 16 | (uint64_t)ax << 8 | (uint64_t)ay;
-                *membership = (*membership ^ member) * UINT64_C(1099511628211);
                 size_t fragment = first;
                 while (fragment < count && owners[fragment] != map) {
                     fragment++;
@@ -1370,34 +1411,20 @@ static bool map2_send_celestial(socket_struct *cs, const map2_celestial_maps_t *
     uint64_t digest = map2_packet_digest(probe);
     packet_free(probe);
 
+    /* The two payloads are one publication: either changing sends both. An
+     * unchanged pair is decided from the closure's identity, before anything
+     * is built or encoded. */
+    uint64_t structure_digest = map2_closure_identity(cs, seen, slot_of, pl);
+    if (cs->celestial_sent && cs->celestial_sent_digest == digest &&
+        cs->celestial_structure_digest == structure_digest) {
+        return true;
+    }
     celestial_closure_t closure;
-    uint64_t membership;
-    if (!map2_closure_collect(cs, seen, slot_of, &closure, &membership)) {
+    if (!map2_closure_collect(cs, seen, slot_of, &closure)) {
         /* Out of memory, or a fragment the server built that the codec
          * rejects (a bug): the update that needs this pair is not sent. */
         LOG(BUG, "Invalid celestial closure; not sent.");
         return false;
-    }
-    probe = packet_new(CLIENT_CMD_CELESTIAL_STRUCTURE, celestial_closure_size(&closure), 0);
-    bool encoded = celestial_closure_write(probe, &closure);
-    HARD_ASSERT(encoded);
-    (void)encoded;
-    uint64_t structure_digest = map2_packet_digest(probe);
-    structure_digest = (structure_digest ^ membership) * UINT64_C(1099511628211);
-    /* The closure is relative to the window: the same bytes describe other
-     * cells once the window moves, so where it is anchored is part of what
-     * was published, and a move always sends a new pair. */
-    uint64_t anchor[] = {(uint64_t)(uintptr_t)pl->map, (uint64_t)(uint32_t)pl->x,
-                         (uint64_t)(uint32_t)pl->y, (uint64_t)cs->mapx, (uint64_t)cs->mapy};
-    for (size_t i = 0; i < arraysize(anchor); i++) {
-        structure_digest = (structure_digest ^ anchor[i]) * UINT64_C(1099511628211);
-    }
-    packet_free(probe);
-    /* The two payloads are one publication: either changing sends both. */
-    if (cs->celestial_sent && cs->celestial_sent_digest == digest &&
-        cs->celestial_structure_digest == structure_digest) {
-        celestial_closure_free(&closure);
-        return true;
     }
     if (cs->celestial_generation == UINT32_MAX) {
         /* The client accepts only advancing generations, so a wrapped one

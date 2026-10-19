@@ -753,7 +753,12 @@ void socket_command_player_status(uint8_t *data, size_t len, size_t pos) {
 
 void socket_command_celestial(uint8_t *data, size_t len, size_t pos) {
     if (pos > len || !client_celestial_apply(data + pos, len - pos)) {
-        LOG(PACKET, "Rejected malformed or stale celestial packet.");
+        if (pos > len || client_celestial_take_reconnect()) {
+            LOG(ERROR, "Rejected a malformed celestial packet; reconnecting.");
+            client_socket_close(&csocket);
+            return;
+        }
+        LOG(PACKET, "Rejected stale celestial packet.");
     }
 }
 
@@ -763,12 +768,12 @@ void socket_command_celestial_structure(uint8_t *data, size_t len, size_t pos) {
     int wire_height = MAP_LOOK_TO_WIRE_SIZE(setting_get_int(OPT_CAT_MAP, OPT_MAP_HEIGHT));
     if (pos > len ||
         !client_celestial_apply_structure(data + pos, len - pos, wire_width, wire_height)) {
-        if (client_celestial_take_reconnect()) {
-            LOG(ERROR, "Out of memory decoding celestial structure; reconnecting.");
+        if (pos > len || client_celestial_take_reconnect()) {
+            LOG(ERROR, "Rejected an undecodable celestial structure packet; reconnecting.");
             client_socket_close(&csocket);
             return;
         }
-        LOG(PACKET, "Rejected malformed or stale celestial structure packet.");
+        LOG(PACKET, "Rejected stale celestial structure packet.");
     }
 }
 
@@ -939,7 +944,11 @@ void socket_command_map_abort_pending(void) {
     map_state_transaction_abort();
     map_pending_effects_abort();
     /* The celestial pair belongs to the update that failed. */
-    client_celestial_discard_staged();
+    client_celestial_abandon_staged();
+    if (client_celestial_take_reconnect()) {
+        LOG(ERROR, "A failed map update lost its celestial publication; reconnecting.");
+        client_socket_close(&csocket);
+    }
     map_continuation_visible_change = false;
     map_continuation_region_fow_update = false;
 }
