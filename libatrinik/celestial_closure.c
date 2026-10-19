@@ -200,6 +200,27 @@ bool celestial_closure_write(packet_struct *packet, const celestial_closure_t *c
     return true;
 }
 
+/**
+ * Check, without allocating, that the runs at data[pos] encode exactly cells
+ * valid values: their framing and coverage are proven before a fragment's
+ * array is allocated, so only a well-formed payload can run out of memory.
+ */
+static bool closure_runs_valid(const uint8_t *data, size_t len, size_t pos, size_t cells) {
+    for (size_t cell = 0; cell < cells; pos += 5) {
+        if (pos > len || len - pos < 5) {
+            return false;
+        }
+        uint8_t length = data[pos];
+        uint32_t value = (uint32_t)data[pos + 1] << 24 | (uint32_t)data[pos + 2] << 16 |
+                         (uint32_t)data[pos + 3] << 8 | data[pos + 4];
+        if (length == 0 || length > cells - cell || !celestial_closure_value_valid(value)) {
+            return false;
+        }
+        cell += length;
+    }
+    return true;
+}
+
 bool celestial_closure_decode(const uint8_t *data, size_t len, int window_width,
                               int window_height, celestial_closure_t *closure,
                               bool *out_of_memory) {
@@ -252,7 +273,8 @@ bool celestial_closure_decode(const uint8_t *data, size_t len, int window_width,
         total += cells;
         valid = packet_reader_error(&reader) == PACKET_ERROR_NONE && cells != 0 &&
                 fragment->x + fragment->width <= window_width &&
-                fragment->y + fragment->height <= window_height && total <= total_max;
+                fragment->y + fragment->height <= window_height && total <= total_max &&
+                closure_runs_valid(data, len, reader.pos, cells);
         if (valid) {
             fragment->values = calloc(cells, sizeof(*fragment->values));
             valid = fragment->values != NULL;

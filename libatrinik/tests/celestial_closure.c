@@ -511,6 +511,14 @@ static int test_invalid_inputs_fail_without_crashing(void) {
     require(!celestial_closure_decode(claims_many, sizeof(claims_many), 9, 9, &decoded,
                                       &out_of_memory));
     require(!out_of_memory);
+    /* One 255x255 fragment with a single 255-cell run: truncated, found so
+     * before its array is allocated. */
+    static const uint8_t truncated_runs[] = {0, 0, 0, 1, 0, 1, 0, 0, 0, 255, 255, 3,
+                                             255, 0, 0, 0x80, 0};
+    out_of_memory = true;
+    require(!celestial_closure_decode(truncated_runs, sizeof(truncated_runs), 255, 255,
+                                      &decoded, &out_of_memory));
+    require(!out_of_memory);
     /* Only a built closure is encoded. */
     celestial_closure_t unbuilt = {.window_width = 9, .window_height = 9};
     packet_struct *refused = packet_new(0, 64, 0);
