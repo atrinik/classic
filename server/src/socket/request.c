@@ -1067,9 +1067,10 @@ bool map2_direction_shown(const object *op, const object *viewer, int ax, int ay
 static mapstruct *map2_closure_maps[MAP2_LEVELS][MAP_CLIENT_X][MAP_CLIENT_Y];
 
 /** Distinct maps one MAP2 update shows, whose next hour it prepares. Each
- * shown cell notes at most one map, so the view bounds the list and no map
- * is ever dropped (server thread only). */
-#define MAP2_SHOWN_MAPS_MAX (MAP2_LEVELS * MAP_CLIENT_X * MAP_CLIENT_Y)
+ * shown cell notes its own map and, for each sub-layer, the remote map a
+ * kept object is gated on, so the view bounds the list and no map is ever
+ * dropped (server thread only). */
+#define MAP2_SHOWN_MAPS_MAX (MAP2_LEVELS * MAP_CLIENT_X * MAP_CLIENT_Y * (1 + NUM_SUB_LAYERS))
 static mapstruct *map2_shown_maps[MAP2_SHOWN_MAPS_MAX];
 static size_t map2_shown_count;
 /** Stamps mapstruct::map2_shown_pass once per update for O(1) dedup. */
