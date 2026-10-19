@@ -2973,6 +2973,15 @@ void draw_client_map2(object *pl) {
                     /* Only a stack the update renders content of prepares its
                      * next hour: an empty or fully filtered cell costs nothing. */
                     map2_shown_note(m);
+                    /* A kept object gated on another map's space reads that
+                     * map's field too: its stack prepares its next hour, so
+                     * the boundary promotes it rather than rebuild in MAP2. */
+                    for (sub_layer = 0; sub_layer < NUM_SUB_LAYERS; sub_layer++) {
+                        if (light_sample_objects[sub_layer] != NULL &&
+                            light_sample_remote[sub_layer]) {
+                            map2_shown_note(light_sample_objects[sub_layer]->map);
+                        }
+                    }
                 } else {
                     mp->celestial_structure = 0;
                 }
