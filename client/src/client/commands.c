@@ -945,6 +945,18 @@ static void map_pending_effects_commit(void) {
     }
 }
 
+/**
+ * Drop a buffered MAP2 generation that will never be applied. A celestial
+ * pair staged for it is abandoned with it, since the server considers that
+ * publication delivered.
+ * @return Whether a staged half was lost, so the caller must reconnect.
+ */
+static bool socket_command_map_batch_discard(void) {
+    map_pending_batch_reset();
+    client_celestial_abandon_staged();
+    return client_celestial_take_reconnect();
+}
+
 void socket_command_map_abort_pending(void) {
     map_pending_batch_reset();
     map_light_keyframe_transaction_abort();
@@ -1627,6 +1639,15 @@ static void socket_command_map_apply(uint8_t *data, size_t len, size_t pos) {
         return;
     }
 
+    /* The celestial pair staged for this update is checked before anything
+     * commits: an inconsistent pair fails the whole update (and reconnects),
+     * so no consumer ever sees it complete. */
+    if (!client_celestial_publishable()) {
+        LOG(ERROR, "Rejected an inconsistent celestial publication.");
+        socket_command_map_abort_pending();
+        return;
+    }
+
     if (map_light_keyframe_transaction_pending()) {
         map_light_keyframe_transaction_commit();
     }
@@ -1683,7 +1704,12 @@ void socket_command_map(uint8_t *data, size_t len, size_t pos) {
     if (info.mapstat != MAP_UPDATE_CMD_PARTIAL) {
         if (map_pending_batch.continuation.pending) {
             LOG(PACKET, "Discarded interrupted unpublished map generation.");
-            map_pending_batch_reset();
+            if (socket_command_map_batch_discard()) {
+                LOG(ERROR, "An interrupted map update lost its celestial publication; "
+                           "reconnecting.");
+                client_socket_close(&csocket);
+                return;
+            }
         }
         if (info.continuation == 0) {
             socket_command_map_apply(data, len, pos);
@@ -1707,7 +1733,10 @@ void socket_command_map(uint8_t *data, size_t len, size_t pos) {
                                            info.sub_layer,
                                            info.depths)) {
         LOG(PACKET, "Rejected unsolicited, mismatched, or out-of-sequence map continuation.");
-        map_pending_batch_reset();
+        if (socket_command_map_batch_discard()) {
+            LOG(ERROR, "A rejected map update lost its celestial publication; reconnecting.");
+            client_socket_close(&csocket);
+        }
         return;
     }
 
@@ -1892,6 +1921,21 @@ bool socket_command_map_continuation_transaction_test(void) {
     socket_command_map_abort_pending();
     success = success && !socket_command_map_buffered_generation_test_pending() &&
               MapData.posx == 17 && MapData.posy == 23 && cpl.target_object_index == saved_target;
+    /* A buffered generation dropped by an interrupting envelope or a bad
+     * continuation takes the celestial pair staged for it along, and the
+     * loss calls for a reconnect; with nothing staged it does not. */
+    success = success && socket_command_map_buffered_generation_test_begin() &&
+              !socket_command_map_batch_discard() &&
+              !socket_command_map_buffered_generation_test_pending();
+    client_celestial_reset();
+    packet_struct *celestial = packet_new(0, 32, 0);
+    success = success && celestial_protocol_write(celestial, 1, 0, NULL, 0) &&
+              client_celestial_apply(celestial->data, celestial->len) &&
+              socket_command_map_buffered_generation_test_begin() &&
+              socket_command_map_batch_discard() &&
+              !socket_command_map_buffered_generation_test_pending() &&
+              !client_celestial_publish(NULL, NULL) && !client_celestial_take_reconnect();
+    packet_free(celestial);
 
     map_state_transaction_begin(false);
     MapData.posx = 18;

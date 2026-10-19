@@ -50,10 +50,14 @@ uint64_t celestial_model_round(uint64_t numerator, uint64_t denominator) {
 }
 
 int32_t celestial_model_scale(int32_t value, uint32_t scale, uint32_t denominator) {
+    HARD_ASSERT(denominator != 0);
     if (value <= 0 || scale == 0) {
         return 0;
     }
-    return (int32_t)celestial_model_round((uint64_t)value * scale, denominator);
+    /* At most 2^31 * 2^32: the product fits, and only the result can exceed
+     * the range, which saturates rather than narrow. */
+    uint64_t scaled = celestial_model_round((uint64_t)value * scale, denominator);
+    return scaled > INT32_MAX ? INT32_MAX : (int32_t)scaled;
 }
 
 int32_t celestial_model_transmit(int32_t value, uint16_t coefficient) {
@@ -395,9 +399,11 @@ bool celestial_protocol_write(packet_struct *packet,
                               const celestial_protocol_slot_t *slots,
                               size_t count) {
     /* The interval starts on an hour boundary, which the client keeps as
-     * an hour; a packet already in error is refused unwritten. */
+     * an hour, and its following hour must be representable too; a packet
+     * already in error is refused unwritten. */
     if (packet == NULL || count > CELESTIAL_PROTOCOL_SLOTS_MAX || (count != 0 && slots == NULL) ||
-        start_seconds % 3600 != 0 || packet_writer_error(packet) != PACKET_ERROR_NONE) {
+        start_seconds % 3600 != 0 || start_seconds > UINT64_MAX - 3600 ||
+        packet_writer_error(packet) != PACKET_ERROR_NONE) {
         return false;
     }
     for (size_t i = 0; i < count; i++) {
@@ -466,7 +472,7 @@ bool celestial_protocol_read(const uint8_t *data,
     uint64_t start = packet_reader_read_uint64(&reader);
     uint8_t parsed = packet_reader_read_uint8(&reader);
     if (packet_reader_error(&reader) != PACKET_ERROR_NONE || parsed > CELESTIAL_PROTOCOL_SLOTS_MAX ||
-        start % 3600 != 0) {
+        start % 3600 != 0 || start > UINT64_MAX - 3600) {
         return false;
     }
     celestial_protocol_slot_t staged[CELESTIAL_PROTOCOL_SLOTS_MAX];

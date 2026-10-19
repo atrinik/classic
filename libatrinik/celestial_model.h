@@ -172,10 +172,13 @@ bool celestial_model_inputs_valid(const celestial_model_inputs_t *inputs);
 /** Derive the sources of one hour from valid inputs. */
 void celestial_model_evaluate(const celestial_model_inputs_t *inputs, celestial_model_t *model);
 
-/** Divide, rounding half up. The denominator must be nonzero. */
+/** Divide, rounding half up. The denominator must be nonzero (a
+ * HARD_ASSERT precondition). */
 uint64_t celestial_model_round(uint64_t numerator, uint64_t denominator);
 
-/** Scale a nonnegative value by scale / denominator; nonpositive values give 0. */
+/** Scale a nonnegative value by scale / denominator, rounding half up;
+ * nonpositive values give 0, and a result above INT32_MAX saturates there.
+ * The denominator must be nonzero (a HARD_ASSERT precondition). */
 int32_t celestial_model_scale(int32_t value, uint32_t scale, uint32_t denominator);
 
 /** Transmit a value through one crossing coefficient (0..256). */
@@ -248,7 +251,8 @@ struct packet_struct;
  * of the current hour in game seconds, then the slots in strictly increasing
  * slot order.
  * @return False, writing nothing, for invalid slots or more than
- * CELESTIAL_PROTOCOL_SLOTS_MAX of them, a start not on an hour boundary, a
+ * CELESTIAL_PROTOCOL_SLOTS_MAX of them, a start not on an hour boundary or
+ * above UINT64_MAX - 3600 (its following hour must be representable), a
  * packet already carrying a writer error, or a write that fails part way
  * (its limit or an allocation), which is rolled back.
  */
@@ -260,7 +264,8 @@ bool celestial_protocol_write(struct packet_struct *packet,
 
 /**
  * Parse and validate a complete CELESTIAL payload. Rejects truncation,
- * trailing bytes, a start not on an hour boundary, unordered or
+ * trailing bytes, a start not on an hour boundary or above
+ * UINT64_MAX - 3600, unordered or
  * out-of-range slots, more than CELESTIAL_PROTOCOL_SLOTS_MAX slots and
  * invalid model inputs.
  * @param slots Receives up to CELESTIAL_PROTOCOL_SLOTS_MAX slots; unchanged

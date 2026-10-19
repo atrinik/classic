@@ -35,6 +35,23 @@
   the already-bound grant. Caller-owned secret buffers must be cleansed. Grant routing never substitutes
   for the game server's encrypted access gate. Mark secret packets sensitive
   before writing; receive-buffer owners separately cleanse consumed bytes.
+- Protocol-1085 lighting shares one implementation between server and client;
+  see `server/doc/CLIENT_LIGHTING.md` and `server/doc/CLIENT_CELESTIAL.md`.
+  `light_profile.h` holds the pure, stateless local-light falloff tables.
+  `map_protocol.h` owns the signed Q4.11 radiance encoding and the MAP2
+  lighting-field validators. `celestial_model.h` owns the pure celestial model
+  and the `CELESTIAL` codec. `celestial_solver.h` owns the exact integer solver,
+  driven through caller-owned lattice operations that must outlive every
+  solve, ray, cursor and job; one-shot and stepped jobs (one scratch row per
+  step) give bit-identical fields. `celestial_closure.h` owns the
+  `CELESTIAL_STRUCTURE` codec and its lattice: a built closure takes ownership
+  of its fragments, stays immutable until freed, and may be solved on several
+  threads at once. Codecs reject on encode exactly what they reject on decode
+  and never leave a partial payload; decode reports allocation failure apart
+  from malformed input. The server's gameplay field is pinned bit for bit by
+  golden digests, so solver changes keep them unchanged or update them
+  deliberately with the server. Public pointer and range preconditions are
+  documented in each header.
 - Follow the root `.clang-format` and CMake target/export conventions. Validate the
   top-level CMake/CTest suite, the standalone `pathfinding/` build and tests,
   install/package consumption, and downstream client/server builds through the

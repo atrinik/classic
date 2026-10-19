@@ -161,12 +161,23 @@ static void test_encoder_rejects_what_decoders_reject(void) {
     slots[0] = slot_at(3, 5, 200);
     TEST_CHECK(!celestial_protocol_write(packet, 1, 3601, slots, 1));
     TEST_CHECK(packet->len == 0);
-    TEST_CHECK(celestial_protocol_write(packet, 1, 7200, slots, 1));
-    packet->data[11]++;
+    /* Its following hour must be representable as well. */
+    uint64_t last_hour = (UINT64_MAX - 3600) / 3600 * 3600;
+    TEST_CHECK(!celestial_protocol_write(packet, 1, last_hour + 3600, slots, 1));
+    TEST_CHECK(packet->len == 0);
+    TEST_CHECK(celestial_protocol_write(packet, 1, last_hour, slots, 1));
+    for (int byte = 0; byte < 8; byte++) {
+        packet->data[4 + byte] = (uint8_t)((last_hour + 3600) >> (56 - 8 * byte));
+    }
     uint32_t generation;
     uint64_t start;
     size_t parsed;
     celestial_protocol_slot_t decoded[CELESTIAL_PROTOCOL_SLOTS_MAX];
+    TEST_CHECK(!celestial_protocol_read(packet->data, packet->len, &generation, &start, decoded,
+                                        &parsed));
+    packet->len = 0;
+    TEST_CHECK(celestial_protocol_write(packet, 1, 7200, slots, 1));
+    packet->data[11]++;
     TEST_CHECK(!celestial_protocol_read(packet->data, packet->len, &generation, &start, decoded,
                                         &parsed));
     packet_free(packet);
@@ -381,6 +392,60 @@ static void test_fragments_must_name_published_slots(void) {
     TEST_CHECK(client_celestial_take_reconnect());
 }
 
+static void test_publishable_matches_publish(void) {
+    /* The MAP2 commit checks the staged pair first: only nothing staged or a
+     * consistent pair lets the update commit. */
+    client_celestial_reset();
+    TEST_CHECK(client_celestial_publishable());
+    celestial_protocol_slot_t slot = slot_at(9, 12, 500);
+    packet_struct *packet = encode(1, &slot, 1);
+    TEST_CHECK(client_celestial_apply(packet->data, packet->len));
+    packet_free(packet);
+    TEST_CHECK(!client_celestial_publishable());
+    TEST_CHECK(stage_closure(2, NULL, 0));
+    TEST_CHECK(!client_celestial_publishable());
+    client_celestial_discard_staged();
+    packet = encode(3, &slot, 1);
+    TEST_CHECK(client_celestial_apply(packet->data, packet->len));
+    packet_free(packet);
+    celestial_closure_fragment_t *fragments = malloc(sizeof(*fragments));
+    TEST_CHECK(fragments != NULL);
+    fragments[0] = fragment_of(0, 1, 1, 2, 2, 4, OPEN_AIR);
+    TEST_CHECK(stage_closure(3, fragments, 1));
+    TEST_CHECK(!client_celestial_publishable());
+    client_celestial_discard_staged();
+    packet = encode(4, &slot, 1);
+    TEST_CHECK(client_celestial_apply(packet->data, packet->len));
+    packet_free(packet);
+    TEST_CHECK(stage_closure(4, NULL, 0));
+    TEST_CHECK(client_celestial_publishable());
+    TEST_CHECK(client_celestial_publish(NULL, NULL));
+    TEST_CHECK(client_celestial_publishable());
+    TEST_CHECK(!client_celestial_take_reconnect());
+}
+
+static void test_generation_zero_is_malformed(void) {
+    /* Publications start at generation 1: a zero on a fresh connection is
+     * no stale duplicate but a malformed half, so the connection resets
+     * rather than commit a MAP2 update without its celestial field. */
+    client_celestial_reset();
+    celestial_protocol_slot_t slot = slot_at(9, 12, 500);
+    packet_struct *packet = encode(0, &slot, 1);
+    TEST_CHECK(!client_celestial_apply(packet->data, packet->len));
+    packet_free(packet);
+    TEST_CHECK(client_celestial_take_reconnect());
+    TEST_CHECK(!stage_closure(0, NULL, 0));
+    TEST_CHECK(client_celestial_take_reconnect());
+    /* A stale nonzero generation is still only ignored. */
+    packet = encode(1, &slot, 1);
+    TEST_CHECK(client_celestial_apply(packet->data, packet->len));
+    TEST_CHECK(stage_closure(1, NULL, 0));
+    TEST_CHECK(client_celestial_publish(NULL, NULL));
+    TEST_CHECK(!client_celestial_apply(packet->data, packet->len));
+    packet_free(packet);
+    TEST_CHECK(!client_celestial_take_reconnect());
+}
+
 static void test_malformed_half_discards_the_staged_pair(void) {
     client_celestial_reset();
     celestial_protocol_slot_t slot = slot_at(9, 12, 500);
@@ -554,6 +619,11 @@ static void test_worst_case_closure_cost(void) {
 }
 
 static void test_model_helpers_reject_edge_inputs(void) {
+    /* Scaling saturates rather than narrow an out-of-range result. */
+    TEST_CHECK(celestial_model_scale(INT32_MAX, 2, 1) == INT32_MAX);
+    TEST_CHECK(celestial_model_scale(INT32_MAX, UINT32_MAX, 1) == INT32_MAX);
+    TEST_CHECK(celestial_model_scale(1000, 3, 2) == 1500);
+    TEST_CHECK(celestial_model_scale(-5, 3, 2) == 0);
     /* Half-up rounding holds at the largest denominator too. */
     TEST_CHECK(celestial_model_round(0, UINT64_MAX) == 0);
     TEST_CHECK(celestial_model_round(UINT64_MAX / 2, UINT64_MAX) == 0);
@@ -575,6 +645,8 @@ int main(void) {
     test_reset_forgets_slots_and_generation();
     test_pair_publishes_only_together();
     test_staged_generations_never_regress();
+    test_generation_zero_is_malformed();
+    test_publishable_matches_publish();
     test_malformed_half_discards_the_staged_pair();
     test_fragments_must_name_published_slots();
     test_publication_solves_every_closure_cell();

@@ -110,7 +110,9 @@ bool client_celestial_apply(const uint8_t *data, size_t len) {
     uint32_t generation;
     uint64_t start_seconds;
     size_t count;
-    if (!celestial_protocol_read(data, len, &generation, &start_seconds, slots, &count)) {
+    /* Publications start at generation 1, so 0 is malformed, not stale. */
+    if (!celestial_protocol_read(data, len, &generation, &start_seconds, slots, &count) ||
+        generation == 0) {
         /* A malformed half voids the pair, and the server, which considers
          * it delivered, would never resend it: the connection is reset. */
         client_celestial.reconnect = true;
@@ -154,6 +156,13 @@ bool client_celestial_apply_structure(const uint8_t *data, size_t len, int windo
         client_celestial_discard_staged();
         return false;
     }
+    if (closure.generation == 0) {
+        /* Publications start at generation 1: malformed, not stale. */
+        celestial_closure_free(&closure);
+        client_celestial.reconnect = true;
+        client_celestial_discard_staged();
+        return false;
+    }
     if (closure.generation <= client_celestial.slots.generation ||
         (client_celestial.staged_closure_valid &&
          closure.generation <= client_celestial.staged_closure.generation)) {
@@ -167,33 +176,43 @@ bool client_celestial_apply_structure(const uint8_t *data, size_t len, int windo
 }
 
 /** Solve one fragment's cells under one slot's model, or zero them. */
-bool client_celestial_publish(client_celestial_cell_fn cell, void *context) {
+/** Whether both halves are staged with one generation, and every fragment
+ * names a slot of its paired CELESTIAL (only slot 255 means no profile). */
+static bool client_celestial_staged_pair(void) {
     if (!client_celestial.staged_slots_valid || !client_celestial.staged_closure_valid ||
         client_celestial.staged_slots.generation !=
             client_celestial.staged_closure.generation) {
+        return false;
+    }
+    for (size_t i = 0; i < client_celestial.staged_closure.count; i++) {
+        uint8_t slot = client_celestial.staged_closure.fragments[i].slot;
+        if (slot != CELESTIAL_PROTOCOL_SLOT_NONE &&
+            !client_celestial_assigned(&client_celestial.staged_slots, slot)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool client_celestial_publishable(void) {
+    return (!client_celestial.staged_slots_valid && !client_celestial.staged_closure_valid) ||
+           client_celestial_staged_pair();
+}
+
+bool client_celestial_publish(client_celestial_cell_fn cell, void *context) {
+    if (!client_celestial_staged_pair()) {
         /* Each half belongs to the MAP update right after it: one left
-         * unmatched by that update can never pair with a later one. The
-         * server sends both halves together and considers them delivered,
-         * so a staged half left unpaired means a lost publication, and the
-         * caller reconnects. An update with nothing staged is ordinary. */
+         * unmatched by that update can never pair with a later one, and a
+         * fragment naming an omitted slot makes the pair malformed rather
+         * than darkness no later duplicate could repair. The server sends
+         * both halves together and considers them delivered, so a staged
+         * half lost here means the caller reconnects. An update with
+         * nothing staged is ordinary. */
         if (client_celestial.staged_slots_valid || client_celestial.staged_closure_valid) {
             client_celestial.reconnect = true;
         }
         client_celestial_discard_staged();
         return false;
-    }
-    /* Only slot 255 means no profile: a fragment naming a slot its paired
-     * CELESTIAL omits makes the pair malformed, and it is discarded rather
-     * than published as darkness that no later duplicate could repair; the
-     * caller reconnects. */
-    for (size_t i = 0; i < client_celestial.staged_closure.count; i++) {
-        uint8_t slot = client_celestial.staged_closure.fragments[i].slot;
-        if (slot != CELESTIAL_PROTOCOL_SLOT_NONE &&
-            !client_celestial_assigned(&client_celestial.staged_slots, slot)) {
-            client_celestial.reconnect = true;
-            client_celestial_discard_staged();
-            return false;
-        }
     }
     /* A newer publication supersedes any fragment still to solve; its job
      * reads the closure, so it goes first. */

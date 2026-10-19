@@ -69,6 +69,11 @@ typedef void (*client_celestial_cell_fn)(void *context, int depth, int x, int y,
  */
 bool client_celestial_publish(client_celestial_cell_fn cell, void *context);
 
+/** Whether client_celestial_publish() would accept what is staged: nothing,
+ * or a consistent pair. A MAP2 update checks it before committing, so an
+ * inconsistent pair fails the update instead of following it. */
+bool client_celestial_publishable(void);
+
 /**
  * Solve fragments of the published closure until the budget is spent, in
  * solver steps of one scratch row of rays, spill coefficients or a
