@@ -399,13 +399,17 @@ static void test_publication_solves_every_closure_cell(void) {
     TEST_CHECK(stage_closure(1, fragments, 2));
     published_cells cells = {0};
     TEST_CHECK(client_celestial_publish(record_cell, &cells));
-    /* One hour of one fragment per step, one step at least per call: the
-     * fragment is reported once its next hour is solved too. */
+    /* One bounded solver step per call at least (a row of rays, spill
+     * coefficients or a relaxation pass, or the publish), so an hour takes
+     * many calls: the fragment is reported once its next hour is solved too. */
     TEST_CHECK(cells.count == 0 && !client_celestial_solved());
-    TEST_CHECK(!client_celestial_process(0));
-    TEST_CHECK(cells.count == 0);
-    TEST_CHECK(!client_celestial_process(0));
+    size_t calls = 0;
+    while (cells.count == 0 && calls < 1000) {
+        TEST_CHECK(!client_celestial_process(0));
+        calls++;
+    }
     TEST_CHECK(cells.count == 5 && !client_celestial_solved());
+    TEST_CHECK(calls > 8);
     TEST_CHECK(client_celestial_process(UINT64_MAX) && client_celestial_solved());
     /* Five closure cells of the first fragment, four of the second. */
     TEST_CHECK(cells.count == 9);
@@ -447,8 +451,10 @@ static void test_cancel_stops_the_remaining_fragments(void) {
     TEST_CHECK(stage_closure(1, fragments, 2));
     published_cells cells = {0};
     TEST_CHECK(client_celestial_publish(record_cell, &cells));
-    /* Two steps solve the first fragment's two hours. */
-    TEST_CHECK(!client_celestial_process(0) && !client_celestial_process(0));
+    /* Single steps solve the first fragment's two hours. */
+    for (size_t calls = 0; cells.count == 0 && calls < 1000; calls++) {
+        TEST_CHECK(!client_celestial_process(0));
+    }
     TEST_CHECK(cells.count == 2);
     /* The window moved: the second fragment is never reported. */
     client_celestial_cancel();
@@ -496,8 +502,31 @@ static void test_worst_case_closure_cost(void) {
     }
     clock_gettime(CLOCK_MONOTONIC, &end);
     double ms = (end.tv_sec - start.tv_sec) * 1e3 + (end.tv_nsec - start.tv_nsec) / 1e6;
-    fprintf(stderr, "worst-case closure: %zu bytes on the wire, one hourly field in %.1f ms\n",
-            wire, ms);
+    /* The client runs each hourly solve in steps of one scratch row; the
+     * costliest one bounds a frame's overrun of its budget. */
+    double worst_step = 0;
+    size_t steps = 0;
+    for (size_t i = 0; i < client_celestial_closure()->count; i++) {
+        static int32_t values[32 * 32], rgb[32 * 32][3];
+        celestial_closure_job_t *job =
+            celestial_closure_solve_begin(client_celestial_closure(), i, &model, values, rgb);
+        TEST_CHECK(job != NULL);
+        celestial_solver_status_t status = CELESTIAL_SOLVER_PENDING;
+        while (job != NULL && status == CELESTIAL_SOLVER_PENDING) {
+            clock_gettime(CLOCK_MONOTONIC, &start);
+            status = celestial_closure_solve_step(job);
+            clock_gettime(CLOCK_MONOTONIC, &end);
+            double step = (end.tv_sec - start.tv_sec) * 1e3 + (end.tv_nsec - start.tv_nsec) / 1e6;
+            worst_step = step > worst_step ? step : worst_step;
+            steps++;
+        }
+        TEST_CHECK(status == CELESTIAL_SOLVER_DONE);
+        celestial_closure_solve_free(job);
+    }
+    fprintf(stderr,
+            "worst-case closure: %zu bytes on the wire, one hourly field in %.1f ms, "
+            "%zu steps, the costliest %.3f ms\n",
+            wire, ms, steps, worst_step);
 }
 
 static void test_model_helpers_reject_edge_inputs(void) {

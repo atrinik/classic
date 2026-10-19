@@ -213,6 +213,19 @@ bool celestial_model_relax(int32_t *values,
                            celestial_model_spill_fn spill,
                            void *context);
 
+/**
+ * One row y of one celestial_model_relax() pass: writes row y of next from
+ * values, so a caller can run a pass row by row and swap the grids after.
+ * The dimensions must be valid; values and next must not overlap.
+ */
+void celestial_model_relax_row(const int32_t *values,
+                               int32_t *next,
+                               int width,
+                               int height,
+                               int y,
+                               celestial_model_spill_fn spill,
+                               void *context);
+
 /** Profile slots one CELESTIAL command can carry; slot ids are 0..254. */
 #define CELESTIAL_PROTOCOL_SLOTS_MAX 255
 /** Slot id of a fragment whose map has no celestial profile. */

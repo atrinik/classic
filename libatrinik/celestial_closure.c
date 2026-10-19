@@ -70,7 +70,8 @@ static bool closure_build(celestial_closure_t *closure, uint32_t generation, int
     closure->fragments = fragments;
     closure->count = count;
     bool valid = window_width > 0 && window_height > 0 && window_width <= 255 &&
-                 window_height <= 255 && count <= UINT16_MAX && (count == 0 || fragments != NULL);
+                 window_height <= 255 && count <= CELESTIAL_CLOSURE_FRAGMENTS_MAX &&
+                 (count == 0 || fragments != NULL);
     /* Everything checkable without memory is checked before the index is
      * allocated, so only overlap and sky exits can follow a failed one. */
     for (size_t i = 0; valid && i < count; i++) {
@@ -167,7 +168,7 @@ bool celestial_closure_write(packet_struct *packet, const celestial_closure_t *c
     /* Only a closure from celestial_closure_build() or _read() is valid; it
      * always carries its lattice, so anything else is refused unread. */
     if (packet == NULL || closure == NULL || closure->lattice == NULL ||
-        closure->count > UINT16_MAX ||
+        closure->count > CELESTIAL_CLOSURE_FRAGMENTS_MAX ||
         celestial_closure_size(closure) > PACKET_PAYLOAD_MAX ||
         packet_writer_error(packet) != PACKET_ERROR_NONE) {
         return false;
@@ -277,9 +278,9 @@ bool celestial_closure_decode(const uint8_t *data, size_t len, int window_width,
         return false;
     }
     /* A fragment takes at least its header and one run: a count the payload
-     * cannot hold, or more fragments than window cells over every depth, is
-     * malformed before anything is allocated. */
-    if ((size_t)count * (6 + 5) > len - 6 ||
+     * cannot hold, more fragments than window cells over every depth, or more
+     * than a closure may have, is malformed before anything is allocated. */
+    if (count > CELESTIAL_CLOSURE_FRAGMENTS_MAX || (size_t)count * (6 + 5) > len - 6 ||
         (window_width > 0 && window_height > 0 &&
          count > (size_t)window_width * window_height * CELESTIAL_CLOSURE_DEPTHS)) {
         return false;
@@ -592,28 +593,78 @@ static void *closure_lattice_create(const celestial_closure_t *closure) {
     return context;
 }
 
-bool celestial_closure_solve(const celestial_closure_t *closure, size_t fragment,
-                             const celestial_model_t *model, int32_t *values, int32_t (*rgb)[3]) {
+struct celestial_closure_job {
+    celestial_solver_job_t *solver;
+    const celestial_closure_fragment_t *fragment;
+    int32_t *values;
+    int32_t (*rgb)[3];
+};
+
+celestial_closure_job_t *celestial_closure_solve_begin(const celestial_closure_t *closure,
+                                                       size_t fragment,
+                                                       const celestial_model_t *model,
+                                                       int32_t *values, int32_t (*rgb)[3]) {
     if (closure == NULL || fragment >= closure->count || model == NULL || values == NULL ||
-        rgb == NULL) {
-        return false;
+        rgb == NULL || closure->lattice == NULL) {
+        return NULL;
     }
     closure_lattice *context = closure->lattice;
-    if (context == NULL) {
-        return false;
-    }
     celestial_solver_lattice_t lattice = {.ops = &closure_ops, .context = context};
-    const celestial_closure_fragment_t *solved = &closure->fragments[fragment];
-    bool complete =
-        celestial_solver_solve(&lattice, &context->fragments[fragment], model, values, rgb);
-    if (complete) {
-        size_t cells = (size_t)solved->width * solved->height;
+    celestial_closure_job_t *job = calloc(1, sizeof(*job));
+    if (job == NULL) {
+        return NULL;
+    }
+    job->fragment = &closure->fragments[fragment];
+    job->values = values;
+    job->rgb = rgb;
+    job->solver =
+        celestial_solver_job_create(&lattice, &context->fragments[fragment], model, values, rgb);
+    if (job->solver == NULL) {
+        free(job);
+        return NULL;
+    }
+    return job;
+}
+
+celestial_solver_status_t celestial_closure_solve_step(celestial_closure_job_t *job) {
+    if (job->solver == NULL) {
+        return CELESTIAL_SOLVER_DONE;
+    }
+    celestial_solver_status_t status = celestial_solver_job_step(job->solver);
+    if (status == CELESTIAL_SOLVER_DONE) {
+        size_t cells = (size_t)job->fragment->width * job->fragment->height;
         for (size_t cell = 0; cell < cells; cell++) {
-            if (solved->values[cell] == 0) {
-                values[cell] = 0;
-                memset(rgb[cell], 0, sizeof(rgb[cell]));
+            if (job->fragment->values[cell] == 0) {
+                job->values[cell] = 0;
+                memset(job->rgb[cell], 0, sizeof(job->rgb[cell]));
             }
         }
+        /* The solver's scratch is released as soon as the outputs are. */
+        celestial_solver_job_free(job->solver);
+        job->solver = NULL;
     }
-    return complete;
+    return status;
+}
+
+void celestial_closure_solve_free(celestial_closure_job_t *job) {
+    if (job == NULL) {
+        return;
+    }
+    celestial_solver_job_free(job->solver);
+    free(job);
+}
+
+bool celestial_closure_solve(const celestial_closure_t *closure, size_t fragment,
+                             const celestial_model_t *model, int32_t *values, int32_t (*rgb)[3]) {
+    celestial_closure_job_t *job =
+        celestial_closure_solve_begin(closure, fragment, model, values, rgb);
+    if (job == NULL) {
+        return false;
+    }
+    celestial_solver_status_t status;
+    do {
+        status = celestial_closure_solve_step(job);
+    } while (status == CELESTIAL_SOLVER_PENDING);
+    celestial_closure_solve_free(job);
+    return status == CELESTIAL_SOLVER_DONE;
 }

@@ -435,7 +435,9 @@ typedef struct spill_table {
     bool unavailable;
 } spill_table;
 
-static void spill_table_fill(spill_table *table) {
+/** Allocate a spill table, or mark it unavailable so the relaxation
+ * computes each coefficient instead. */
+static void spill_table_allocate(spill_table *table) {
     size_t bytes = (size_t)table->width * table->height * 8 * sizeof(*table->coefficients);
     const celestial_solver_ops_t *ops = table->lattice->ops;
     /* The hooks charge as a pair: a charge nothing could return is never
@@ -456,20 +458,22 @@ static void spill_table_fill(spill_table *table) {
     table->charged = charged;
     table->bytes = bytes;
     table->coefficients = coefficients;
-    for (int y = 0; y < table->height; y++) {
-        for (int x = 0; x < table->width; x++) {
-            uint16_t *cell = &coefficients[((size_t)x + (size_t)table->width * y) * 8];
-            for (int dy = -1; dy <= 1; dy++) {
-                for (int dx = -1; dx <= 1; dx++) {
-                    if ((dx == 0 && dy == 0) || x + dx < 0 || y + dy < 0 ||
-                        x + dx >= table->width || y + dy >= table->height) {
-                        continue;
-                    }
-                    int neighbor = (dy + 1) * 3 + dx + 1;
-                    cell[neighbor > 4 ? neighbor - 1 : neighbor] =
-                        spill_coefficient(table->lattice, table->map, table->map_width,
-                                          table->map_height, x, y, dx, dy);
+}
+
+/** Fill one scratch row of an allocated spill table. */
+static void spill_table_fill_row(spill_table *table, int y) {
+    for (int x = 0; x < table->width; x++) {
+        uint16_t *cell = &table->coefficients[((size_t)x + (size_t)table->width * y) * 8];
+        for (int dy = -1; dy <= 1; dy++) {
+            for (int dx = -1; dx <= 1; dx++) {
+                if ((dx == 0 && dy == 0) || x + dx < 0 || y + dy < 0 || x + dx >= table->width ||
+                    y + dy >= table->height) {
+                    continue;
                 }
+                int neighbor = (dy + 1) * 3 + dx + 1;
+                cell[neighbor > 4 ? neighbor - 1 : neighbor] =
+                    spill_coefficient(table->lattice, table->map, table->map_width,
+                                      table->map_height, x, y, dx, dy);
             }
         }
     }
@@ -481,16 +485,15 @@ static void spill_table_release(spill_table *table) {
         if (table->charged) {
             table->lattice->ops->release(table->lattice->context, table->bytes);
         }
+        table->coefficients = NULL;
+        table->charged = false;
     }
 }
 
-/** A level's spill table, filled on the relaxation's first coefficient
- * request so an unlit field never allocates it. */
+/** A coefficient from the spill table filled before the relaxation, or
+ * computed when the table was unavailable. */
 static uint16_t relax_spill(int x, int y, int dx, int dy, void *context) {
     spill_table *table = context;
-    if (table->coefficients == NULL && !table->unavailable) {
-        spill_table_fill(table);
-    }
     if (table->coefficients == NULL) {
         return spill_coefficient(table->lattice, table->map, table->map_width,
                                  table->map_height, x, y, dx, dy);
@@ -500,87 +503,250 @@ static uint16_t relax_spill(int x, int y, int dx, int dy, void *context) {
                                (neighbor > 4 ? neighbor - 1 : neighbor)];
 }
 
-static void transport_line(const celestial_solver_lattice_t *lattice, void *map,
-                           const celestial_model_t *model, int width, int height, int32_t *values,
-                           int32_t *apertures, bool moon) {
-    for (int y = 0; y < height; y++) {
+/** One row of a sun or moon transport. */
+static void transport_row(const celestial_solver_lattice_t *lattice, void *map,
+                          const celestial_model_t *model, int map_width, int map_height,
+                          int width, int y, int32_t *values, int32_t *apertures, bool moon) {
+    for (int x = 0; x < width; x++) {
+        celestial_solver_ray_t ray;
+        halo_ray(lattice, &ray, map, map_width, map_height, x, y,
+                 moon ? model->moon_direction : model->solar_direction,
+                 moon ? model->moon_elevation : model->solar_elevation);
+        while (!ray.done) {
+            celestial_solver_ray_step(lattice, &ray);
+        }
+        int index = x + width * y;
+        values[index] =
+            celestial_solver_ray_value(&ray, moon ? model->moon : model->direct, &apertures[index]);
+    }
+}
+
+/** Stages of a solve, in the server's order. */
+typedef enum solver_stage {
+    STAGE_SKY,
+    STAGE_SUN,
+    STAGE_MOON,
+    /** The spill table, filled only when a relaxed field is lit. */
+    STAGE_SPILL,
+    /** Each lit relaxed field, pass by pass. */
+    STAGE_RELAX,
+    STAGE_PUBLISH,
+    STAGE_DONE,
+} solver_stage;
+
+struct celestial_solver_job {
+    celestial_solver_lattice_t lattice;
+    void *map;
+    celestial_model_t model;
+    int32_t *values;
+    int32_t (*rgb)[3];
+    /** The dimension snapshot sizing every buffer and the publication. */
+    int map_width, map_height, width, height;
+    int32_t *direct, *diffuse, *aperture_direct, *moon, *moon_aperture, *starlight;
+    /** The other grid of a relaxation pass. */
+    int32_t *relax_next;
+    spill_table spill;
+    solver_stage stage;
+    /** Next row of the stage, and the field and pass being relaxed. */
+    int row;
+    int relaxed, pass;
+};
+
+/* A relaxation's passes alternate grids and end on the field's own. */
+_Static_assert(CELESTIAL_MODEL_SPILL_PASSES % 2 == 0, "relaxation must end on its own grid");
+
+/** The relaxed fields in the server's order: diffuse, aperture direct and
+ * starlight. */
+static int32_t *job_relaxed(celestial_solver_job_t *job, int relaxed) {
+    return relaxed == 0 ? job->diffuse : relaxed == 1 ? job->aperture_direct : job->starlight;
+}
+
+static bool grid_lit(const int32_t *values, size_t cells) {
+    for (size_t i = 0; i < cells; i++) {
+        if (values[i] != 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/** Advance to the next lit relaxed field from relaxed on, or to the
+ * publish; an unlit field relaxes to itself. */
+static void job_next_relaxed(celestial_solver_job_t *job, int relaxed) {
+    size_t cells = (size_t)job->width * job->height;
+    while (relaxed < 3 && !grid_lit(job_relaxed(job, relaxed), cells)) {
+        relaxed++;
+    }
+    job->relaxed = relaxed;
+    job->pass = 0;
+    job->row = 0;
+    if (relaxed == 3) {
+        spill_table_release(&job->spill);
+        job->stage = STAGE_PUBLISH;
+    } else {
+        job->stage = STAGE_RELAX;
+    }
+}
+
+celestial_solver_job_t *celestial_solver_job_create(const celestial_solver_lattice_t *lattice,
+                                                    void *map, const celestial_model_t *model,
+                                                    int32_t *values, int32_t (*rgb)[3]) {
+    int map_width, map_height;
+    if (!dimensions(lattice, map, &map_width, &map_height)) {
+        return NULL;
+    }
+    celestial_solver_job_t *job = calloc(1, sizeof(*job));
+    if (job == NULL) {
+        return NULL;
+    }
+    /* One snapshot sizes every buffer and the publication: a lattice whose
+     * dimensions change between steps cannot make them disagree. */
+    job->lattice = *lattice;
+    job->map = map;
+    job->model = *model;
+    job->values = values;
+    job->rgb = rgb;
+    job->map_width = map_width;
+    job->map_height = map_height;
+    job->width = map_width + 2 * CELESTIAL_MODEL_SPILL_PASSES;
+    job->height = map_height + 2 * CELESTIAL_MODEL_SPILL_PASSES;
+    size_t cells = (size_t)job->width * job->height;
+    job->direct = calloc(cells, sizeof(*job->direct));
+    job->diffuse = calloc(cells, sizeof(*job->diffuse));
+    job->aperture_direct = calloc(cells, sizeof(*job->aperture_direct));
+    job->moon = calloc(cells, sizeof(*job->moon));
+    job->moon_aperture = calloc(cells, sizeof(*job->moon_aperture));
+    job->starlight = calloc(cells, sizeof(*job->starlight));
+    job->relax_next = calloc(cells, sizeof(*job->relax_next));
+    job->spill = (spill_table){.lattice = &job->lattice, .map = map, .width = job->width,
+                               .height = job->height, .map_width = map_width,
+                               .map_height = map_height};
+    if (job->direct == NULL || job->diffuse == NULL || job->aperture_direct == NULL ||
+        job->moon == NULL || job->moon_aperture == NULL || job->starlight == NULL ||
+        job->relax_next == NULL) {
+        celestial_solver_job_free(job);
+        return NULL;
+    }
+    return job;
+}
+
+celestial_solver_status_t celestial_solver_job_step(celestial_solver_job_t *job) {
+    const celestial_solver_lattice_t *lattice = &job->lattice;
+    const celestial_model_t *model = &job->model;
+    int width = job->width;
+    switch (job->stage) {
+    case STAGE_SKY:
         for (int x = 0; x < width; x++) {
+            int index = x + width * job->row;
             celestial_solver_ray_t ray;
-            halo_ray(lattice, &ray, map, width - 2 * CELESTIAL_MODEL_SPILL_PASSES, height - 2 * CELESTIAL_MODEL_SPILL_PASSES, x, y,
-                     moon ? model->moon_direction : model->solar_direction,
-                     moon ? model->moon_elevation : model->solar_elevation);
+            halo_ray(lattice, &ray, job->map, job->map_width, job->map_height, x, job->row,
+                     CELESTIAL_MODEL_NORTH, 32768);
             while (!ray.done) {
                 celestial_solver_ray_step(lattice, &ray);
             }
-            int index = x + width * y;
-            values[index] = celestial_solver_ray_value(&ray, moon ? model->moon : model->direct,
-                                                       &apertures[index]);
+            job->diffuse[index] = celestial_solver_ray_value(&ray, model->diffuse, NULL);
+            job->starlight[index] = celestial_solver_ray_value(&ray, model->starlight, NULL);
+        }
+        break;
+    case STAGE_SUN:
+        transport_row(lattice, job->map, model, job->map_width, job->map_height, width, job->row,
+                      job->direct, job->aperture_direct, false);
+        break;
+    case STAGE_MOON:
+        transport_row(lattice, job->map, model, job->map_width, job->map_height, width, job->row,
+                      job->moon, job->moon_aperture, true);
+        break;
+    case STAGE_SPILL:
+        if (job->row == 0) {
+            spill_table_allocate(&job->spill);
+        }
+        if (job->spill.coefficients == NULL) {
+            /* Unavailable: the relaxation computes each coefficient. */
+            job_next_relaxed(job, 0);
+            return CELESTIAL_SOLVER_PENDING;
+        }
+        spill_table_fill_row(&job->spill, job->row);
+        if (++job->row == job->height) {
+            job_next_relaxed(job, 0);
+        }
+        return CELESTIAL_SOLVER_PENDING;
+    case STAGE_RELAX: {
+        int32_t *field = job_relaxed(job, job->relaxed);
+        const int32_t *from = job->pass % 2 == 0 ? field : job->relax_next;
+        int32_t *to = job->pass % 2 == 0 ? job->relax_next : field;
+        celestial_model_relax_row(from, to, width, job->height, job->row, relax_spill,
+                                  &job->spill);
+        if (++job->row == job->height) {
+            job->row = 0;
+            if (++job->pass == CELESTIAL_MODEL_SPILL_PASSES) {
+                job_next_relaxed(job, job->relaxed + 1);
+            }
+        }
+        return CELESTIAL_SOLVER_PENDING;
+    }
+    case STAGE_PUBLISH:
+        for (int y = 0; y < job->map_height; y++) {
+            for (int x = 0; x < job->map_width; x++) {
+                int index = x + CELESTIAL_MODEL_SPILL_PASSES +
+                            width * (y + CELESTIAL_MODEL_SPILL_PASSES);
+                size_t output = (size_t)x + (size_t)job->map_width * y;
+                celestial_model_publish(model, job->direct[index], job->diffuse[index],
+                                        job->aperture_direct[index], job->moon[index],
+                                        job->moon_aperture[index], job->starlight[index],
+                                        &job->values[output], job->rgb[output]);
+            }
+        }
+        job->stage = STAGE_DONE;
+        return CELESTIAL_SOLVER_DONE;
+    case STAGE_DONE:
+        return CELESTIAL_SOLVER_DONE;
+    }
+    /* A ray stage advances by rows; the moon stage runs only under a moon,
+     * and the spill table is filled only for a lit relaxed field, so an
+     * unlit one never allocates it. */
+    if (++job->row == job->height) {
+        job->row = 0;
+        job->stage++;
+        if (job->stage == STAGE_MOON && model->moon == 0) {
+            job->stage++;
+        }
+        if (job->stage == STAGE_SPILL) {
+            size_t cells = (size_t)width * job->height;
+            if (!grid_lit(job->diffuse, cells) && !grid_lit(job->aperture_direct, cells) &&
+                !grid_lit(job->starlight, cells)) {
+                job_next_relaxed(job, 3);
+            }
         }
     }
+    return CELESTIAL_SOLVER_PENDING;
+}
+
+void celestial_solver_job_free(celestial_solver_job_t *job) {
+    if (job == NULL) {
+        return;
+    }
+    spill_table_release(&job->spill);
+    free(job->relax_next);
+    free(job->starlight);
+    free(job->moon_aperture);
+    free(job->moon);
+    free(job->aperture_direct);
+    free(job->diffuse);
+    free(job->direct);
+    free(job);
 }
 
 bool celestial_solver_solve(const celestial_solver_lattice_t *lattice, void *map,
                             const celestial_model_t *model, int32_t *values,
                             int32_t (*rgb)[3]) {
-    int map_width, map_height;
-    if (!dimensions(lattice, map, &map_width, &map_height)) {
+    celestial_solver_job_t *job = celestial_solver_job_create(lattice, map, model, values, rgb);
+    if (job == NULL) {
         return false;
     }
-    /* One snapshot sizes every buffer and the publication: a lattice whose
-     * dimensions change between calls cannot make them disagree. */
-    int width = map_width + 2 * CELESTIAL_MODEL_SPILL_PASSES;
-    int height = map_height + 2 * CELESTIAL_MODEL_SPILL_PASSES;
-    size_t cells = (size_t)width * height;
-    int32_t *direct = calloc(cells, sizeof(*direct));
-    int32_t *diffuse = calloc(cells, sizeof(*diffuse));
-    int32_t *aperture_direct = calloc(cells, sizeof(*aperture_direct));
-    int32_t *moon = calloc(cells, sizeof(*moon));
-    int32_t *moon_aperture = calloc(cells, sizeof(*moon_aperture));
-    int32_t *starlight = calloc(cells, sizeof(*starlight));
-    bool complete = direct != NULL && diffuse != NULL && aperture_direct != NULL &&
-                    moon != NULL && moon_aperture != NULL && starlight != NULL;
-    if (complete) {
-        for (int y = 0; y < height; y++) {
-            for (int x = 0; x < width; x++) {
-                int index = x + width * y;
-                celestial_solver_ray_t ray;
-                halo_ray(lattice, &ray, map, map_width, map_height, x, y, CELESTIAL_MODEL_NORTH,
-                         32768);
-                while (!ray.done) {
-                    celestial_solver_ray_step(lattice, &ray);
-                }
-                diffuse[index] = celestial_solver_ray_value(&ray, model->diffuse, NULL);
-                starlight[index] = celestial_solver_ray_value(&ray, model->starlight, NULL);
-            }
-        }
-        transport_line(lattice, map, model, width, height, direct, aperture_direct, false);
-        if (model->moon != 0) {
-            transport_line(lattice, map, model, width, height, moon, moon_aperture, true);
-        }
-        spill_table spill = {.lattice = lattice, .map = map, .width = width, .height = height,
-                             .map_width = map_width, .map_height = map_height};
-        complete = celestial_model_relax(diffuse, width, height, relax_spill, &spill) &&
-                   celestial_model_relax(aperture_direct, width, height, relax_spill, &spill) &&
-                   celestial_model_relax(starlight, width, height, relax_spill, &spill);
-        spill_table_release(&spill);
-    }
-    if (complete) {
-        for (int y = 0; y < map_height; y++) {
-            for (int x = 0; x < map_width; x++) {
-                int index = x + CELESTIAL_MODEL_SPILL_PASSES +
-                            width * (y + CELESTIAL_MODEL_SPILL_PASSES);
-                size_t output = (size_t)x + (size_t)map_width * y;
-                celestial_model_publish(model, direct[index], diffuse[index],
-                                        aperture_direct[index], moon[index], moon_aperture[index],
-                                        starlight[index], &values[output], rgb[output]);
-            }
-        }
-    }
-    free(starlight);
-    free(moon_aperture);
-    free(moon);
-    free(aperture_direct);
-    free(diffuse);
-    free(direct);
-    return complete;
+    celestial_solver_status_t status;
+    do {
+        status = celestial_solver_job_step(job);
+    } while (status == CELESTIAL_SOLVER_PENDING);
+    celestial_solver_job_free(job);
+    return status == CELESTIAL_SOLVER_DONE;
 }

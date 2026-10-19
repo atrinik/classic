@@ -28,6 +28,11 @@
 /** Viewer-relative depths a closure covers. */
 #define CELESTIAL_CLOSURE_DEPTH_MAX 6
 #define CELESTIAL_CLOSURE_DEPTHS (2 * CELESTIAL_CLOSURE_DEPTH_MAX + 1)
+/** Most fragments a closure may have: the client solves each fragment's two
+ * hours separately, so a closure over countless tiny fragments would
+ * multiply its solver work. The server coalesces above it, and the codec
+ * rejects more. */
+#define CELESTIAL_CLOSURE_FRAGMENTS_MAX 256
 
 /**
  * @defgroup CELESTIAL_CLOSURE_CELL Closure cell value bits
@@ -103,7 +108,8 @@ void celestial_closure_free(celestial_closure_t *closure);
  * overwritten, never freed: pass an empty one, freeing a populated closure
  * first.
  * @return False, freeing everything (the fragments included), for any
- * fragment the codec would reject or when an allocation fails.
+ * fragment the codec would reject, for more than
+ * CELESTIAL_CLOSURE_FRAGMENTS_MAX fragments, or when an allocation fails.
  */
 bool celestial_closure_build(celestial_closure_t *closure, uint32_t generation, int window_width,
                              int window_height, celestial_closure_fragment_t *fragments,
@@ -124,9 +130,10 @@ size_t celestial_closure_size(const celestial_closure_t *closure);
 
 /**
  * Decode CELESTIAL_STRUCTURE for a window of the given size.
- * @return False, leaving *closure empty, for truncation, trailing bytes, a
- * run of length 0, a run or rectangle exceeding its bounds, overlap, or a
- * value outside the closure value rules, and also when an allocation fails;
+ * @return False, leaving *closure empty, for truncation, trailing bytes,
+ * more than CELESTIAL_CLOSURE_FRAGMENTS_MAX fragments, a run of length 0, a
+ * run or rectangle exceeding its bounds, overlap, or a value outside the
+ * closure value rules, and also when an allocation fails;
  * celestial_closure_decode() tells the two apart. *closure is overwritten,
  * never freed: pass an empty one, freeing a populated closure first.
  */
@@ -165,5 +172,27 @@ uint32_t celestial_closure_value(const celestial_closure_t *closure, int depth, 
  */
 bool celestial_closure_solve(const celestial_closure_t *closure, size_t fragment,
                              const celestial_model_t *model, int32_t *values, int32_t (*rgb)[3]);
+
+/** A celestial_closure_solve() run in bounded steps (opaque). */
+typedef struct celestial_closure_job celestial_closure_job_t;
+
+/**
+ * Start a stepped celestial_closure_solve(). The closure and both outputs
+ * must outlive the job, unmodified as for any solve.
+ * @return NULL for the arguments celestial_closure_solve() rejects, or when
+ * an allocation fails.
+ */
+celestial_closure_job_t *celestial_closure_solve_begin(const celestial_closure_t *closure,
+                                                       size_t fragment,
+                                                       const celestial_model_t *model,
+                                                       int32_t *values, int32_t (*rgb)[3]);
+
+/** Run one step, as celestial_solver_job_step(): one scratch row of a ray,
+ * spill or relaxation stage, or the publish, which also clears cells outside
+ * the closure. */
+celestial_solver_status_t celestial_closure_solve_step(celestial_closure_job_t *job);
+
+/** Free a job at any step; NULL is ignored. */
+void celestial_closure_solve_free(celestial_closure_job_t *job);
 
 #endif

@@ -273,6 +273,32 @@ int32_t celestial_model_ray_value(const uint16_t *coefficients,
     return value;
 }
 
+void celestial_model_relax_row(const int32_t *values,
+                               int32_t *next,
+                               int width,
+                               int height,
+                               int y,
+                               celestial_model_spill_fn spill,
+                               void *context) {
+    for (int x = 0; x < width; x++) {
+        int32_t best = values[x + width * y];
+        for (int dy = -1; dy <= 1; dy++) {
+            for (int dx = -1; dx <= 1; dx++) {
+                if ((dx == 0 && dy == 0) || x + dx < 0 || y + dy < 0 || x + dx >= width ||
+                    y + dy >= height) {
+                    continue;
+                }
+                uint16_t coefficient = spill(x, y, dx, dy, context);
+                int32_t candidate =
+                    celestial_model_transmit(values[x + dx + width * (y + dy)], coefficient);
+                candidate = celestial_model_transmit(candidate, dx != 0 && dy != 0 ? 181 : 192);
+                best = MAX(best, candidate);
+            }
+        }
+        next[x + width * y] = best;
+    }
+}
+
 bool celestial_model_relax(int32_t *values,
                            int width,
                            int height,
@@ -297,23 +323,7 @@ bool celestial_model_relax(int32_t *values,
     int32_t *original = values;
     for (int pass = 0; pass < CELESTIAL_MODEL_SPILL_PASSES; pass++) {
         for (int y = 0; y < height; y++) {
-            for (int x = 0; x < width; x++) {
-                int32_t best = values[x + width * y];
-                for (int dy = -1; dy <= 1; dy++) {
-                    for (int dx = -1; dx <= 1; dx++) {
-                        if ((dx == 0 && dy == 0) || x + dx < 0 || y + dy < 0 ||
-                            x + dx >= width || y + dy >= height) {
-                            continue;
-                        }
-                        uint16_t coefficient = spill(x, y, dx, dy, context);
-                        int32_t candidate =
-                            celestial_model_transmit(values[x + dx + width * (y + dy)], coefficient);
-                        candidate = celestial_model_transmit(candidate, dx != 0 && dy != 0 ? 181 : 192);
-                        best = MAX(best, candidate);
-                    }
-                }
-                next[x + width * y] = best;
-            }
+            celestial_model_relax_row(values, next, width, height, y, spill, context);
         }
         int32_t *swap = values;
         values = next;
