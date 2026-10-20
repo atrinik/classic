@@ -25,6 +25,7 @@
 #include <toolkit/path.h>
 #include <toolkit/packet.h>
 #include <tod.h>
+#include <weather.h>
 
 static bool queued_drawinfo_has(socket_struct *cs, const char *expected) {
     for (packet_struct *packet = cs->packets; packet != NULL; packet = packet->next) {
@@ -240,6 +241,18 @@ START_TEST(test_parse_rejects_overflow) {
 
     ck_assert(!todclock_parse(overflow, &value));
     ck_assert_uint_eq(value, 17);
+    /* A clock whose protocol seconds would overflow is rejected too, on
+     * load and on set, while the bound itself is accepted. */
+    snprintf((overflow), sizeof((overflow)), "%lu", TODCLOCK_MAX + 1UL);
+    if (TODCLOCK_MAX < ULONG_MAX) {
+        ck_assert(!todclock_parse(overflow, &value));
+        ck_assert_uint_eq(value, 17);
+        ck_assert(!todclock_set(TODCLOCK_MAX + 1UL));
+    }
+    snprintf((overflow), sizeof((overflow)), "%lu", TODCLOCK_MAX);
+    ck_assert(todclock_parse(overflow, &value));
+    ck_assert_uint_eq(value, TODCLOCK_MAX);
+    ck_assert((uint64_t)TODCLOCK_MAX * 3600 <= UINT64_MAX - 3600 * 2);
 }
 END_TEST
 
@@ -271,6 +284,29 @@ START_TEST(test_set_persists_clockdata) {
     ck_assert_ptr_nonnull(contents);
     ck_assert_str_eq(contents, "23");
     free(contents);
+}
+END_TEST
+
+START_TEST(test_clock_stops_at_its_bound_without_hourly_effects) {
+    /* At TODCLOCK_MAX the clock no longer advances, and a tick that cannot
+     * advance applies no hourly change again, so darkness never drifts. */
+    unsigned long saved = todtick;
+    int saved_darkness = world_darkness;
+    todtick = TODCLOCK_MAX;
+    int darkness = world_darkness;
+    tick_the_clock();
+    tick_the_clock();
+    ck_assert_uint_eq(todtick, TODCLOCK_MAX);
+    ck_assert_int_eq(world_darkness, darkness);
+    /* /settime cannot reach another hour of a stopped clock: it returns. */
+    timeofday_t tod;
+    get_tod(&tod);
+    char other[8];
+    snprintf(other, sizeof(other), "%d", (tod.hour + 1) % HOURS_PER_DAY);
+    command_settime(NULL, "settime", other);
+    ck_assert_uint_eq(todtick, TODCLOCK_MAX);
+    todtick = saved;
+    world_darkness = saved_darkness;
 }
 END_TEST
 
@@ -437,6 +473,7 @@ static Suite *suite(void) {
     tcase_add_unchecked_fixture(tc_persistence, check_setup, check_teardown);
     tcase_add_test(tc_persistence, test_write_replaces_clockdata_with_complete_value);
     tcase_add_test(tc_persistence, test_set_persists_clockdata);
+    tcase_add_test(tc_persistence, test_clock_stops_at_its_bound_without_hourly_effects);
     tcase_add_test(tc_persistence, test_persisted_tick_reconstructs_without_rewrite);
     tcase_add_test(tc_persistence, test_checked_shutdown_clock_and_maplog_failures);
     tcase_add_test(tc_persistence, test_checked_swap_retains_map_after_save_failure);

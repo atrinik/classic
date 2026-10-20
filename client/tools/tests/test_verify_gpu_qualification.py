@@ -264,9 +264,11 @@ class VerifyGpuQualificationTests(unittest.TestCase):
         timed["timed_light_lifecycle"] = True
         timed["timed_endpoint_pixels_sha256"] = "5" * 64
         timed["borrowed_temporal_light_samples"] = 1
-        self.assertFalse(validate_production_record(timed))
-        timed["pixels_sha256"] = "6" * 64
-        with self.assertRaisesRegex(ArtifactError, "restore the initial midpoint"):
+        with self.assertRaisesRegex(ArtifactError, "unknown production fixture|retired"):
+            validate_production_record(timed)
+        timed = copy.deepcopy(value)
+        timed["timed_light_lifecycle"] = True
+        with self.assertRaisesRegex(ArtifactError, "retired in protocol 1085"):
             validate_production_record(timed)
         value["movement_lifecycle"] = False
         value["archived_software_lifecycle_sha256"] = ""

@@ -33,13 +33,51 @@
 #include <light.h>
 #include <object.h>
 #include <spatial.h>
+#include <celestial_structure.h>
+#include <toolkit/map_protocol.h>
 #include <region.h>
+#include <toolkit/light_profile.h>
 #include <los.h>
 
-#define NR_LIGHT_MASK 10
-#define MAX_LIGHT_SOURCE 13
-#define MAX_LIGHT_RADIUS 4
-#define LIGHT_DISTANCE_SCALE 256
+#define NR_LIGHT_MASK LIGHT_PROFILE_COUNT
+#define MAX_LIGHT_SOURCE LIGHT_PROFILE_SOURCE_MAX
+#define MAX_LIGHT_RADIUS LIGHT_PROFILE_RADIUS_MAX
+
+/** Stamps source changes: each one advances it and stamps every map its light
+ * can reach (mapstruct::light_local_reach_generation). */
+static uint64_t light_local_generation = 1;
+
+/** Advances when a source change could not enumerate the maps it reaches;
+ * every coarse cache entry then revalidates. */
+static uint64_t light_local_generation_all = 1;
+
+/** Advances whenever a link between maps or a map's residency changes: the
+ * only geometry a coarse level's walk reads. Blockers never matter to it, so
+ * door and wall changes leave every entry on the constant-time path. */
+static uint64_t light_local_topology = 1;
+
+void light_local_topology_changed(void) {
+    light_local_topology++;
+}
+
+
+#ifdef ATRINIK_TESTING
+/** Coarse levels walked and pooled again by light_local_level(), for tests
+ * of the cache; a source change's reach walk is not one. */
+static uint64_t light_local_walks;
+
+uint64_t light_local_walks_for_test(void) {
+    return light_local_walks;
+}
+
+/** Cached levels revalidated by rehashing their dependency maps. */
+static uint64_t light_local_rehashes;
+
+uint64_t light_local_rehashes_for_test(void) {
+    return light_local_rehashes;
+}
+#endif
+
 /** Full queues publish early; this bounds scope bookkeeping, not reach. */
 #define LIGHT_PENDING_MAX ((1 + 2 * MAP2_MAX_DEPTH) * (1 + TILED_NUM_DIR))
 
@@ -242,38 +280,8 @@ static uint64_t light_div_round(uint64_t numerator, uint64_t denominator) {
     return quotient + (remainder >= (denominator + 1) / 2 ? 1 : 0);
 }
 
-/** Canonical IEC 61966-2-1 sRGB8 to scene-linear Q0.16 lookup. */
-static const uint16_t srgb8_to_linear_q16[UINT8_MAX + 1] = {
-    0,     20,    40,    60,    80,    99,    119,   139,   159,   179,   199,   219,   241,
-    264,   288,   313,   340,   367,   396,   427,   458,   491,   526,   562,   599,   637,
-    677,   718,   761,   805,   851,   898,   947,   997,   1048,  1101,  1156,  1212,  1270,
-    1330,  1391,  1453,  1517,  1583,  1651,  1720,  1790,  1863,  1937,  2013,  2090,  2170,
-    2250,  2333,  2418,  2504,  2592,  2681,  2773,  2866,  2961,  3058,  3157,  3258,  3360,
-    3464,  3570,  3678,  3788,  3900,  4014,  4129,  4247,  4366,  4488,  4611,  4736,  4864,
-    4993,  5124,  5257,  5392,  5530,  5669,  5810,  5953,  6099,  6246,  6395,  6547,  6700,
-    6856,  7014,  7174,  7335,  7500,  7666,  7834,  8004,  8177,  8352,  8528,  8708,  8889,
-    9072,  9258,  9445,  9635,  9828,  10022, 10219, 10417, 10619, 10822, 11028, 11235, 11446,
-    11658, 11873, 12090, 12309, 12530, 12754, 12980, 13209, 13440, 13673, 13909, 14146, 14387,
-    14629, 14874, 15122, 15371, 15623, 15878, 16135, 16394, 16656, 16920, 17187, 17456, 17727,
-    18001, 18277, 18556, 18837, 19121, 19407, 19696, 19987, 20281, 20577, 20876, 21177, 21481,
-    21787, 22096, 22407, 22721, 23038, 23357, 23678, 24002, 24329, 24658, 24990, 25325, 25662,
-    26001, 26344, 26688, 27036, 27386, 27739, 28094, 28452, 28813, 29176, 29542, 29911, 30282,
-    30656, 31033, 31412, 31794, 32179, 32567, 32957, 33350, 33745, 34143, 34544, 34948, 35355,
-    35764, 36176, 36591, 37008, 37429, 37852, 38278, 38706, 39138, 39572, 40009, 40449, 40891,
-    41337, 41785, 42236, 42690, 43147, 43606, 44069, 44534, 45002, 45473, 45947, 46423, 46903,
-    47385, 47871, 48359, 48850, 49344, 49841, 50341, 50844, 51349, 51858, 52369, 52884, 53401,
-    53921, 54445, 54971, 55500, 56032, 56567, 57105, 57646, 58190, 58737, 59287, 59840, 60396,
-    60955, 61517, 62082, 62650, 63221, 63795, 64372, 64952, 65535,
-};
-
 static uint16_t light_color_linear_component(uint32_t color, size_t channel) {
-    uint16_t components[3] = {
-        srgb8_to_linear_q16[(color >> 16) & UINT8_MAX],
-        srgb8_to_linear_q16[(color >> 8) & UINT8_MAX],
-        srgb8_to_linear_q16[color & UINT8_MAX],
-    };
-    uint16_t peak = MAX(components[0], MAX(components[1], components[2]));
-    return peak == 0 ? 0 : light_muldiv_round(components[channel], UINT16_MAX, peak);
+    return light_profile_color_component(color, channel);
 }
 
 void light_color_linearize(uint32_t color, uint16_t linear[3]) {
@@ -285,13 +293,7 @@ void light_color_linearize(uint32_t color, uint16_t linear[3]) {
 }
 
 static uint16_t light_raw_to_radiance(int64_t raw_light) {
-    if (raw_light <= 0) {
-        return 0;
-    }
-    if (raw_light >= INT64_C(40959)) {
-        return UINT16_MAX;
-    }
-    return (uint16_t)((raw_light * 8 + 2) / 5);
+    return light_profile_raw_to_radiance(raw_light);
 }
 
 void light_radiance_from_raw(const MapSpace *space,
@@ -344,44 +346,131 @@ void light_radiance_from_raw(const MapSpace *space,
     }
 }
 
-typedef struct light_profile {
-    int center;
-    int radial_radius;
-    int radial_power;
-} light_profile_t;
+/** Attenuation step of a coefficient, rounded up so the client never
+ * transmits more light than the server. */
+static uint64_t light_occluder_attenuation(uint16_t coefficient) {
+    int attenuation = (SPATIAL_LIGHT_SCALE - coefficient + MAP2_OCCLUDER_ATTENUATION_STEP - 1) /
+                      MAP2_OCCLUDER_ATTENUATION_STEP;
+    return (uint64_t)MIN(attenuation, 15);
+}
 
-/* Authored glow_radius remains a bounded profile selector. Center intensity is
- * preserved; radial support gains one cell where the old four-cell cap allows
- * it, giving interpolation enough samples without increasing worst-case work. */
-static const light_profile_t light_profiles[NR_LIGHT_MASK] = {
-    {0, 0, 1},
-    {40, 2, 1},
-    {80, 3, 2},
-    {160, 3, 2},
-    {160, 4, 2},
-    {320, 4, 2},
-    {320, 4, 2},
-    {320, 4, 2},
-    {640, 4, 2},
-    {1280, 4, 2},
-};
+/** Authored transmission of an object face, by door and gate state. */
+static uint16_t light_occluder_transmission(const object *op) {
+    const char *value;
+    if (op->type == DOOR || op->type == GATE) {
+        bool shut = op->type == DOOR ? QUERY_FLAG(op, FLAG_DOOR_CLOSED)
+                                     : QUERY_FLAG(op, FLAG_NO_PASS);
+        value = object_get_value(op, shut ? "celestial_transmission_closed"
+                                          : "celestial_transmission_open");
+    } else {
+        value = object_get_value(op, "celestial_transmission");
+    }
+    celestial_transmission_t transmission = celestial_structure_transmission(value);
+    return transmission == CELESTIAL_TRANSMISSION_INVALID ? 0 : (uint16_t)transmission;
+}
 
-static const int light_mask[MAX_LIGHT_SOURCE + 1] = {0, 1, 2, 3, 4, 5, 6, 6, 7, 7, 8, 8, 8, 9};
+/**
+ * MAP2 occluder bits contributed by one object that is being sent to the
+ * viewer. Only the object's own flags and authored face transmission count,
+ * never space-wide flags that also aggregate hidden or unsent objects.
+ */
+uint64_t light_occluder_object_bits(const object *op) {
+    HARD_ASSERT(op != NULL);
+    const object *head = HEAD(op);
+    uint64_t bits = 0;
+    if (QUERY_FLAG(op, FLAG_BLOCKSVIEW)) {
+        bits |= MAP2_OCCLUDER_BLOCKSVIEW;
+    }
+    if (QUERY_FLAG(op, FLAG_IS_FLOOR)) {
+        bits |= MAP2_OCCLUDER_FLOOR;
+    }
+    if (object_is_roof_surface(op)) {
+        bits |= MAP2_OCCLUDER_ROOF;
+    }
+    bool closed = head->type == DOOR && QUERY_FLAG(head, FLAG_DOOR_CLOSED);
+    if (closed) {
+        bits |= MAP2_OCCLUDER_DOOR_CLOSED;
+    }
+    uint8_t faces = celestial_structure_faces(op);
+    /* Hidden wall-layer surfaces (roofs, camera surfaces) own a downward face
+     * as spatial_cell_light_face() gives them, even without sky_boundary. */
+    if (op->layer == LAYER_WALL && QUERY_FLAG(op, FLAG_HIDDEN)) {
+        faces |= CELESTIAL_FACE_DOWN;
+    }
+    /* Each cardinal face keeps its own coefficient, as spatial_cell_light_face()
+     * does: an authored face transmits its authored value and is marked
+     * authored. Whether an unauthored face is opaque depends on every sent
+     * object of the cell, so a view blocker only records the fallback, which
+     * light_occluder_finish() applies to faces no sent object authors. */
+    static const uint8_t cardinal[4] = {CELESTIAL_FACE_NORTH, CELESTIAL_FACE_EAST,
+                                        CELESTIAL_FACE_SOUTH, CELESTIAL_FACE_WEST};
+    for (size_t face = 0; face < arraysize(cardinal); face++) {
+        if ((faces & cardinal[face]) != 0) {
+            bits |= light_occluder_attenuation(light_occluder_transmission(op))
+                    << (LIGHT_OCCLUDER_HORIZONTAL_SHIFT +
+                        MAP2_OCCLUDER_FACE_ATTENUATION_BITS * face);
+            bits |= UINT64_C(1) << (LIGHT_OCCLUDER_AUTHORED_SHIFT + face);
+        }
+    }
+    if (bits & MAP2_OCCLUDER_BLOCKSVIEW) {
+        bits |= LIGHT_OCCLUDER_BLOCKER_FALLBACK;
+    }
+    /* The downward face is the slab between this cell and the one below, so a
+     * glass floor attenuates only vertical crossings. */
+    if ((faces & CELESTIAL_FACE_DOWN) != 0) {
+        bits |= light_occluder_attenuation(light_occluder_transmission(op))
+                << LIGHT_OCCLUDER_VERTICAL_SHIFT;
+    }
+    return bits;
+}
+
+/**
+ * Whether a sent object's emitter opts in to client-side flicker, through the
+ * boolean light_flicker attribute (usually an archetype default).
+ */
+bool light_emitter_flickers(const object *op) {
+    const char *value = object_get_value(op, "light_flicker");
+    return value != NULL && (strcmp(value, "1") == 0 || KEYWORD_IS_TRUE(value));
+}
+
+/**
+ * Whether MAP2 may disclose an object's emitter to a viewer. Another player's
+ * glow is derived from its private inventory, so only the viewer's own is.
+ */
+bool light_emitter_disclosed(const object *viewer, const object *op) {
+    return op->type != PLAYER || op == viewer;
+}
+
+/** Combine the occluder bits of two sent objects of one cell: geometry and
+ * faces are joined, and every attenuation nibble keeps the stronger one. */
+uint64_t light_occluder_finish(uint64_t bits) {
+    uint64_t finished = bits & ~LIGHT_OCCLUDER_INTERNAL;
+    if (bits & LIGHT_OCCLUDER_BLOCKER_FALLBACK) {
+        for (int face = 0; face < 4; face++) {
+            if (!(bits & (UINT64_C(1) << (LIGHT_OCCLUDER_AUTHORED_SHIFT + face)))) {
+                finished |= UINT64_C(15) << (LIGHT_OCCLUDER_HORIZONTAL_SHIFT +
+                                             MAP2_OCCLUDER_FACE_ATTENUATION_BITS * face);
+            }
+        }
+    }
+    return finished;
+}
+
+uint64_t light_occluder_combine(uint64_t first, uint64_t second) {
+    uint64_t combined = ((first | second) & UINT64_C(0xffff)) |
+                        ((first | second) & LIGHT_OCCLUDER_INTERNAL);
+    uint64_t vertical = MAX((first >> LIGHT_OCCLUDER_VERTICAL_SHIFT) & 15U,
+                            (second >> LIGHT_OCCLUDER_VERTICAL_SHIFT) & 15U);
+    combined |= vertical << LIGHT_OCCLUDER_VERTICAL_SHIFT;
+    for (int face = 0; face < 4; face++) {
+        int shift = LIGHT_OCCLUDER_HORIZONTAL_SHIFT + MAP2_OCCLUDER_FACE_ATTENUATION_BITS * face;
+        combined |= MAX((first >> shift) & 15U, (second >> shift) & 15U) << shift;
+    }
+    return combined;
+}
 
 static int get_real_light_source_value(int l) {
-    if (l > MAX_LIGHT_SOURCE) {
-        return light_mask[MAX_LIGHT_SOURCE];
-    }
-
-    if (l < -MAX_LIGHT_SOURCE) {
-        return -light_mask[MAX_LIGHT_SOURCE];
-    }
-
-    if (l < 0) {
-        return -light_mask[-l];
-    }
-
-    return light_mask[l];
+    return light_profile_mask(l);
 }
 
 static bool light_map_set_contains(const light_map_set *set, const mapstruct *map) {
@@ -746,6 +835,56 @@ static bool light_face_continuous(const spatial_face *face) {
                   region_celestial_for_map(to)->digest, 32) == 0;
 }
 
+/**
+ * MAP2 occluder face bits: faces of a sent cell that local light cannot cross.
+ * Only static seam structure between two cells both in the viewer's view is
+ * encoded; a face towards any other cell is closed, so the bits never depend
+ * on whether some map is resident.
+ */
+uint16_t light_occluder_faces(mapstruct *map, int x, int y, uint8_t in_view) {
+    HARD_ASSERT(map != NULL);
+    static const int8_t normals[6][3] = {
+        {0, -1, 0}, {1, 0, 0}, {0, 1, 0}, {-1, 0, 0}, {0, 0, 1}, {0, 0, -1},
+    };
+    uint16_t bits = 0;
+    for (size_t i = 0; i < arraysize(normals); i++) {
+        uint16_t bit = (uint16_t)(1U << (MAP2_OCCLUDER_FACE_SHIFT + i));
+        if ((in_view & (1U << i)) == 0) {
+            bits |= bit;
+            continue;
+        }
+        int rx = x + normals[i][0], ry = y + normals[i][1];
+        mapstruct *target;
+        if (normals[i][2] != 0) {
+            /* Vertical crossings use the linked level, like the light path. */
+            target = map->tile_map[normals[i][2] > 0 ? TILED_UP : TILED_DOWN];
+            if (target != NULL && (target->in_memory != MAP_IN_MEMORY ||
+                                   rx >= MAP_WIDTH(target) || ry >= MAP_HEIGHT(target))) {
+                target = NULL;
+            }
+        } else {
+            target = get_map_from_coord2(map, &rx, &ry);
+        }
+        spatial_face face = {
+            .from = {.map = map, .x = x, .y = y, .z = 0},
+            .to = {.map = target, .x = rx, .y = ry, .z = normals[i][2]},
+            .normal = {normals[i][0], normals[i][1], normals[i][2]},
+        };
+        /* A neighbor in view is resident; a failure here is a broken seam. */
+        if (target == NULL || target->spaces == NULL || !light_face_continuous(&face)) {
+            bits |= bit;
+            continue;
+        }
+        /* A sealed virtual sky cover closes the upward face of the lower cell. */
+        const spatial_cell *lower = normals[i][2] > 0 ? &face.from
+                                    : normals[i][2] < 0 ? &face.to : NULL;
+        if (lower != NULL && spatial_cell_light_face(lower, 0, 0, 1, NULL) == 0) {
+            bits |= bit;
+        }
+    }
+    return bits;
+}
+
 /** A terminal roof/wall sample represents its incident surface, not the
  * inaccessible contents behind it. A plain floor still covers its contents. */
 static bool light_terminal_surface(const spatial_cell *cell) {
@@ -815,47 +954,8 @@ static int light_path_value(light_resolve_cache *cache, int dx, int dy, int dz, 
     return result;
 }
 
-/** Calculate the deterministic monotonic radial profile at one distance. */
-static int radial_light_mask_value(int intensity, int distance_squared) {
-    static const uint16_t distances[MAX_LIGHT_RADIUS * MAX_LIGHT_RADIUS + 1] = {
-        0,
-        256,
-        362,
-        443,
-        512,
-        572,
-        627,
-        677,
-        724,
-        768,
-        809,
-        849,
-        886,
-        923,
-        957,
-        991,
-        1024,
-    };
-    const light_profile_t *profile = &light_profiles[intensity];
-    uint32_t radius = (uint32_t)profile->radial_radius * LIGHT_DISTANCE_SCALE;
-    HARD_ASSERT(distance_squared >= 0 && distance_squared < (int)arraysize(distances));
-    uint32_t distance = distances[distance_squared];
-    if (distance >= radius) {
-        return 0;
-    }
-
-    uint64_t numerator = radius - distance;
-    uint64_t denominator = radius;
-    for (int power = 1; power < profile->radial_power; power++) {
-        numerator *= radius - distance;
-        denominator *= radius;
-    }
-
-    return (int)(((uint64_t)profile->center * numerator + denominator / 2) / denominator);
-}
-
 static int light_mask_value(int intensity, int distance_squared) {
-    return radial_light_mask_value(intensity, distance_squared);
+    return light_profile_value(intensity, distance_squared);
 }
 
 typedef enum light_mask_component {
@@ -880,7 +980,7 @@ static void light_mask_adjust(mapstruct *map,
     }
 
     intensity = abs(intensity);
-    int radius = light_profiles[intensity].radial_radius;
+    int radius = light_profile_radius(intensity);
     int vertical_radius = MIN(radius, MAP2_MAX_DEPTH);
     HARD_ASSERT(radius <= MAX_LIGHT_RADIUS);
     light_resolve_cache local, *cache = shared;
@@ -965,6 +1065,8 @@ static void light_origin_list_update(mapstruct *map, MapSpace *space) {
     map->first_light = space;
 }
 
+static void light_local_reach_stamp(mapstruct *map, int x, int y);
+
 /** Adjust one grouped scalar component at a source origin. */
 static void adjust_grouped_light_source(mapstruct *map,
                                         int x,
@@ -975,6 +1077,9 @@ static void adjust_grouped_light_source(mapstruct *map,
     MapSpace *space = GET_MAP_SPACE_PTR(map, x, y);
     int old_mask = get_real_light_source_value(*counter);
     *counter += light;
+    /* Only coarse levels whose walk reaches this map are invalidated. */
+    map->light_local_epoch++;
+    light_local_reach_stamp(map, x, y);
     int new_mask = get_real_light_source_value(*counter);
 
     if (map->in_memory != MAP_LOADING && old_mask != new_mask) {
@@ -1386,4 +1491,568 @@ void remove_light_source_list(mapstruct *map) {
     }
 
     map->first_light = NULL;
+}
+
+/**
+ * Signed coarse local light of the fixed 3x3 block containing a cell, aligned
+ * to map-local coordinates; edge remainders join the adjacent block. Each
+ * block's sources are pooled before propagation, the strongest positive and
+ * negative pooled contributions compete by magnitude, and the result is
+ * quantized down to whole 1/8-daylight levels. No block's level depends on
+ * where inside a block a source sits; neither hue nor count is kept. The
+ * block never reads another map.
+ */
+/**
+ * Block of one axis: three cells aligned to the map, except that a one- or
+ * two-cell remainder at the edge joins its neighbor, so no block is narrower
+ * than three cells unless the map is.
+ */
+/* The block of a coordinate: aligned groups of three, with the remainder
+ * (one or two cells) merged into the last full group. The end looks six
+ * cells ahead, so the last full group's own cells already end at size: every
+ * coordinate sharing a cache entry gets the identical rectangle, whichever
+ * is queried first (light test: _edge_block_is_query_order_independent). */
+static void light_local_block(int coordinate, int size, int *start, int *end) {
+    *start = coordinate - coordinate % 3;
+    if (*start + 3 > size) {
+        *start = MAX(0, *start - 3);
+    }
+    *end = *start + 6 > size ? size : *start + 3;
+}
+
+/**
+ * Pooled sources of a block: the strongest positive and the strongest negative
+ * single-source mask. Each emitting object counts with its own glow radius,
+ * and light a space's counter holds without an object counts as one more
+ * source; sources are never summed with one another. A viewer's known light,
+ * even on the same tile as a private source, therefore cannot combine with it
+ * through the nonlinear mask and reveal its radius by saturation: it reveals
+ * only the maximum, which the level already discloses.
+ */
+static void light_local_block_sources(mapstruct *map, int bx, int ex, int by, int ey,
+                                      int *positive, int *negative) {
+    *positive = 0;
+    *negative = 0;
+    for (int cy = by; cy < ey; cy++) {
+        for (int cx = bx; cx < ex; cx++) {
+            const MapSpace *space = GET_MAP_SPACE_PTR(map, cx, cy);
+            int64_t residual = space->light_source;
+            for (const object *op = GET_MAP_OB(map, cx, cy); op != NULL; op = op->above) {
+                if (op->glow_radius == 0) {
+                    continue;
+                }
+                int mask = get_real_light_source_value(op->glow_radius);
+                *positive = MAX(*positive, mask);
+                *negative = MIN(*negative, mask);
+                residual -= op->glow_radius;
+            }
+            if (residual != 0) {
+                int mask = get_real_light_source_value(
+                    (int)MAX(INT32_MIN, MIN(INT32_MAX, residual)));
+                *positive = MAX(*positive, mask);
+                *negative = MIN(*negative, mask);
+            }
+        }
+    }
+}
+
+/**
+ * The resident neighbor of a map across one seam that local light crosses: a
+ * reciprocal link, and continuity as light_face_continuous() requires (two
+ * schema-0 maps, or two celestial-v1 maps with continuous boundaries and equal
+ * effective profiles). Never loads a map.
+ */
+static mapstruct *light_local_seam(mapstruct *map, int tile) {
+    mapstruct *next = map->tile_map[tile];
+    int reverse = map_tiled_reverse[tile];
+    if (next == NULL || next->in_memory != MAP_IN_MEMORY || next->spaces == NULL ||
+        next->tile_map[reverse] != map) {
+        return NULL;
+    }
+    if (map->celestial_schema == 0 && next->celestial_schema == 0) {
+        return next;
+    }
+    if (map->celestial_schema != 1 || next->celestial_schema != 1 ||
+        map->celestial_boundary[tile] != CELESTIAL_BOUNDARY_CONTINUOUS ||
+        next->celestial_boundary[reverse] != CELESTIAL_BOUNDARY_CONTINUOUS ||
+        memcmp(region_celestial_for_map(map)->digest, region_celestial_for_map(next)->digest,
+               32) != 0) {
+        return NULL;
+    }
+    return next;
+}
+
+/* Each map keeps the level of every one of its blocks, valid while the
+ * sources of every map the block's walk reaches and the geometry epoch are
+ * unchanged: every cell and sub-layer of a block shares its level. */
+
+/** One map placed relative to the target block: cell (cx, cy) lies at
+ * (cx + ox, cy + oy) on the target map, on any level of its linked stack. */
+typedef struct light_local_region {
+    mapstruct *map;
+    int ox, oy;
+} light_local_region;
+
+/**
+ * Most maps one coarse level may pool. Real topologies stay far below it (a
+ * 13-level stack of one-cell maps within reach places 1053); a component
+ * that exceeds it, such as an unbounded legacy link cycle or stack, fails
+ * closed to level 0 for every target in it, so no rebuild is unbounded and
+ * the levels of such a component still agree.
+ */
+#define LIGHT_LOCAL_REGIONS_MAX 4096
+/** The bound in force; a test may lower it. */
+static size_t light_local_regions_max = LIGHT_LOCAL_REGIONS_MAX;
+
+#ifdef ATRINIK_TESTING
+size_t light_local_regions_max_exchange_for_test(size_t max) {
+    size_t previous = light_local_regions_max;
+    light_local_regions_max = max;
+    return previous;
+}
+#endif
+
+/* Open-addressed sets, cleared by advancing a stamp, so a walk and its
+ * distinct-map listing stay linear in the regions they place. Sized above
+ * twice the region bound, they never fill. */
+#define LIGHT_LOCAL_SET_SIZE 16384
+
+typedef struct light_local_set_entry {
+    const mapstruct *map;
+    int ox, oy;
+    uint32_t stamp;
+} light_local_set_entry;
+
+static light_local_set_entry light_local_visited[LIGHT_LOCAL_SET_SIZE];
+static light_local_set_entry light_local_distinct[LIGHT_LOCAL_SET_SIZE];
+static uint32_t light_local_set_stamp;
+
+/** Insert (map, ox, oy) into a set; false when it was already present. */
+static bool light_local_set_insert(light_local_set_entry *set, const mapstruct *map, int ox,
+                                   int oy) {
+    uint64_t key = (uint64_t)(uintptr_t)map * UINT64_C(0x9e3779b97f4a7c15) ^
+                   (uint64_t)(uint32_t)ox * UINT64_C(0xbf58476d1ce4e5b9) ^
+                   (uint64_t)(uint32_t)oy * UINT64_C(0x94d049bb133111eb);
+    for (size_t slot = (size_t)(key >> 32) % LIGHT_LOCAL_SET_SIZE;;
+         slot = (slot + 1) % LIGHT_LOCAL_SET_SIZE) {
+        light_local_set_entry *entry = &set[slot];
+        if (entry->stamp != light_local_set_stamp) {
+            *entry = (light_local_set_entry){.map = map, .ox = ox, .oy = oy,
+                                             .stamp = light_local_set_stamp};
+            return true;
+        }
+        if (entry->map == map && entry->ox == ox && entry->oy == oy) {
+            return false;
+        }
+    }
+}
+
+/** Start a new walk: both sets become empty. */
+static void light_local_set_reset(void) {
+    if (++light_local_set_stamp == 0) {
+        memset(light_local_visited, 0, sizeof(light_local_visited));
+        memset(light_local_distinct, 0, sizeof(light_local_distinct));
+        light_local_set_stamp = 1;
+    }
+}
+
+typedef struct light_local_cache_entry {
+    /** Zero until the block's level is first computed. */
+    uint64_t geometry_epoch;
+    uint64_t source_hash;
+    /** The map's light_local_reach_generation, and light_local_generation_all,
+     * when the level was last confirmed current. */
+    uint64_t validated, validated_all;
+    int8_t level;
+    /** The walk exceeded the region bound: the level failed closed, and no
+     * dependency set describes it, so only a topology change revalidates it. */
+    bool walk_failed;
+} light_local_cache_entry;
+
+/** The position of dep in a map's ordered dependency set, or where it
+ * would be inserted. Addresses order the set; they are compared, never
+ * followed. */
+static size_t light_local_deps_find(const mapstruct *map, const mapstruct *dep, bool *found) {
+    size_t low = 0, high = map->light_local_deps_count;
+    while (low < high) {
+        size_t middle = low + (high - low) / 2;
+        if ((uintptr_t)map->light_local_deps[middle] < (uintptr_t)dep) {
+            low = middle + 1;
+        } else {
+            high = middle;
+        }
+    }
+    *found = low < map->light_local_deps_count && map->light_local_deps[low] == dep;
+    return low;
+}
+
+/** Add one map a block's walk reached to the map's shared dependency set. */
+static void light_local_deps_add(mapstruct *map, mapstruct *dep) {
+    bool found;
+    size_t at = light_local_deps_find(map, dep, &found);
+    if (found) {
+        return;
+    }
+    if (map->light_local_deps_count == map->light_local_deps_capacity) {
+        map->light_local_deps_capacity =
+            map->light_local_deps_capacity == 0 ? 8 : map->light_local_deps_capacity * 2;
+        map->light_local_deps = xreallocarray(map->light_local_deps,
+                                              map->light_local_deps_capacity,
+                                              sizeof(*map->light_local_deps));
+    }
+    memmove(&map->light_local_deps[at + 1], &map->light_local_deps[at],
+            (map->light_local_deps_count - at) * sizeof(*map->light_local_deps));
+    map->light_local_deps[at] = dep;
+    map->light_local_deps_count++;
+}
+
+
+void light_local_forget(mapstruct *map) {
+    /* Every cached block whose walk reached this map walks again before it is
+     * read: the pointer is compared, never followed, so storage the pool may
+     * release is not touched, while caches that never reached the map keep
+     * their levels and fast paths. Map frees are rare, so a scan of the
+     * loaded maps' caches is cheap. Its own epoch changes too, for a map
+     * swapped out but kept. */
+    map->light_local_epoch++;
+    for (mapstruct *other = first_map; other != NULL; other = other->next) {
+        bool found;
+        if (other == map || other->light_local_deps_count == 0) {
+            continue;
+        }
+        (void)light_local_deps_find(other, map, &found);
+        /* Revalidation also reads the maps its dependencies link to, so a
+         * live dependency's link here, one-way or not, retires the set too.
+         * The dependencies are live: only their link pointers are read. */
+        for (size_t dep = 0; !found && dep < other->light_local_deps_count; dep++) {
+            for (int tile = 0; !found && tile < TILED_NUM; tile++) {
+                found = other->light_local_deps[dep]->tile_map[tile] == map;
+            }
+        }
+        if (!found) {
+            continue;
+        }
+        /* Its blocks walk again and rebuild the set without this map. */
+        for (size_t i = 0; i < other->light_local_cache_blocks; i++) {
+            other->light_local_cache[i].geometry_epoch = 0;
+        }
+        other->light_local_deps_count = 0;
+    }
+    FREE_AND_NULL_PTR(map->light_local_cache);
+    map->light_local_cache_blocks = 0;
+    FREE_AND_NULL_PTR(map->light_local_deps);
+    map->light_local_deps_count = 0;
+    map->light_local_deps_capacity = 0;
+}
+
+/** Hash of the source epochs of a cached block's dependency maps. */
+static uint64_t light_local_deps_hash(mapstruct *const *deps, size_t count) {
+    /* Everything the block's walk and pooling read from its maps: their
+     * sources, and for each the links the walk may follow, whether the
+     * linked map is resident, and the profile digest that seam continuity
+     * compares. A change anywhere else, such as another map being saved,
+     * leaves the signature and so the cached level intact. */
+    uint64_t hash = UINT64_C(1469598103934665603);
+#define LIGHT_LOCAL_MIX(value) (hash = (hash ^ (uint64_t)(value)) * UINT64_C(1099511628211))
+    for (size_t i = 0; i < count; i++) {
+        LIGHT_LOCAL_MIX((uintptr_t)deps[i]);
+        LIGHT_LOCAL_MIX(deps[i]->light_local_epoch);
+        for (int tile = 0; tile < TILED_NUM; tile++) {
+            const mapstruct *next = deps[i]->tile_map[tile];
+            LIGHT_LOCAL_MIX((uintptr_t)next);
+            if (next == NULL) {
+                continue;
+            }
+            LIGHT_LOCAL_MIX(next->in_memory == MAP_IN_MEMORY && next->spaces != NULL);
+            LIGHT_LOCAL_MIX(next->tile_map[map_tiled_reverse[tile]] == deps[i]);
+            if (next->celestial_schema == 1) {
+                uint64_t digest;
+                memcpy(&digest, region_celestial_for_map(next)->digest, sizeof(digest));
+                LIGHT_LOCAL_MIX(digest);
+            }
+        }
+    }
+#undef LIGHT_LOCAL_MIX
+    return hash;
+}
+
+static bool light_local_walk(mapstruct *map, int bx, int ex, int by, int ey,
+                             const light_local_region **regions, size_t *count);
+static int8_t light_local_level_pool(const light_local_region *regions, size_t count, int bx,
+                                     int ex, int by, int ey);
+
+int8_t light_local_level(mapstruct *map, int x, int y) {
+    HARD_ASSERT(map != NULL && map->spaces != NULL);
+    /* A block of fewer than nine cells would locate a hidden source too
+     * precisely: such a map reports no coarse light (fail closed). */
+    if (MAP_WIDTH(map) < 3 || MAP_HEIGHT(map) < 3) {
+        return 0;
+    }
+    int bx, by, ex, ey;
+    light_local_block(x, MAP_WIDTH(map), &bx, &ex);
+    light_local_block(y, MAP_HEIGHT(map), &by, &ey);
+    /* A block's walk depends only on topology, which the geometry epoch
+     * tracks, so each entry keeps the distinct maps it reached. A lookup
+     * returns at once when no source changed anywhere since the level was
+     * confirmed, rehashes only its own maps' source epochs otherwise, and
+     * walks and pools again only when the topology or one of those sources
+     * changed. Every cell of a block shares one entry. */
+    /* Every block of a map has its own entry, so no working set of players
+     * and maps evicts another's; the cache lives and dies with the map. */
+    size_t blocks_x = (size_t)MAX(1, MAP_WIDTH(map) / 3);
+    size_t blocks_y = (size_t)MAX(1, MAP_HEIGHT(map) / 3);
+    if (map->light_local_cache == NULL) {
+        map->light_local_cache_blocks = blocks_x * blocks_y;
+        map->light_local_cache =
+            xcalloc(map->light_local_cache_blocks, sizeof(*map->light_local_cache));
+    }
+    size_t index = MIN((size_t)by / 3, blocks_y - 1) * blocks_x +
+                   MIN((size_t)bx / 3, blocks_x - 1);
+    HARD_ASSERT(index < map->light_local_cache_blocks);
+    light_local_cache_entry *entry = &map->light_local_cache[index];
+    uint64_t geometry = light_local_topology;
+    /* An entry whose maps may since have been freed is never read: it walks
+     * again. Otherwise nothing changed when neither the source generation
+     * nor the geometry epoch moved, and a change elsewhere only costs
+     * rehashing this block's own maps. */
+    if (entry->geometry_epoch != 0) {
+        if (entry->validated == map->light_local_reach_generation &&
+            entry->validated_all == light_local_generation_all &&
+            entry->geometry_epoch == geometry) {
+            return entry->level;
+        }
+        if (entry->walk_failed) {
+            /* No source can lift a failed walk, but a smaller topology may
+             * let it succeed: it walks again only when the topology moved. */
+            if (entry->geometry_epoch == geometry) {
+                entry->validated = map->light_local_reach_generation;
+                entry->validated_all = light_local_generation_all;
+                return entry->level;
+            }
+        } else {
+#ifdef ATRINIK_TESTING
+            light_local_rehashes++;
+#endif
+            if (light_local_deps_hash(map->light_local_deps, map->light_local_deps_count) ==
+                entry->source_hash) {
+                entry->validated = map->light_local_reach_generation;
+                entry->validated_all = light_local_generation_all;
+                entry->geometry_epoch = geometry;
+                return entry->level;
+            }
+        }
+    }
+    const light_local_region *regions;
+    size_t count;
+    int8_t level = 0;
+#ifdef ATRINIK_TESTING
+    light_local_walks++;
+#endif
+    bool walked = light_local_walk(map, bx, ex, by, ey, &regions, &count);
+    if (walked) {
+        level = light_local_level_pool(regions, count, bx, ex, by, ey);
+        /* Into the map's shared set: a superset of this block's maps is a
+         * conservative signature, and a set that grows sends the other
+         * blocks back to one walk each until it settles. */
+        for (size_t i = 0; i < count; i++) {
+            if (light_local_set_insert(light_local_distinct, regions[i].map, 0, 0)) {
+                light_local_deps_add(map, regions[i].map);
+            }
+        }
+    }
+    entry->geometry_epoch = geometry;
+    entry->source_hash = light_local_deps_hash(map->light_local_deps, map->light_local_deps_count);
+    entry->validated = map->light_local_reach_generation;
+    entry->validated_all = light_local_generation_all;
+    entry->level = level;
+    entry->walk_failed = !walked;
+    return level;
+}
+
+/**
+ * Pool every block of one source map region within reach of the target block
+ * [bx, ex) x [by, ey). The region's cell (cx, cy) lies at (cx + ox, cy + oy) in
+ * the target map's coordinates; its blocks need not align with the target's,
+ * because each reaches it by the gap between the two rectangles. The region
+ * may be any level of the target's linked stack: levels form one vertical
+ * bucket, so only the horizontal gap counts.
+ */
+static void light_local_pool_region(mapstruct *source, int ox, int oy, int bx, int ex, int by,
+                                    int ey, int32_t *positive, int32_t *negative) {
+    /* A map narrower than a block would pin a source to fewer than nine
+     * cells: it contributes nothing (fail closed). */
+    if (MAP_WIDTH(source) < 3 || MAP_HEIGHT(source) < 3) {
+        return;
+    }
+    int reach = MAX_LIGHT_RADIUS;
+    int x0 = MAX(0, bx - reach - ox), x1 = MIN(MAP_WIDTH(source), ex + reach - ox);
+    int y0 = MAX(0, by - reach - oy), y1 = MIN(MAP_HEIGHT(source), ey + reach - oy);
+    for (int cy = y0; cy < y1;) {
+        int sy, sey;
+        light_local_block(cy, MAP_HEIGHT(source), &sy, &sey);
+        for (int cx = x0; cx < x1;) {
+            int sx, sex;
+            light_local_block(cx, MAP_WIDTH(source), &sx, &sex);
+            int gap_x = MAX(0, MAX(sx + ox - (ex - 1), bx - (sex - 1 + ox)));
+            int gap_y = MAX(0, MAX(sy + oy - (ey - 1), by - (sey - 1 + oy)));
+            int distance_squared = gap_x * gap_x + gap_y * gap_y;
+            int strongest[2];
+            light_local_block_sources(source, sx, sex, sy, sey, &strongest[0], &strongest[1]);
+            for (int sign = 0; sign < 2; sign++) {
+                int mask = strongest[sign];
+                if (mask == 0) {
+                    continue;
+                }
+                int radius = light_profile_radius(abs(mask));
+                if (distance_squared > radius * radius) {
+                    continue;
+                }
+                int32_t value = light_mask_value(abs(mask), distance_squared);
+                if (mask > 0) {
+                    *positive = MAX(*positive, value);
+                } else {
+                    *negative = MIN(*negative, -value);
+                }
+            }
+            cx = sex;
+        }
+        cy = sey;
+    }
+}
+
+
+
+static bool light_local_walk(mapstruct *map, int bx, int ex, int by, int ey,
+                             const light_local_region **regions_out, size_t *count_out) {
+    /* Sources are pooled per block before propagation and reach a block by
+     * the horizontal gap between the two blocks, which depends only on block
+     * geometry, so a source's position inside its block never changes any
+     * block's level. Every map within the largest radius counts, reached
+     * through continuous horizontal seams and linked levels in any order (a
+     * level linked only from a neighbor counts too); no map is ever loaded
+     * for it. The linked levels of a stack form one vertical bucket: a
+     * source on any of them counts at its horizontal gap alone, so every
+     * level of the stack gets the same level and the levels never reveal
+     * which floor a hidden source is on. Regions are keyed by map and
+     * horizontal offset, which also ends cyclic level links, and a
+     * component placing more than LIGHT_LOCAL_REGIONS_MAX maps fails closed. */
+    /* Placed maps grow with the reachable topology, never truncated: each
+     * (map, offset) is placed once and offsets stay within reach, so the set
+     * is finite however small the maps are. */
+    static light_local_region *regions;
+    static size_t capacity;
+    static const int tiles[] = {TILED_WEST,      TILED_EAST,      TILED_NORTH,
+                                TILED_SOUTH,     TILED_NORTHEAST, TILED_SOUTHEAST,
+                                TILED_SOUTHWEST, TILED_NORTHWEST, TILED_UP,
+                                TILED_DOWN};
+    int reach = MAX_LIGHT_RADIUS;
+    size_t count = 0;
+    if (capacity == 0) {
+        capacity = 64;
+        regions = xmallocarray(capacity, sizeof(*regions));
+    }
+    light_local_set_reset();
+    regions[count++] = (light_local_region){.map = map};
+    light_local_set_insert(light_local_visited, map, 0, 0);
+    for (size_t i = 0; i < count; i++) {
+        light_local_region region = regions[i];
+        for (size_t t = 0; t < arraysize(tiles); t++) {
+            light_local_region next = region;
+            next.map = light_local_seam(region.map, tiles[t]);
+            if (next.map == NULL) {
+                continue;
+            }
+            if (tiles[t] == TILED_UP || tiles[t] == TILED_DOWN) {
+                /* Linked levels share their origin, as spatial resolution
+                 * overlaps them: a level of other dimensions pools over its
+                 * overlap like any other, its own blocks clamped to it. */
+            } else {
+                /* Diagonal seams move on both axes, as the light topology
+                 * crosses them directly. */
+                bool west = tiles[t] == TILED_WEST || tiles[t] == TILED_SOUTHWEST ||
+                            tiles[t] == TILED_NORTHWEST;
+                bool east = tiles[t] == TILED_EAST || tiles[t] == TILED_NORTHEAST ||
+                            tiles[t] == TILED_SOUTHEAST;
+                bool north = tiles[t] == TILED_NORTH || tiles[t] == TILED_NORTHEAST ||
+                             tiles[t] == TILED_NORTHWEST;
+                bool south = tiles[t] == TILED_SOUTH || tiles[t] == TILED_SOUTHEAST ||
+                             tiles[t] == TILED_SOUTHWEST;
+                next.ox += west ? -MAP_WIDTH(next.map) : east ? MAP_WIDTH(region.map) : 0;
+                next.oy += north ? -MAP_HEIGHT(next.map) : south ? MAP_HEIGHT(region.map) : 0;
+            }
+            if (next.ox >= ex + reach || next.ox + MAP_WIDTH(next.map) <= bx - reach ||
+                next.oy >= ey + reach || next.oy + MAP_HEIGHT(next.map) <= by - reach) {
+                continue;
+            }
+            /* Fail closed for the whole component past the bound. */
+            if (count == light_local_regions_max &&
+                light_local_set_insert(light_local_visited, next.map, next.ox, next.oy)) {
+                return false;
+            }
+            if (count < light_local_regions_max &&
+                light_local_set_insert(light_local_visited, next.map, next.ox, next.oy)) {
+                if (count == capacity) {
+                    capacity *= 2;
+                    regions = xreallocarray(regions, capacity, sizeof(*regions));
+                }
+                regions[count++] = next;
+            }
+        }
+    }
+    *regions_out = regions;
+    *count_out = count;
+    return true;
+}
+
+/**
+ * Stamp every map a source change at (x, y) can reach. Reach is symmetric:
+ * the walk from the source's block places exactly the maps whose blocks'
+ * walks place it. A map narrower than a block contributes no coarse light,
+ * so its change stamps only itself. A change on a map not yet resident (it
+ * is loading, and its neighbors' signatures will see it arrive) or a walk
+ * that fails closed revalidates every entry, as any change once did.
+ */
+static void light_local_reach_stamp(mapstruct *map, int x, int y) {
+    uint64_t stamp = ++light_local_generation;
+    map->light_local_reach_generation = stamp;
+    if (map->in_memory != MAP_IN_MEMORY || map->spaces == NULL) {
+        light_local_generation_all++;
+        return;
+    }
+    if (MAP_WIDTH(map) < 3 || MAP_HEIGHT(map) < 3) {
+        return;
+    }
+    int bx, by, ex, ey;
+    light_local_block(x, MAP_WIDTH(map), &bx, &ex);
+    light_local_block(y, MAP_HEIGHT(map), &by, &ey);
+    const light_local_region *regions;
+    size_t count;
+    if (!light_local_walk(map, bx, ex, by, ey, &regions, &count)) {
+        light_local_generation_all++;
+        return;
+    }
+    for (size_t i = 0; i < count; i++) {
+        regions[i].map->light_local_reach_generation = stamp;
+    }
+}
+
+static int8_t light_local_level_pool(const light_local_region *regions, size_t count, int bx,
+                                     int ex, int by, int ey) {
+    int32_t positive = 0, negative = 0;
+    for (size_t i = 0; i < count; i++) {
+        light_local_pool_region(regions[i].map, regions[i].ox, regions[i].oy, bx, ex, by, ey,
+                                &positive, &negative);
+    }
+    return light_local_level_from_extrema(positive, negative);
+}
+
+int8_t light_local_level_from_extrema(int32_t positive, int32_t negative) {
+    /* Each sign is quantized before they compete, so a viewer's known light of
+     * the opposite sign learns only the hidden extremum's level, never where
+     * it lies inside its 1/8-daylight bin. Equal levels go to light. */
+    int light = (int)MIN(MAX(positive, 0) / MAP2_LOCAL_LIGHT_LEVEL_RAW,
+                         MAP2_LOCAL_LIGHT_LEVEL_MAX);
+    int dark = (int)MIN(MAX(-(int64_t)negative, 0) / MAP2_LOCAL_LIGHT_LEVEL_RAW,
+                        MAP2_LOCAL_LIGHT_LEVEL_MAX);
+    return (int8_t)(dark > light ? -dark : light);
 }

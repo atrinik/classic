@@ -34,6 +34,7 @@
 #include "map.h"
 #include "server_clock.h"
 #include "access_tokens.h"
+#include <toolkit/celestial_model.h>
 
 /** Maximum time a connection may remain in the handshake/setup phase. */
 #define SOCKET_SETUP_TIMEOUT 30
@@ -63,8 +64,34 @@ typedef struct MapCell_struct {
     /** Cache of last sent ambient sound. */
     tag_t sound_ambient_count;
 
+    /** Celestial closure value of the cell (toolkit/celestial_closure.h),
+     * zero outside the closure. A remembered cell keeps the value it had
+     * when last visible, so it lives outside the cleared part. */
+    uint32_t celestial_structure;
+
+    /** The map (its count, 0 for none) and cell this coordinate last
+     * authorized. Kept across soft clears, so remembered fog stays bound to
+     * the cell it was sent for; a hard clear resets it. */
+    tag_t source_map;
+    int16_t source_x, source_y;
+
     /* Everything below will be cleared by memset() in when the map
-     * cell is no longer visible. */
+     * cell is no longer visible, from MAP_CELL_CLEAR_START. Its 64-bit
+     * protocol-1085 fields come first and sit together, so they add no
+     * alignment padding to every cell (client lighting budget). */
+
+    /** Last occluder bits sent, vertical attenuation in bits 16-19 (1085). */
+    uint64_t occluder;
+
+    /** Layers whose last sent object carried an emitter, one bit each. */
+    uint64_t emitter_layers;
+
+    /** Emitter layers to resend on the next update because a value changed. */
+    uint64_t emitter_stale;
+
+    /** 64-bit FNV-1a digest of every emitter the cell currently shows, wide
+     * enough that two configurations colliding is negligible. */
+    uint64_t emitter_digest;
 
     uint8_t cleared;
 
@@ -83,21 +110,6 @@ typedef struct MapCell_struct {
     /** Last complete bitmap of explicitly colored sub-layers. */
     uint8_t light_rgb_explicit;
 
-    /** Last next-hour scalar endpoint sent to the client. */
-    uint16_t light_next_radiance[NUM_SUB_LAYERS];
-
-    /** Whether each next-hour scalar endpoint is established client-side. */
-    uint8_t light_next_known[NUM_SUB_LAYERS];
-
-    /** Timed-light generation for the cached next endpoint. */
-    uint64_t light_next_generation;
-
-    /** Last next-hour RGB endpoint sent to the client. */
-    uint16_t light_next_rgb_radiance[NUM_SUB_LAYERS][3];
-
-    /** Whether each next-hour RGB endpoint is explicitly colored. */
-    uint8_t light_next_rgb_explicit;
-
     /** Last base-map structural support height sent to the client. */
     int16_t support_height;
 
@@ -109,6 +121,14 @@ typedef struct MapCell_struct {
 
     /** Whether the fog-of-war state has been sent at least once. */
     uint8_t fow_known;
+
+    /** Encoded coarse local light per sub-layer, and how many were sent. */
+    uint8_t local_light[NUM_SUB_LAYERS];
+    uint8_t local_light_count;
+
+    /** Bit 0: local_light sent; bit 1: occluder sent; bit 3: the cell was
+     * authorized and is now remembered fog that keeps receiving light. */
+    uint8_t client_light_known;
 
     /** Faces we sent. */
     int16_t faces[NUM_REAL_LAYERS];
@@ -153,6 +173,9 @@ typedef struct MapCell_struct {
 
     uint8_t is_friend : NUM_SUB_LAYERS; ///< Friendly state cache.
 } MapCell;
+
+/** Offset of the first field a cleared cell resets. */
+#define MAP_CELL_CLEAR_START offsetof(MapCell, occluder)
 
 /** One map for a player. */
 struct Map {
@@ -242,6 +265,22 @@ typedef struct socket_struct {
     /** Whether the initial client setup exchange completed successfully. */
     bool setup_completed;
 
+    /** Profile digest owning each CELESTIAL slot, for stable slot identities. */
+    uint8_t celestial_slot_digest[CELESTIAL_PROTOCOL_SLOTS_MAX][32];
+
+    /** Assigned CELESTIAL slots, one bit per slot id. */
+    uint64_t celestial_slots_assigned[(CELESTIAL_PROTOCOL_SLOTS_MAX + 63) / 64];
+
+    /** Digests of the last CELESTIAL and CELESTIAL_STRUCTURE pair sent,
+     * whose generation is celestial_generation. */
+    uint64_t celestial_sent_digest;
+    uint64_t celestial_structure_digest;
+    /** Identity of the inputs the sent CELESTIAL encodes: the hour, the
+     * lunar override revision and each slot's profile digest. */
+    uint64_t celestial_inputs_identity;
+    uint32_t celestial_generation;
+    bool celestial_sent;
+
     /** Abuse-rate window and paced in-band asset response token bucket. */
     uint64_t asset_request_window_ms;
     unsigned int asset_window_requests;
@@ -313,9 +352,6 @@ typedef struct socket_struct {
 
     /** Whether ::lastmap_player_level has been initialized. */
     bool lastmap_player_level_known;
-
-    /** Timed-light generation currently established in the client map cache. */
-    uint64_t lastmap_light_generation;
 
     /** Outgoing packets. */
     struct packet_struct *packets;

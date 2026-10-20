@@ -80,7 +80,6 @@ static void refresh_celestial_clients(void) {
             pl->cs->state != ST_PLAYING) {
             continue;
         }
-        pl->cs->lastmap_light_generation = 0;
         draw_client_map2(pl->ob);
     }
 }

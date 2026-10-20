@@ -352,12 +352,16 @@ set(LIBATRINIK_PUBLIC_HEADER_NAMES
     access_resolve.h
     binreloc.h
     bresenham.h
+    celestial_closure.h
+    celestial_model.h
+    celestial_solver.h
     clioptions.h
     colorspace.h
     common.h
     console.h
     curl.h
     datetime.h
+    light_profile.h
     logger.h
     map_protocol.h
     math.h
@@ -419,11 +423,15 @@ set(TOOLKIT_SOURCES
     access_code.c
     access_resolve.c
     binreloc.c
+    celestial_closure.c
+    celestial_model.c
+    celestial_solver.c
     clioptions.c
     colorspace.c
     console.c
     curl.c
     datetime.c
+    light_profile.c
     logger.c
     map_protocol.c
     metaserver_url.c
@@ -625,6 +633,11 @@ if ((CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR OR
     atrinik_configure_target(libatrinik-console)
     target_link_libraries(libatrinik-console PRIVATE Atrinik::Core)
     add_test(NAME libatrinik-console COMMAND libatrinik-console)
+
+    add_executable(libatrinik-celestial-closure tests/celestial_closure.c)
+    atrinik_configure_target(libatrinik-celestial-closure)
+    target_link_libraries(libatrinik-celestial-closure PRIVATE Atrinik::Core)
+    add_test(NAME libatrinik-celestial-closure COMMAND libatrinik-celestial-closure)
 
     add_executable(libatrinik-string tests/string.c)
     atrinik_configure_target(libatrinik-string)

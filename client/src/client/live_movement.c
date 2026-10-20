@@ -7,6 +7,7 @@
 #include <live_movement_capture.h>
 #include <live_movement_input.h>
 #include <client.h>
+#include <client_celestial.h>
 #include <client_command_queue.h>
 #include <client_socket.h>
 #include <commands.h>
@@ -324,6 +325,21 @@ static bool capture_checkpoint_request(size_t index,
     return true;
 }
 
+/* The celestial publication stands in for the retired timed-light keyframe
+ * in the report schema: its generation, and the hour it solves. It is ready
+ * only once solved, so no capture mixes old and requested light. */
+static bool review_celestial_valid(void) {
+    return client_celestial_generation() != 0 && client_celestial_solved();
+}
+
+static uint64_t review_celestial_start(void) {
+    return client_celestial_start_seconds();
+}
+
+static uint64_t review_celestial_end(void) {
+    return client_celestial_start_seconds() + 3600;
+}
+
 static void review_lighting_tick(bool map_ready) {
     if (review_lighting_phase == NULL || review_lighting_stage == 0 || review_lighting_stage == 3 ||
         !map_ready || !client_socket_active() || client_socket_shutdown_pending() ||
@@ -336,11 +352,8 @@ static void review_lighting_tick(bool map_ready) {
     unsigned int expected_hour =
         review_lighting_stage == 1 ? (target_hour == 0 ? 15 : 0) : target_hour;
     if (!telemetry_game_time_seconds(&game_seconds) || game_seconds / 3600 % 24 != expected_hour ||
-        !MapData.light_keyframe_valid || MapData.light_keyframe_generation == 0 ||
-        MapData.light_keyframe_start_seconds / 3600 % 24 != expected_hour ||
-        MapData.light_keyframe_start_seconds >= MapData.light_keyframe_end_seconds ||
-        game_seconds < MapData.light_keyframe_start_seconds ||
-        game_seconds >= MapData.light_keyframe_end_seconds)
+        !review_celestial_valid() || review_celestial_start() / 3600 % 24 != expected_hour ||
+        game_seconds < review_celestial_start() || game_seconds >= review_celestial_end())
         return;
     review_lighting_generation = socket_command_map_publication_generation();
     fprintf(report,
@@ -352,9 +365,9 @@ static void review_lighting_tick(bool map_ready) {
             expected_hour,
             game_seconds,
             review_lighting_generation,
-            MapData.light_keyframe_generation,
-            MapData.light_keyframe_start_seconds,
-            MapData.light_keyframe_end_seconds,
+            (uint64_t)client_celestial_generation(),
+            review_celestial_start(),
+            review_celestial_end(),
             elapsed_us());
     if (review_lighting_stage == 1) {
         send_command(strcmp(review_lighting_phase, "day") == 0        ? "/celestial clear"
@@ -412,7 +425,7 @@ void live_movement_ready(void) {
             setting_get_int(OPT_CAT_MAP, OPT_MAP_WIDTH),
             setting_get_int(OPT_CAT_MAP, OPT_MAP_HEIGHT),
             fps_limit,
-            setting_get_int(OPT_CAT_MAP, OPT_SMOOTH_LIGHTING) ? "true" : "false");
+            map_lighting_is_smooth() ? "true" : "false");
     for (size_t i = 0; i < RENDER_PROFILE_STAGE_NUM; i++) {
         render_profile_stage_metadata_t metadata;
         render_profiler_stage_metadata_get((render_profile_stage_t)i, &metadata);
@@ -779,8 +792,8 @@ void live_movement_frame_finished(bool presented,
             ",\"light_keyframe_valid\":%s,\"light_keyframe_generation\":%" PRIu64 "}}\n",
             time_valid ? "true" : "false",
             game_seconds,
-            MapData.light_keyframe_valid ? "true" : "false",
-            MapData.light_keyframe_generation);
+            review_celestial_valid() ? "true" : "false",
+            (uint64_t)client_celestial_generation());
     if (ferror(report) || ftell(report) < 0 || (uint64_t)ftell(report) > LIVE_REPORT_MAX_BYTES ||
         frames >= LIVE_REPORT_MAX_FRAMES) {
         terminal(false, "report write failed or report limit exceeded");

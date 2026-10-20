@@ -3,7 +3,7 @@
 #ifndef ATRINIK_PROTOCOL_GAME_COMMANDS_H
 #define ATRINIK_PROTOCOL_GAME_COMMANDS_H
 
-#define ATRINIK_PROTOCOL_VERSION 1084U
+#define ATRINIK_PROTOCOL_VERSION 1085U
 #define SOCKET_VERSION ATRINIK_PROTOCOL_VERSION
 #define TALK_NPC_TARGET_MESSAGE_MAX 4095U
 #define ATRINIK_PROTOCOL_ITEM_NAME_SIZE 128U
@@ -127,7 +127,9 @@ typedef enum atrinik_server_to_client_command {
     CLIENT_CMD_ACCESS_POLICY = 31,
     CLIENT_CMD_REGION_EXPLORATION = 32,
     CLIENT_CMD_BOOK_EDIT = 33,
-    CLIENT_CMD_NROF = 34
+    CLIENT_CMD_CELESTIAL = 34,
+    CLIENT_CMD_CELESTIAL_STRUCTURE = 35,
+    CLIENT_CMD_NROF = 36
 } atrinik_server_to_client_command_t;
 
 /* Stable diagnostic names for server-to-client commands. */
@@ -165,5 +167,7 @@ typedef enum atrinik_server_to_client_command {
 #define CLIENT_CMD_NAME_ACCESS_POLICY "access_policy"
 #define CLIENT_CMD_NAME_REGION_EXPLORATION "region_exploration"
 #define CLIENT_CMD_NAME_BOOK_EDIT "book_edit"
+#define CLIENT_CMD_NAME_CELESTIAL "celestial"
+#define CLIENT_CMD_NAME_CELESTIAL_STRUCTURE "celestial_structure"
 
 #endif

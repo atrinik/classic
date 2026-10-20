@@ -2,7 +2,7 @@
 # Do not edit by hand.
 from enum import IntEnum
 
-PROTOCOL_VERSION = 1084
+PROTOCOL_VERSION = 1085
 
 
 TALK_NPC_TARGET_MESSAGE_MAX = 4095
@@ -101,3 +101,5 @@ class ServerToClientCommand(IntEnum):
     ACCESS_POLICY = 31
     REGION_EXPLORATION = 32
     BOOK_EDIT = 33
+    CELESTIAL = 34
+    CELESTIAL_STRUCTURE = 35

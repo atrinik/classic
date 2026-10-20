@@ -20,7 +20,7 @@
 - Command identifiers are generated from the sibling `protocol/` module. Treat
   packet-layout changes as coordinated monorepo protocol work and update both
   producer and consumer in one pull request and profile.
-- Protocol 1084 targeting binds the exact live MAP2 physical part, relative
+- Targeting (since protocol 1084) binds the exact live MAP2 physical part, relative
   depth and nonzero actor count. Parse complete results before mutation and
   clear identity on reconnect; remembered geometry is never a click/cycle
   candidate. See [`SPATIAL_3D.md`](../server/doc/SPATIAL_3D.md).
@@ -31,8 +31,19 @@
 - For remembered-world visibility, lighting, fades, invalidation, and unified
   composition, [`server/doc/MAP_RENDERING.md`](../server/doc/MAP_RENDERING.md)
   is the shared normative contract. Keep remembered static geometry separate
-  from current/live MAP2 records, treat server clears and Q5.11 radiance as
-  authoritative, and keep player light presentation-only.
+  from current/live MAP2 records, treat server clears as authoritative, and
+  keep player light presentation-only.
+- Lighting is client-computed (protocol 1085, the only model;
+  [`CLIENT_LIGHTING.md`](../server/doc/CLIENT_LIGHTING.md)). The server sends a
+  signed Q4.11 base without local or celestial light, plus emitters, occluders
+  and coarse levels. The client composes local emitter light, coarse levels,
+  flicker, tli and its own celestial field per channel in the contract order.
+  The client solves celestial light from the `CELESTIAL` and
+  `CELESTIAL_STRUCTURE` pair ([`CLIENT_CELESTIAL.md`](../server/doc/CLIENT_CELESTIAL.md)).
+  It stages both halves and publishes them only with the MAP2 update that
+  follows. It solves in budgeted steps, and reconnects whenever it must discard
+  a staged publication. Never derive lighting from objects or cells the server
+  did not send.
   Opaque fragments retain an exact owner and painter rank; translucent
   contributors use their own light before ordered source-over blending. Damage
   and lighting-only updates must replay transparency over the resolved opaque

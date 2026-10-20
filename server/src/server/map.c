@@ -157,6 +157,7 @@ static bool map_validator(void *ptr) {
 static void map_structure_changed(void) {
     los_geometry_changed();
     celestial_dependencies_inputs_changed();
+    light_local_topology_changed();
 }
 
 /** Publish residency changes before callbacks can observe the new state. */
@@ -1140,6 +1141,7 @@ void map_set_tile(mapstruct *m, int tile, const char *pathname) {
         (neighbor->in_memory == MAP_IN_MEMORY || neighbor->in_memory == MAP_LOADING)) {
         int dest_tile = map_tiled_reverse[tile];
 
+        light_local_topology_changed();
         m->tile_map[tile] = neighbor;
 
         if (neighbor->tile_path[dest_tile] == NULL || neighbor->tile_path[dest_tile] == m->path) {
@@ -1857,6 +1859,7 @@ void free_map(mapstruct *m, int flag) {
     celestial_dependencies_forget(m);
     celestial_dependencies_field_forget(m);
     celestial_light_forget(m);
+    light_local_forget(m);
 
     if (!m->in_memory) {
         return;
@@ -1907,6 +1910,7 @@ void free_map(mapstruct *m, int flag) {
                 m->tile_map[i]->tile_map[map_tiled_reverse[i]] = NULL;
             }
             m->tile_map[i] = NULL;
+            light_local_topology_changed();
         }
 
         FREE_AND_CLEAR_HASH(m->tile_path[i]);

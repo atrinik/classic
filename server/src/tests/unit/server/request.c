@@ -31,6 +31,11 @@
 #include <account.h>
 #include <toolkit/path.h>
 #include <toolkit/datetime.h>
+#include <toolkit/celestial_closure.h>
+#include <celestial_override.h>
+#include <celestial_structure.h>
+#include <region.h>
+#include <spatial.h>
 
 static size_t queued_command_count(socket_struct *cs, uint8_t type) {
     size_t count = 0;
@@ -2540,7 +2545,8 @@ START_TEST(test_incuna_unchanged_roof_level_remains_present) {
     ck_assert_ptr_nonnull(packet);
     ck_assert(map_protocol_validate(packet->data, packet->len, 0, cs->mapx, cs->mapy));
     uint16_t continuation_marker = ((uint16_t)packet->data[4] << 8) | packet->data[5];
-    ck_assert_uint_ne(continuation_marker & MAP2_CONTINUATION_TIMED_LIGHT, 0);
+    /* The base carries no celestial light, so no hourly keyframe either. */
+    ck_assert_uint_eq(continuation_marker & MAP2_CONTINUATION_TIMED_LIGHT, 0);
     uint32_t roof_delta_size = 0;
     ck_assert(map_packet_level_size(packet, 1, &roof_delta_size));
     ck_assert_uint_gt(roof_delta_size, 0);
@@ -2672,7 +2678,8 @@ START_TEST(test_local_player_remains_visible_without_disclosing_dark_actors) {
         ck_assert_ptr_nonnull(self);
         ck_assert_ptr_nonnull(other);
         ck_assert_uint_ne(self->faces[player_layer], 0);
-        ck_assert_uint_eq(self->light_radiance[pl->sub_layer], 0);
+        /* Signed base carries the negative environment, never positive light. */
+        ck_assert_int_le((int16_t)self->light_radiance[pl->sub_layer], 0);
         ck_assert_uint_eq(other->faces[monster_layer], 0);
     }
 }
@@ -2743,7 +2750,9 @@ START_TEST(test_zero_lit_roof_is_serialized_and_xray_vision_remains_authorized) 
     cell = map_client_cache_cell(&cs->lastmap, 1, ax, ay, false);
     ck_assert_ptr_nonnull(cell);
     ck_assert_uint_eq(cell->roof[socket_layer], 1);
-    ck_assert_uint_eq(cell->light_radiance[roof->sub_layer], 160);
+    /* The client applies the XRAY floor after composing local light. */
+    ck_assert_uint_eq(cell->light_radiance[roof->sub_layer], 0);
+    ck_assert_uint_ne(cell->local_light[0] & MAP2_LOCAL_LIGHT_VISION_FLOOR, 0);
 }
 END_TEST
 
@@ -2790,6 +2799,14 @@ START_TEST(test_retained_fow_reentry_resends_zero_light_state) {
     ck_assert_uint_eq(cell->fow, 1);
     ck_assert_uint_eq(cell->light_known[portal->sub_layer], 0);
     ck_assert_uint_eq(cell->light_rgb_known[portal->sub_layer], 0);
+    /* A remembered tile on the same map keeps receiving light-level
+     * updates while the per-socket cache is valid (maintainer decision). */
+    socket_buffer_clear(cs);
+    draw_client_map2(pl);
+    ck_assert_uint_eq(validate_queued_map_payloads(cs), 1);
+    cell = map_client_cache_cell(&cs->lastmap, 0, ax, ay, false);
+    ck_assert_uint_eq(cell->fow, 1);
+    ck_assert_uint_eq(cell->light_known[portal->sub_layer], 1);
 
     object_remove(roof, 0);
     socket_buffer_clear(cs);
@@ -2893,12 +2910,176 @@ START_TEST(test_greyton_roof_only_cover_hides_city_portal_face) {
 }
 END_TEST
 
-START_TEST(test_pending_neighbor_endpoint_resends_without_player_generation_change) {
-    mapstruct *west;
+START_TEST(test_celestial_inputs_precede_map_and_resend_only_on_change) {
+    mapstruct *map;
     object *pl;
-    check_setup_env_pl(&west, &pl);
+    check_setup_env_pl(&map, &pl);
+    map->celestial_schema = 1;
+    map->celestial_schema_seen = true;
+    map->celestial_sky_above = CELESTIAL_SKY_OPEN;
+    map->celestial_sky_seen = true;
+    map->celestial_v1_header_seen = true;
+    map->celestial_width_seen = true;
+    map->celestial_height_seen = true;
+    request_move_player(&pl, map, 4, 4);
+    unsigned long saved_hour = todtick;
+    todtick = 3 * HOURS_PER_MONTH + 11;
+    socket_struct *cs = CONTR(pl)->cs;
+    update_los(pl);
+    CONTR(pl)->map_update_cmd = MAP_UPDATE_CMD_SAME;
+    socket_buffer_clear(cs);
+    draw_client_map2(pl);
+
+    /* Always sent, and queued before the MAP2 update that shows the profile. */
+    packet_struct *celestial = queued_command_payload_find(cs, CLIENT_CMD_CELESTIAL);
+    packet_struct *map_packet = queued_command_payload_find(cs, CLIENT_CMD_MAP);
+    ck_assert_ptr_nonnull(celestial);
+    ck_assert_ptr_nonnull(map_packet);
+    bool celestial_first = false;
+    for (packet_struct *packet = cs->packets; packet != NULL; packet = packet->next) {
+        if (packet == celestial) {
+            celestial_first = true;
+            break;
+        }
+        if (packet == map_packet) {
+            break;
+        }
+    }
+    ck_assert(celestial_first);
+    static celestial_protocol_slot_t slots[CELESTIAL_PROTOCOL_SLOTS_MAX];
+    uint32_t generation;
+    uint64_t start;
+    size_t count;
+    ck_assert(celestial_protocol_read(celestial->data, celestial->len, &generation, &start, slots,
+                                      &count));
+    ck_assert_uint_eq(generation, 1);
+    ck_assert_uint_eq(start, (uint64_t)todtick * 3600);
+    ck_assert_uint_eq(count, 1);
+    ck_assert_uint_eq(slots[0].slot, 0);
+    celestial_model_inputs_t current, next;
+    celestial_light_model_inputs(map, (uint64_t)todtick, &current);
+    celestial_light_model_inputs(map, (uint64_t)todtick + 1, &next);
+    ck_assert(memcmp(&slots[0].current, &current, sizeof(current)) == 0);
+    ck_assert(memcmp(&slots[0].next, &next, sizeof(next)) == 0);
+
+    /* An unchanged encoding is not resent. */
+    socket_buffer_clear(cs);
+    CONTR(pl)->map_update_cmd = MAP_UPDATE_CMD_SAME;
+    draw_client_map2(pl);
+    ck_assert_ptr_null(queued_command_payload_find(cs, CLIENT_CMD_CELESTIAL));
+
+    /* A new hour advances the generation and keeps the profile's slot. */
+    todtick++;
+    socket_buffer_clear(cs);
+    CONTR(pl)->map_update_cmd = MAP_UPDATE_CMD_SAME;
+    draw_client_map2(pl);
+    celestial = queued_command_payload_find(cs, CLIENT_CMD_CELESTIAL);
+    ck_assert_ptr_nonnull(celestial);
+    ck_assert(celestial_protocol_read(celestial->data, celestial->len, &generation, &start, slots,
+                                      &count));
+    ck_assert_uint_eq(generation, 2);
+    ck_assert_uint_eq(count, 1);
+    ck_assert_uint_eq(slots[0].slot, 0);
+
+    /* A lunar override changes the inputs within the hour: the cached input
+     * identity notices, and they are sent again. */
+    celestial_model_inputs_t before;
+    celestial_light_model_inputs(map, (uint64_t)todtick, &before);
+    ck_assert(celestial_override_set_phase(CELESTIAL_LUNAR_FULL));
+    celestial_light_model_inputs(map, (uint64_t)todtick, &current);
+    if (current.lunar_age == before.lunar_age) {
+        ck_assert(celestial_override_set_phase(CELESTIAL_LUNAR_NEW));
+        celestial_light_model_inputs(map, (uint64_t)todtick, &current);
+    }
+    ck_assert_uint_ne(current.lunar_age, before.lunar_age);
+    socket_buffer_clear(cs);
+    CONTR(pl)->map_update_cmd = MAP_UPDATE_CMD_SAME;
+    draw_client_map2(pl);
+    celestial = queued_command_payload_find(cs, CLIENT_CMD_CELESTIAL);
+    ck_assert_ptr_nonnull(celestial);
+    ck_assert(celestial_protocol_read(celestial->data, celestial->len, &generation, &start, slots,
+                                      &count));
+    ck_assert_uint_eq(generation, 3);
+    ck_assert(memcmp(&slots[0].current, &current, sizeof(current)) == 0);
+    ck_assert(celestial_override_clear());
+    socket_buffer_clear(cs);
+    draw_client_map2(pl);
+    ck_assert_ptr_nonnull(queued_command_payload_find(cs, CLIENT_CMD_CELESTIAL));
+    /* Unchanged again: nothing is sent. */
+    socket_buffer_clear(cs);
+    draw_client_map2(pl);
+    ck_assert_ptr_null(queued_command_payload_find(cs, CLIENT_CMD_CELESTIAL));
+    todtick = saved_hour;
+}
+END_TEST
+
+START_TEST(test_remembered_fog_is_bound_to_its_map_cell) {
+    mapstruct *map;
+    object *pl;
+    check_setup_env_pl(&map, &pl);
     mapstruct *east = get_empty_map(24, 24);
-    mapstruct *maps[] = {west, east};
+    mapstruct *unseen = get_empty_map(24, 24);
+    map->tile_map[TILED_EAST] = east;
+    east->tile_map[TILED_WEST] = map;
+    for (int y = 0; y < 24; y++) {
+        object *floor = arch_get("water_still");
+        floor->x = 0;
+        floor->y = y;
+        ck_assert_ptr_nonnull(object_insert_map(floor, east, NULL, 0));
+        floor = arch_get("water_still");
+        floor->x = 0;
+        floor->y = y;
+        ck_assert_ptr_nonnull(object_insert_map(floor, unseen, NULL, 0));
+    }
+    request_move_player(&pl, map, 20, 12);
+    socket_struct *cs = CONTR(pl)->cs;
+    int ax = cs->mapx_2 + 4, ay = cs->mapy_2;
+    /* Seen, then walled off: the neighbor cell becomes remembered fog. */
+    update_los(pl);
+    map_client_cache_clear(&cs->lastmap);
+    socket_buffer_clear(cs);
+    CONTR(pl)->map_update_cmd = MAP_UPDATE_CMD_SAME;
+    draw_client_map2(pl);
+    object *walls[24];
+    for (int y = 0; y < map->height; y++) {
+        walls[y] = arch_get("wall_wood_1");
+        walls[y]->x = 21;
+        walls[y]->y = y;
+        walls[y] = object_insert_map(walls[y], map, NULL, 0);
+        ck_assert_ptr_nonnull(walls[y]);
+    }
+    update_los(pl);
+    socket_buffer_clear(cs);
+    draw_client_map2(pl);
+    MapCell *cell = map_client_cache_cell(&cs->lastmap, 0, ax, ay, false);
+    ck_assert_ptr_nonnull(cell);
+    ck_assert_uint_eq(cell->source_map, east->count);
+    ck_assert_uint_ne(cell->client_light_known & 8U, 0);
+    /* The link is replaced: the coordinate now resolves to a map the viewer
+     * never saw, so the remembered cell is revoked, not relit from it. */
+    map->tile_map[TILED_EAST] = unseen;
+    unseen->tile_map[TILED_WEST] = map;
+    east->tile_map[TILED_WEST] = NULL;
+    socket_buffer_clear(cs);
+    draw_client_map2(pl);
+    cell = map_client_cache_cell(&cs->lastmap, 0, ax, ay, false);
+    ck_assert_ptr_nonnull(cell);
+    ck_assert_uint_eq(cell->client_light_known & 8U, 0);
+    ck_assert_uint_eq(cell->source_map, 0);
+    socket_buffer_clear(cs);
+    map->tile_map[TILED_EAST] = NULL;
+    unseen->tile_map[TILED_WEST] = NULL;
+}
+END_TEST
+
+START_TEST(test_view_skips_preparation_of_stacks_it_renders_nothing_of) {
+    mapstruct *map;
+    object *pl;
+    check_setup_env_pl(&map, &pl);
+    mapstruct *east = get_empty_map(24, 24);
+    map->tile_map[TILED_EAST] = east;
+    east->tile_map[TILED_WEST] = map;
+    mapstruct *maps[] = {map, east};
     for (size_t i = 0; i < arraysize(maps); i++) {
         maps[i]->celestial_schema = 1;
         maps[i]->celestial_schema_seen = true;
@@ -2908,173 +3089,258 @@ START_TEST(test_pending_neighbor_endpoint_resends_without_player_generation_chan
         maps[i]->celestial_width_seen = true;
         maps[i]->celestial_height_seen = true;
     }
-    FREE_AND_COPY_HASH(west->path, "/pending/west");
-    FREE_AND_COPY_HASH(east->path, "/pending/east");
-    FREE_AND_COPY_HASH(west->tile_path[TILED_EAST], east->path);
-    FREE_AND_COPY_HASH(east->tile_path[TILED_WEST], west->path);
-    west->tile_map[TILED_EAST] = east;
-    east->tile_map[TILED_WEST] = west;
-    west->celestial_boundary[TILED_EAST] = CELESTIAL_BOUNDARY_DISCONTINUOUS;
-    east->celestial_boundary[TILED_WEST] = CELESTIAL_BOUNDARY_DISCONTINUOUS;
-    object *floor = arch_get("water_still");
-    ck_assert_ptr_nonnull(floor);
-    floor->x = 0;
-    floor->y = 12;
-    ck_assert_ptr_nonnull(object_insert_map(floor, east, NULL, 0));
-    request_move_player(&pl, west, 23, 12);
-    unsigned long saved_hour = todtick;
-    long saved_ticks = pticks;
-    todtick = 5 * HOURS_PER_MONTH + 7;
-    pticks = 0;
-    ck_assert(celestial_light_keyframe_ensure(west, (uint64_t)todtick));
-    ck_assert(!celestial_light_keyframe_request(east, (uint64_t)todtick));
-    /* Incomplete storage must never become a camera endpoint. */
-    east->spaces[0 + east->width * 12].celestial_light_next_value = INT32_MAX;
+    /* The neighbor is in view but holds nothing: its cells are sent only as
+     * clears, so its stack is neither solved nor queued. */
+    request_move_player(&pl, map, 20, 12);
     socket_struct *cs = CONTR(pl)->cs;
     update_los(pl);
+    map_client_cache_clear(&cs->lastmap);
+    socket_buffer_clear(cs);
     CONTR(pl)->map_update_cmd = MAP_UPDATE_CMD_SAME;
-    socket_buffer_clear(cs);
     draw_client_map2(pl);
-    ck_assert_uint_gt(validate_queued_map_payloads(cs), 0);
-    MapCell *cell = map_client_cache_cell(&cs->lastmap, 0, cs->mapx_2 + 1, cs->mapy_2, false);
-    ck_assert_ptr_nonnull(cell);
-    ck_assert(cell->light_next_known[floor->sub_layer]);
-    ck_assert_uint_eq(cell->light_next_radiance[floor->sub_layer],
-                      cell->light_radiance[floor->sub_layer]);
-    packet_struct *packet = queued_command_payload_find(cs, CLIENT_CMD_MAP);
-    ck_assert_ptr_nonnull(packet);
-    ck_assert_uint_eq(packet->data[30], MAP2_LIGHT_KEYFRAME_SNAP);
-    uint64_t generation = celestial_light_generation(west);
-    celestial_light_process_steps_for_test(100000);
-    ck_assert(east->celestial_light_keyframe_valid);
-    ck_assert_uint_eq(celestial_light_generation(west), generation);
+    ck_assert(!east->celestial_light_valid);
+    ck_assert(!east->celestial_light_keyframe_valid);
     socket_buffer_clear(cs);
-    draw_client_map2(pl);
-    ck_assert_uint_gt(validate_queued_map_payloads(cs), 0);
-    ck_assert_uint_eq(celestial_light_generation(west), generation);
-    ck_assert_uint_gt(cell->light_next_radiance[floor->sub_layer],
-                      cell->light_radiance[floor->sub_layer]);
-    packet = queued_command_payload_find(cs, CLIENT_CMD_MAP);
-    ck_assert_ptr_nonnull(packet);
-    ck_assert_uint_eq(packet->data[30], MAP2_LIGHT_KEYFRAME_CONTINUOUS);
-    todtick = saved_hour;
-    pticks = saved_ticks;
+    map->tile_map[TILED_EAST] = NULL;
+    east->tile_map[TILED_WEST] = NULL;
 }
 END_TEST
 
-START_TEST(test_timed_endpoint_tracks_rgb_only_changes_without_redundant_updates) {
+START_TEST(test_celestial_profiles_skip_maps_without_closure_records) {
+    mapstruct *map;
+    object *pl;
+    check_setup_env_pl(&map, &pl);
+    mapstruct *east = get_empty_map(24, 24);
+    map->tile_map[TILED_EAST] = east;
+    east->tile_map[TILED_WEST] = map;
+    mapstruct *maps[] = {map, east};
+    for (size_t i = 0; i < arraysize(maps); i++) {
+        maps[i]->celestial_schema = 1;
+        maps[i]->celestial_schema_seen = true;
+        maps[i]->celestial_sky_above = CELESTIAL_SKY_OPEN;
+        maps[i]->celestial_sky_seen = true;
+        maps[i]->celestial_v1_header_seen = true;
+        maps[i]->celestial_width_seen = true;
+        maps[i]->celestial_height_seen = true;
+    }
+    /* A visible neighbor holding nothing has a profile of its own, but no
+     * closure record, so it takes no slot: it neither discloses its profile
+     * nor crowds out a rendered map's. */
+    region_struct region = {.name = "empty", .map_first = "/world/empty"};
+    region.celestial = *region_celestial_for_map(map);
+    region.celestial.digest[0] ^= 0xff;
+    east->region = &region;
+    east->celestial_region_seen = true;
+    request_move_player(&pl, map, 20, 12);
+    socket_struct *cs = CONTR(pl)->cs;
+    update_los(pl);
+    map_client_cache_clear(&cs->lastmap);
+    socket_buffer_clear(cs);
+    CONTR(pl)->map_update_cmd = MAP_UPDATE_CMD_SAME;
+    draw_client_map2(pl);
+    packet_struct *celestial = queued_command_payload_find(cs, CLIENT_CMD_CELESTIAL);
+    ck_assert_ptr_nonnull(celestial);
+    static celestial_protocol_slot_t slots[CELESTIAL_PROTOCOL_SLOTS_MAX];
+    uint32_t generation;
+    uint64_t start;
+    size_t count;
+    ck_assert(celestial_protocol_read(celestial->data, celestial->len, &generation, &start, slots,
+                                      &count));
+    ck_assert_uint_eq(count, 1);
+    socket_buffer_clear(cs);
+    east->region = NULL;
+    map->tile_map[TILED_EAST] = NULL;
+    east->tile_map[TILED_WEST] = NULL;
+}
+END_TEST
+
+START_TEST(test_celestial_generation_exhaustion_closes_the_connection) {
     mapstruct *map;
     object *pl;
     check_setup_env_pl(&map, &pl);
     map->celestial_schema = 1;
     map->celestial_schema_seen = true;
-    map->celestial_sky_above = CELESTIAL_SKY_SEALED;
+    map->celestial_sky_above = CELESTIAL_SKY_OPEN;
     map->celestial_sky_seen = true;
     map->celestial_v1_header_seen = true;
     map->celestial_width_seen = true;
     map->celestial_height_seen = true;
     request_move_player(&pl, map, 4, 4);
-    ck_assert(celestial_light_keyframe_ensure(map, (uint64_t)todtick));
-    MapSpace *space = GET_MAP_SPACE_PTR(map, pl->x, pl->y);
-    /* Supply a color-only celestial transition to the real aggregate producer.
-     * The validated field keys and generation stay fixed throughout this test. */
-    space->celestial_light_value = 100;
-    space->celestial_light_next_value = 100;
-    space->celestial_light_rgb[0] = 100;
-    space->celestial_light_rgb[1] = 0;
-    space->celestial_light_rgb[2] = 0;
-    space->celestial_light_next_rgb[0] = 0;
-    space->celestial_light_next_rgb[1] = 0;
-    space->celestial_light_next_rgb[2] = 100;
     socket_struct *cs = CONTR(pl)->cs;
+    /* A wrapped generation would be ignored by the client for the rest of
+     * the connection, so the connection ends instead of sending it. */
+    cs->celestial_generation = UINT32_MAX;
+    cs->celestial_sent = false;
     update_los(pl);
     CONTR(pl)->map_update_cmd = MAP_UPDATE_CMD_SAME;
     socket_buffer_clear(cs);
     draw_client_map2(pl);
-    ck_assert_uint_gt(validate_queued_map_payloads(cs), 0);
-    MapCell *cell = map_client_cache_cell(&cs->lastmap, 0, cs->mapx_2, cs->mapy_2, false);
-    ck_assert_ptr_nonnull(cell);
-    int sub = pl->sub_layer;
-    ck_assert_uint_gt(cell->light_rgb_radiance[sub][0], cell->light_rgb_radiance[sub][2]);
-    ck_assert_uint_gt(cell->light_next_rgb_radiance[sub][2], cell->light_next_rgb_radiance[sub][0]);
-    uint64_t generation = cell->light_next_generation;
-    uint16_t scalar = cell->light_next_radiance[sub];
-    uint8_t bitmap = cell->light_next_rgb_explicit;
-    ck_assert_uint_ne(generation, 0);
+    ck_assert_ptr_null(queued_command_payload_find(cs, CLIENT_CMD_CELESTIAL));
+    /* Nor is the MAP update the pair belonged to. */
+    ck_assert_ptr_null(queued_command_payload_find(cs, CLIENT_CMD_MAP));
+    ck_assert_int_eq(cs->state, ST_DEAD);
+    ck_assert_uint_eq(cs->celestial_generation, UINT32_MAX);
+    cs->state = ST_PLAYING;
+    socket_buffer_clear(cs);
+}
+END_TEST
 
-    /* The ordinary server post-process settles the initial title refresh over
-     * two passes. These direct drawing calls isolate lighting after that
-     * unrelated player-name lifecycle has completed. */
-    cs->ext_title_flag = 0;
+START_TEST(test_aborted_celestial_publication_commits_no_exploration) {
+    mapstruct *map;
+    object *pl;
+    check_setup_env_pl(&map, &pl);
+    map->celestial_schema = 1;
+    map->celestial_schema_seen = true;
+    map->celestial_sky_above = CELESTIAL_SKY_OPEN;
+    map->celestial_sky_seen = true;
+    map->celestial_v1_header_seen = true;
+    map->celestial_width_seen = true;
+    map->celestial_height_seen = true;
+    /* Keeps the region set below rather than the world's. */
+    map->celestial_region_seen = true;
+    request_move_player(&pl, map, 12, 12);
+    socket_struct *cs = CONTR(pl)->cs;
+    free(cs->account);
+    cs->account = xstrdup("explorecelestial");
+    char *account_path = account_make_path(cs->account);
+    char path[HUGE_BUF];
+    snprintf((path), sizeof((path)), "%s.exploration", account_path);
+    free(account_path);
+    unlink(path);
+    exploration_begin(cs);
+    /* Exploration needs a mapped region; it keeps the world's celestial
+     * profile. */
+    region_struct *original_region = map->region;
+    ck_assert_ptr_nonnull(region_world());
+    region_struct region = {.name = "test", .map_first = "/world/test",
+                            .celestial = region_world()->celestial};
+    map->region = &region;
+    FREE_AND_COPY_HASH(map->path, "/world/celestial");
+    object *exit = arch_get("stairs_down");
+    exit->x = 13;
+    exit->y = 12;
+    ck_assert_ptr_nonnull(object_insert_map(exit, map, NULL, 0));
 
-    /* A refreshed descriptor does not imply a new field generation. */
-    space->celestial_light_next_rgb[1] = 100;
-    space->celestial_light_next_rgb[2] = 0;
-    for (int repeat = 0; repeat < 2; repeat++) {
-        cs->lastmap_light_generation = 0;
-        socket_buffer_clear(cs);
-        draw_client_map2(pl);
-        ck_assert_uint_gt(validate_queued_map_payloads(cs), 0);
-        ck_assert_uint_eq(cell->light_next_generation, generation);
-        ck_assert_uint_eq(cell->light_next_radiance[sub], scalar);
-        ck_assert_uint_eq(cell->light_next_rgb_explicit, bitmap);
-        ck_assert_uint_gt(cell->light_next_rgb_radiance[sub][1],
-                          cell->light_next_rgb_radiance[sub][2]);
-        packet_struct *packet = queued_command_payload_find(cs, CLIENT_CMD_MAP);
-        ck_assert_ptr_nonnull(packet);
-        uint32_t size = UINT32_MAX;
-        ck_assert(map_packet_level_size(packet, 0, &size));
-        if (repeat == 0) {
-            ck_assert_uint_gt(size, 0);
-        } else {
-            ck_assert_uint_eq(size, 0);
+    /* The MAP update is abandoned when its celestial pair cannot be
+     * prepared, so the cells it would have shown stay unexplored. */
+    cs->celestial_generation = UINT32_MAX;
+    cs->celestial_sent = false;
+    update_los(pl);
+    map_client_cache_clear(&cs->lastmap);
+    CONTR(pl)->map_update_cmd = MAP_UPDATE_CMD_SAME;
+    socket_buffer_clear(cs);
+    draw_client_map2(pl);
+    ck_assert_ptr_null(queued_command_payload_find(cs, CLIENT_CMD_MAP));
+    ck_assert_int_eq(cs->state, ST_DEAD);
+    ck_assert(!exploration_visited(cs, "/world/celestial", 13, 12));
+
+    /* A published update commits them. */
+    cs->state = ST_PLAYING;
+    cs->celestial_generation = 0;
+    socket_buffer_clear(cs);
+    draw_client_map2(pl);
+    ck_assert_ptr_nonnull(queued_command_payload_find(cs, CLIENT_CMD_MAP));
+    ck_assert(exploration_visited(cs, "/world/celestial", 13, 12));
+
+    exploration_end(cs);
+    socket_buffer_clear(cs);
+    map->region = original_region;
+    unlink(path);
+}
+END_TEST
+
+START_TEST(test_celestial_profiles_come_only_from_authorized_cells) {
+    mapstruct *map;
+    object *pl;
+    check_setup_env_pl(&map, &pl);
+    mapstruct *east = get_empty_map(24, 24);
+    map->tile_map[TILED_EAST] = east;
+    east->tile_map[TILED_WEST] = map;
+    mapstruct *maps[] = {map, east};
+    for (size_t i = 0; i < arraysize(maps); i++) {
+        maps[i]->celestial_schema = 1;
+        maps[i]->celestial_schema_seen = true;
+        maps[i]->celestial_sky_above = CELESTIAL_SKY_OPEN;
+        maps[i]->celestial_sky_seen = true;
+        maps[i]->celestial_v1_header_seen = true;
+        maps[i]->celestial_width_seen = true;
+        maps[i]->celestial_height_seen = true;
+    }
+    /* The neighbor behind the wall has a profile of its own, and a floor, so
+     * its cells contribute closure records once shown. */
+    for (int y = 0; y < east->height; y++) {
+        for (int x = 0; x < 6; x++) {
+            object *floor = arch_get("water_still");
+            floor->x = x;
+            floor->y = y;
+            ck_assert_ptr_nonnull(object_insert_map(floor, east, NULL, 0));
         }
     }
-}
-END_TEST
-
-START_TEST(test_timed_endpoint_refresh_keeps_colored_scalar_present) {
-    mapstruct *map;
-    object *pl;
-    check_setup_env_pl(&map, &pl);
-    map->celestial_schema = 1;
-    map->celestial_schema_seen = true;
-    map->celestial_sky_above = CELESTIAL_SKY_SEALED;
-    map->celestial_sky_seen = true;
-    map->celestial_v1_header_seen = true;
-    map->celestial_width_seen = true;
-    map->celestial_height_seen = true;
-    request_move_player(&pl, map, 4, 4);
-    object *source = arch_get("letter");
-    source->x = pl->x;
-    source->y = pl->y;
-    source->glow_radius = 1;
-    source->light_color = UINT32_C(0xff0000);
-    source = object_insert_map(source, map, NULL, 0);
-    ck_assert_ptr_nonnull(source);
+    /* A steady lamp keeps the floors lit, so MAP2 sends them once shown. */
+    object *lamp = arch_get("letter");
+    lamp->glow_radius = 13;
+    lamp->light_color = UINT32_C(0xffffff);
+    lamp->x = 1;
+    lamp->y = 12;
+    ck_assert_ptr_nonnull(object_insert_map(lamp, east, NULL, INS_NO_MERGE));
+    /* At noon, so the open-sky floors are lit and sent. */
+    unsigned long saved_hour = todtick;
+    todtick = 5 * HOURS_PER_MONTH + 12;
+    region_struct region = {.name = "hidden", .map_first = "/world/hidden"};
+    region.celestial = *region_celestial_for_map(map);
+    region.celestial.digest[0] ^= 0xff;
+    east->region = &region;
+    /* Authored, so validation keeps it instead of assigning the world's. */
+    east->celestial_region_seen = true;
+    request_move_player(&pl, map, 20, 12);
+    object *walls[24];
+    for (int y = 0; y < map->height; y++) {
+        walls[y] = arch_get("wall_wood_1");
+        walls[y]->x = 21;
+        walls[y]->y = y;
+        walls[y] = object_insert_map(walls[y], map, NULL, 0);
+        ck_assert_ptr_nonnull(walls[y]);
+    }
     socket_struct *cs = CONTR(pl)->cs;
-    update_los(pl);
-    CONTR(pl)->map_update_cmd = MAP_UPDATE_CMD_SAME;
-    socket_buffer_clear(cs);
-    draw_client_map2(pl);
-    ck_assert_uint_gt(validate_queued_map_payloads(cs), 0);
-    MapCell *cell = map_client_cache_cell(&cs->lastmap, 0, cs->mapx_2, cs->mapy_2, false);
-    ck_assert_ptr_nonnull(cell);
-    ck_assert_uint_ne(cell->light_next_generation, 0);
-    ck_assert_uint_ne(cell->light_next_rgb_explicit & (UINT8_C(1) << pl->sub_layer), 0);
+    static celestial_protocol_slot_t slots[CELESTIAL_PROTOCOL_SLOTS_MAX];
+    uint32_t generation;
+    uint64_t start;
+    size_t count;
 
-    /* Refresh another endpoint while the colored source remains steady.
-     * Request the descriptor again without clearing the per-cell cache, as
-     * occurs after light knowledge is revoked elsewhere in the view. */
-    cell->light_next_known[(pl->sub_layer + 1) % NUM_SUB_LAYERS] = 0;
-    cs->lastmap_light_generation = 0;
+    /* Every neighbor cell is behind the wall and was never sent: its profile
+     * stays off the payload. */
+    update_los(pl);
+    map_client_cache_clear(&cs->lastmap);
     socket_buffer_clear(cs);
+    CONTR(pl)->map_update_cmd = MAP_UPDATE_CMD_SAME;
     draw_client_map2(pl);
-    ck_assert_uint_gt(validate_queued_map_payloads(cs), 0);
+    packet_struct *celestial = queued_command_payload_find(cs, CLIENT_CMD_CELESTIAL);
+    ck_assert_ptr_nonnull(celestial);
+    ck_assert(celestial_protocol_read(celestial->data, celestial->len, &generation, &start, slots,
+                                      &count));
+    ck_assert_uint_eq(count, 1);
+
+    /* Once the wall goes, the neighbor is shown and its profile is sent. */
+    for (int y = 0; y < map->height; y++) {
+        object_remove(walls[y], 0);
+        object_destroy(walls[y]);
+    }
+    update_los(pl);
+    socket_buffer_clear(cs);
+    CONTR(pl)->map_update_cmd = MAP_UPDATE_CMD_SAME;
+    draw_client_map2(pl);
+    celestial = queued_command_payload_find(cs, CLIENT_CMD_CELESTIAL);
+    ck_assert_ptr_nonnull(celestial);
+    ck_assert(celestial_protocol_read(celestial->data, celestial->len, &generation, &start, slots,
+                                      &count));
+    ck_assert_uint_eq(count, 2);
+    todtick = saved_hour;
+    socket_buffer_clear(cs);
+    east->region = NULL;
 }
 END_TEST
 
-START_TEST(test_map_rgb_cache_tracks_hue_changes_and_neutral_reset) {
+START_TEST(test_local_light_color_stays_out_of_base_radiance) {
     mapstruct *map;
     object *pl;
     check_setup_env_pl(&map, &pl);
@@ -3099,40 +3365,20 @@ START_TEST(test_map_rgb_cache_tracks_hue_changes_and_neutral_reset) {
                                           CONTR(pl)->cs->mapy_2,
                                           false);
     ck_assert_ptr_nonnull(cell);
-    ck_assert_uint_gt(cell->light_rgb_radiance[pl->sub_layer][0],
-                      cell->light_rgb_radiance[pl->sub_layer][2]);
-
-    adjust_light_source_color(map, source->x, source->y, 1, source->light_color, -1);
-    source->light_color = UINT32_C(0x0000ff);
-    adjust_light_source_color(map, source->x, source->y, 1, source->light_color, 1);
-    socket_buffer_clear(CONTR(pl)->cs);
-    draw_client_map2(pl);
-    ck_assert_uint_eq(validate_queued_map_payloads(CONTR(pl)->cs), 1);
-    ck_assert_uint_gt(cell->light_rgb_radiance[pl->sub_layer][2],
-                      cell->light_rgb_radiance[pl->sub_layer][0]);
-
-    adjust_light_source_color(map, source->x, source->y, 1, source->light_color, -1);
-    source->light_color = LIGHT_COLOR_WHITE;
-    adjust_light_source_color(map, source->x, source->y, 1, source->light_color, 1);
-    socket_buffer_clear(CONTR(pl)->cs);
-    draw_client_map2(pl);
-    ck_assert_uint_eq(validate_queued_map_payloads(CONTR(pl)->cs), 1);
-    ck_assert_uint_eq(cell->light_rgb_radiance[pl->sub_layer][0],
-                      cell->light_radiance[pl->sub_layer]);
-    ck_assert_uint_eq(cell->light_rgb_radiance[pl->sub_layer][1],
-                      cell->light_radiance[pl->sub_layer]);
-    ck_assert_uint_eq(cell->light_rgb_radiance[pl->sub_layer][2],
-                      cell->light_radiance[pl->sub_layer]);
-    ck_assert_uint_eq(cell->light_rgb_explicit, 0);
-
-    /* Complete bitmap semantics must emit even when cached channel values are
-     * already equal to the resolved neutral vector. */
-    cell->light_rgb_explicit = UINT8_C(1) << pl->sub_layer;
-    socket_buffer_clear(CONTR(pl)->cs);
-    draw_client_map2(pl);
-    ck_assert_uint_eq(validate_queued_map_payloads(CONTR(pl)->cs), 1);
-    ck_assert_uint_eq(cell->light_rgb_explicit, 0);
-    ck_assert_uint_eq(sizeof(cell->light_radiance) + sizeof(cell->light_rgb_radiance), 56);
+    /* Local color travels only as the emitter; the base stays neutral. */
+    for (int hue = 0; hue < 3; hue++) {
+        static const uint32_t colors[] = {UINT32_C(0x0000ff), LIGHT_COLOR_WHITE, UINT32_C(0xff0000)};
+        for (size_t channel = 0; channel < 3; channel++) {
+            ck_assert_uint_eq(cell->light_rgb_radiance[pl->sub_layer][channel],
+                              cell->light_radiance[pl->sub_layer]);
+        }
+        adjust_light_source_color(map, source->x, source->y, 1, source->light_color, -1);
+        source->light_color = colors[hue];
+        adjust_light_source_color(map, source->x, source->y, 1, source->light_color, 1);
+        socket_buffer_clear(CONTR(pl)->cs);
+        draw_client_map2(pl);
+        (void)validate_queued_map_payloads(CONTR(pl)->cs);
+    }
 }
 END_TEST
 
@@ -3563,6 +3809,1516 @@ START_TEST(test_removed_player_connection_keeps_servicing_queued_output) {
 }
 END_TEST
 
+START_TEST(test_client_lighting_fields_follow_sent_objects_only) {
+    mapstruct *map;
+    object *op;
+    check_setup_env_pl(&map, &op);
+    request_move_player(&op, map, 12, 12);
+    player *pl = CONTR(op);
+    pl->tli = 1;
+    /* Without the negotiated compositor the connection keeps full radiance. */
+    socket_buffer_clear(pl->cs);
+    draw_client_map(op);
+    MapCell *plain = map_client_cache_cell(&pl->cs->lastmap, 0,
+                                          pl->cs->mapx_2 + 1, pl->cs->mapy_2, false);
+    ck_assert(plain == NULL || plain->client_light_known == 0);
+
+    object *blocker = arch_get("letter");
+    SET_FLAG(blocker, FLAG_BLOCKSVIEW);
+    blocker->glow_radius = 5;
+    blocker->light_color = UINT32_C(0xff8040);
+    blocker->x = op->x + 1;
+    blocker->y = op->y;
+    blocker = object_insert_map(blocker, map, NULL, INS_NO_MERGE);
+    ck_assert_ptr_nonnull(blocker);
+
+    socket_buffer_clear(pl->cs);
+    draw_client_map(op);
+    ck_assert_uint_gt(validate_queued_map_payloads(pl->cs), 0);
+    MapCell *cell = map_client_cache_cell(&pl->cs->lastmap, 0,
+                                         pl->cs->mapx_2 + 1, pl->cs->mapy_2, false);
+    ck_assert_ptr_nonnull(cell);
+    ck_assert_uint_eq(cell->client_light_known & 3U, 3U);
+    ck_assert_uint_eq(cell->occluder & MAP2_OCCLUDER_BLOCKSVIEW, MAP2_OCCLUDER_BLOCKSVIEW);
+    /* tli is a viewer bit, not part of the base, and follows a toggle. */
+    ck_assert_uint_eq(cell->local_light[0] & MAP2_LOCAL_LIGHT_TLI, MAP2_LOCAL_LIGHT_TLI);
+    pl->tli = 0;
+    pticks++;
+    socket_buffer_clear(pl->cs);
+    draw_client_map(op);
+    ck_assert_uint_gt(validate_queued_map_payloads(pl->cs), 0);
+    cell = map_client_cache_cell(&pl->cs->lastmap, 0, pl->cs->mapx_2 + 1, pl->cs->mapy_2, false);
+    ck_assert_ptr_nonnull(cell);
+    ck_assert_uint_eq(cell->local_light[0] & MAP2_LOCAL_LIGHT_TLI, 0);
+    pl->tli = 1;
+    pticks++;
+    socket_buffer_clear(pl->cs);
+    draw_client_map(op);
+    cell = map_client_cache_cell(&pl->cs->lastmap, 0, pl->cs->mapx_2 + 1, pl->cs->mapy_2, false);
+    ck_assert_ptr_nonnull(cell);
+    ck_assert_uint_ne(cell->emitter_layers, 0);
+    ck_assert_uint_eq(cell->emitter_stale, 0);
+    uint64_t digest = cell->emitter_digest;
+
+    /* A color-only change reuses the cached layer once, marks it stale and
+     * resends it on the next update. */
+    blocker->light_color = UINT32_C(0x40ff80);
+    pticks++;
+    socket_buffer_clear(pl->cs);
+    draw_client_map(op);
+    cell = map_client_cache_cell(&pl->cs->lastmap, 0, pl->cs->mapx_2 + 1, pl->cs->mapy_2, false);
+    ck_assert_ptr_nonnull(cell);
+    ck_assert_uint_ne(cell->emitter_digest, digest);
+    ck_assert_uint_eq(cell->emitter_stale, cell->emitter_layers);
+    pticks++;
+    socket_buffer_clear(pl->cs);
+    draw_client_map(op);
+    cell = map_client_cache_cell(&pl->cs->lastmap, 0, pl->cs->mapx_2 + 1, pl->cs->mapy_2, false);
+    ck_assert_ptr_nonnull(cell);
+    ck_assert_uint_eq(cell->emitter_stale, 0);
+    ck_assert_uint_gt(validate_queued_map_payloads(pl->cs), 0);
+
+    /* A flicker opt-in is part of the emitter: toggling it resends the layer. */
+    digest = cell->emitter_digest;
+    ck_assert(object_set_value(blocker, "light_flicker", "1", true));
+    ck_assert(light_emitter_flickers(blocker));
+    pticks++;
+    socket_buffer_clear(pl->cs);
+    draw_client_map(op);
+    cell = map_client_cache_cell(&pl->cs->lastmap, 0, pl->cs->mapx_2 + 1, pl->cs->mapy_2, false);
+    ck_assert_ptr_nonnull(cell);
+    ck_assert_uint_ne(cell->emitter_digest, digest);
+    pticks++;
+    socket_buffer_clear(pl->cs);
+    draw_client_map(op);
+    ck_assert_uint_gt(validate_queued_map_payloads(pl->cs), 0);
+
+    /* A black positive emitter is valid content; it is sent as it is and
+     * every queued payload still validates. */
+    digest = cell->emitter_digest;
+    blocker->light_color = 0;
+    pticks++;
+    socket_buffer_clear(pl->cs);
+    draw_client_map(op);
+    pticks++;
+    socket_buffer_clear(pl->cs);
+    draw_client_map(op);
+    ck_assert_uint_gt(validate_queued_map_payloads(pl->cs), 0);
+    cell = map_client_cache_cell(&pl->cs->lastmap, 0, pl->cs->mapx_2 + 1, pl->cs->mapy_2, false);
+    ck_assert_ptr_nonnull(cell);
+    ck_assert_uint_ne(cell->emitter_digest, digest);
+    /* The black emitter is still sent, not dropped. */
+    ck_assert_uint_ne(cell->emitter_layers, 0);
+
+    /* A hidden object is not sent, so neither its geometry nor its light is
+     * disclosed, although the space still blocks view server-side. */
+    SET_FLAG(blocker, FLAG_HIDDEN);
+    object_update(blocker, UP_OBJ_FLAGS);
+    ck_assert(GET_MAP_FLAGS(map, blocker->x, blocker->y) & P_BLOCKSVIEW);
+    pticks++;
+    socket_buffer_clear(pl->cs);
+    draw_client_map(op);
+    cell = map_client_cache_cell(&pl->cs->lastmap, 0, pl->cs->mapx_2 + 1, pl->cs->mapy_2, false);
+    ck_assert_ptr_nonnull(cell);
+    ck_assert_uint_eq(cell->occluder & MAP2_OCCLUDER_BLOCKSVIEW, 0);
+    ck_assert_uint_eq(cell->emitter_layers, 0);
+
+}
+END_TEST
+
+START_TEST(test_client_lighting_cache_fields_add_no_padding) {
+    /* The 64-bit protocol-1085 fields open the cleared part right after the
+     * retained words (ambient sound, closure value and the authorized cell
+     * identity, 16 bytes) and pack without alignment padding, as the
+     * per-socket budget counts them. */
+    ck_assert_uint_eq(offsetof(MapCell, source_map),
+                      offsetof(MapCell, celestial_structure) + sizeof(uint32_t));
+    ck_assert_uint_eq(offsetof(MapCell, occluder),
+                      offsetof(MapCell, source_y) + sizeof(int16_t));
+    ck_assert_uint_eq(MAP_CELL_CLEAR_START, offsetof(MapCell, occluder));
+    ck_assert_uint_eq(offsetof(MapCell, emitter_layers), offsetof(MapCell, occluder) + 8);
+    ck_assert_uint_eq(offsetof(MapCell, emitter_stale), offsetof(MapCell, emitter_layers) + 8);
+    ck_assert_uint_eq(offsetof(MapCell, emitter_digest), offsetof(MapCell, emitter_stale) + 8);
+    ck_assert_uint_eq(offsetof(MapCell, cleared),
+                      offsetof(MapCell, emitter_digest) + sizeof(uint64_t));
+}
+END_TEST
+
+START_TEST(test_client_lighting_remembered_tiles_keep_coarse_light) {
+    mapstruct *map;
+    object *op;
+    check_setup_env_pl(&map, &op);
+    request_move_player(&op, map, 12, 12);
+    player *pl = CONTR(op);
+    int ax = pl->cs->mapx_2 + 2, ay = pl->cs->mapy_2;
+    object *content = arch_get("letter");
+    content->x = op->x + 2;
+    content->y = op->y;
+    ck_assert_ptr_nonnull(object_insert_map(content, map, NULL, INS_NO_MERGE));
+
+    /* A lamp beside the tile gives it a nonzero level while it is visible. */
+    object *steady = arch_get("letter");
+    steady->glow_radius = 13;
+    steady->light_color = UINT32_C(0xffffff);
+    steady->x = op->x + 2;
+    steady->y = op->y;
+    ck_assert_ptr_nonnull(object_insert_map(steady, map, NULL, INS_NO_MERGE));
+
+    /* The tile two cells east is sent while it is in view. */
+    socket_buffer_clear(pl->cs);
+    draw_client_map(op);
+    MapCell *cell = map_client_cache_cell(&pl->cs->lastmap, 0, ax, ay, false);
+    ck_assert_ptr_nonnull(cell);
+    ck_assert_uint_ne(cell->fow_known, 0);
+    uint8_t visible_level = cell->local_light[0];
+    int8_t decoded;
+    bool decoded_floor;
+    ck_assert(map_protocol_local_light_decode(visible_level, &decoded, &decoded_floor));
+    ck_assert_int_gt(decoded, 0);
+
+    /* A wall between the viewer and that tile turns it into remembered fog. */
+    object *wall = arch_get("letter");
+    SET_FLAG(wall, FLAG_BLOCKSVIEW);
+    wall->x = op->x + 1;
+    wall->y = op->y;
+    wall = object_insert_map(wall, map, NULL, INS_NO_MERGE);
+    ck_assert_ptr_nonnull(wall);
+    pl->update_los = 1;
+    pticks++;
+    socket_buffer_clear(pl->cs);
+    draw_client_map(op);
+    ck_assert_uint_gt(validate_queued_map_payloads(pl->cs), 0);
+    cell = map_client_cache_cell(&pl->cs->lastmap, 0, ax, ay, false);
+    ck_assert_ptr_nonnull(cell);
+    ck_assert_uint_eq(cell->cleared, 1);
+    ck_assert_uint_ne(cell->client_light_known & 8U, 0);
+    ck_assert_uint_ne(cell->client_light_known & 1U, 0);
+    /* Entering fog keeps the level last sent while visible, not zero. */
+    ck_assert_uint_eq(cell->local_light[0], visible_level);
+    uint8_t before = cell->local_light[0];
+
+    /* A previously sent tile keeps receiving light-level updates while the
+     * per-socket cache is valid (maintainer decision): a light change behind
+     * the wall updates its coarse level. No object, emitter or
+     * occluder is sent there. */
+    int steady_x = steady->x, steady_y = steady->y;
+    object_remove(steady, 0);
+    object_destroy(steady);
+    pticks++;
+    socket_buffer_clear(pl->cs);
+    draw_client_map(op);
+    ck_assert_uint_gt(validate_queued_map_payloads(pl->cs), 0);
+    cell = map_client_cache_cell(&pl->cs->lastmap, 0, ax, ay, false);
+    ck_assert_ptr_nonnull(cell);
+    ck_assert_uint_ne(cell->local_light[0], before);
+    ck_assert(map_protocol_local_light_decode(cell->local_light[0], &decoded, &decoded_floor));
+    ck_assert_int_eq(decoded, light_local_level(map, steady_x, steady_y));
+    ck_assert_uint_eq(cell->emitter_layers, 0);
+    ck_assert_uint_eq(cell->client_light_known & 2U, 0);
+    for (size_t layer = 0; layer < NUM_REAL_LAYERS; layer++) {
+        ck_assert_int_eq(cell->faces[layer], 0);
+    }
+
+    /* The remembered tile's base radiance keeps updating as well. */
+    ck_assert_uint_ne(cell->light_known[0], 0);
+    uint16_t base_before = cell->light_radiance[0];
+    set_map_darkness(map, MAP_DARKNESS(map) > 0 ? 0 : MAX_DARKNESS);
+    pticks++;
+    socket_buffer_clear(pl->cs);
+    draw_client_map(op);
+    ck_assert_uint_gt(validate_queued_map_payloads(pl->cs), 0);
+    cell = map_client_cache_cell(&pl->cs->lastmap, 0, ax, ay, false);
+    ck_assert_ptr_nonnull(cell);
+    ck_assert_uint_ne(cell->light_radiance[0], base_before);
+    ck_assert_uint_eq(cell->emitter_layers, 0);
+
+    /* Current empty geometry hard-clears the soft-cleared remembered tile,
+     * which revokes its remembered light. */
+    object_remove(wall, 0);
+    object_destroy(wall);
+    object_remove(content, 0);
+    object_destroy(content);
+    pl->update_los = 1;
+    pticks++;
+    socket_buffer_clear(pl->cs);
+    draw_client_map(op);
+    cell = map_client_cache_cell(&pl->cs->lastmap, 0, ax, ay, false);
+    ck_assert_ptr_nonnull(cell);
+    ck_assert_uint_eq(cell->cleared, 1);
+    ck_assert_uint_eq(cell->client_light_known & 8U, 0);
+    ck_assert_uint_eq(cell->light_known[0], 0);
+}
+END_TEST
+
+START_TEST(test_remembered_light_records_split_at_tile_boundaries) {
+    mapstruct *old_map;
+    object *op;
+    check_setup_env_pl(&old_map, &op);
+    mapstruct *map = get_empty_map(MAP_CLIENT_X, MAP_CLIENT_Y);
+    request_move_player(&op, map, MAP_CLIENT_X / 2, MAP_CLIENT_Y / 2);
+    player *pl = CONTR(op);
+
+    /* Remembered records are small; a small chunk boundary makes a view of
+     * them span many chunks, so each one must split at a record boundary. */
+    size_t chunk_max = map2_level_chunk_max_exchange_for_test(2048);
+    /* Every cell is sent. */
+    for (int y = 0; y < MAP_CLIENT_Y; y++) {
+        for (int x = 0; x < MAP_CLIENT_X; x++) {
+            if (abs(x - op->x) <= 1 && abs(y - op->y) <= 1) {
+                continue;
+            }
+            object *content = arch_get("letter");
+            content->x = x;
+            content->y = y;
+            ck_assert_ptr_nonnull(object_insert_map(content, map, NULL, INS_NO_MERGE));
+        }
+    }
+    update_los(op);
+    map_client_cache_clear(&pl->cs->lastmap);
+    socket_buffer_clear(pl->cs);
+    pl->map_update_cmd = MAP_UPDATE_CMD_SAME;
+    draw_client_map2(op);
+    ck_assert_uint_gt(validate_queued_map_payloads(pl->cs), 0);
+
+    /* Walls around the viewer turn the whole view into remembered fog at
+     * once; the resent light records exceed one level chunk. */
+    for (int y = 0; y < MAP_CLIENT_Y; y++) {
+        for (int x = 0; x < MAP_CLIENT_X; x++) {
+            GET_MAP_SPACE_PTR(map, x, y)->light_value = 40;
+        }
+    }
+    for (int dy = -1; dy <= 1; dy++) {
+        for (int dx = -1; dx <= 1; dx++) {
+            if (dx == 0 && dy == 0) {
+                continue;
+            }
+            object *wall = arch_get("letter");
+            SET_FLAG(wall, FLAG_BLOCKSVIEW);
+            wall->x = op->x + dx;
+            wall->y = op->y + dy;
+            ck_assert_ptr_nonnull(object_insert_map(wall, map, NULL, INS_NO_MERGE));
+        }
+    }
+    pl->update_los = 1;
+    update_los(op);
+    pticks++;
+    socket_buffer_clear(pl->cs);
+    draw_client_map2(op);
+    ck_assert_uint_gt(validate_queued_map_payloads(pl->cs), 1);
+
+    size_t remembered = 0;
+    for (int ay = 0; ay < pl->cs->mapy; ay++) {
+        for (int ax = 0; ax < pl->cs->mapx; ax++) {
+            MapCell *cell = map_client_cache_cell(&pl->cs->lastmap, 0, ax, ay, false);
+            if (cell != NULL && (cell->client_light_known & 8U) != 0) {
+                ck_assert_uint_ne(cell->light_known[0], 0);
+                remembered++;
+            }
+        }
+    }
+    ck_assert_uint_gt(remembered, 900);
+    (void)map2_level_chunk_max_exchange_for_test(chunk_max);
+}
+END_TEST
+
+/* Celestial closure conformance (CLIENT_CELESTIAL.md). The client's solve of
+ * the received closure must match the server solver on the disclosed
+ * closure bit for bit. */
+#define CLOSURE_MEMBER_SLOTS 32768
+
+typedef struct closure_member_table {
+    struct {
+        mapstruct *map;
+        int x, y;
+        uint32_t record;
+        bool used;
+    } slots[CLOSURE_MEMBER_SLOTS];
+} closure_member_table;
+
+static size_t closure_member_hash(const mapstruct *map, int x, int y) {
+    uint64_t hash = (uint64_t)(uintptr_t)map * UINT64_C(0x9e3779b97f4a7c15);
+    hash ^= ((uint64_t)(uint32_t)x << 32) ^ (uint32_t)y;
+    hash ^= hash >> 29;
+    hash *= UINT64_C(0xbf58476d1ce4e5b9);
+    hash ^= hash >> 32;
+    return (size_t)(hash % CLOSURE_MEMBER_SLOTS);
+}
+
+static void closure_member_add(closure_member_table *table, mapstruct *map, int x, int y,
+                               uint32_t record) {
+    size_t slot = closure_member_hash(map, x, y);
+    while (table->slots[slot].used) {
+        if (table->slots[slot].map == map && table->slots[slot].x == x &&
+            table->slots[slot].y == y) {
+            ck_assert_uint_eq(table->slots[slot].record, record);
+            return;
+        }
+        slot = (slot + 1) % CLOSURE_MEMBER_SLOTS;
+    }
+    table->slots[slot].map = map;
+    table->slots[slot].x = x;
+    table->slots[slot].y = y;
+    table->slots[slot].record = record;
+    table->slots[slot].used = true;
+}
+
+static uint32_t closure_member_test(void *context, mapstruct *map, int x, int y) {
+    closure_member_table *table = context;
+    size_t slot = closure_member_hash(map, x, y);
+    while (table->slots[slot].used) {
+        if (table->slots[slot].map == map && table->slots[slot].x == x &&
+            table->slots[slot].y == y) {
+            return table->slots[slot].record;
+        }
+        slot = (slot + 1) % CLOSURE_MEMBER_SLOTS;
+    }
+    return 0;
+}
+
+/** Last queued payload of one server command. */
+static packet_struct *queued_command_payload_last(socket_struct *cs, uint8_t type) {
+    packet_struct *found = NULL;
+    for (packet_struct *packet = cs->packets; packet != NULL && packet->next != NULL;
+         packet = packet->next) {
+        if (packet->type == 0 && packet->len >= 3 && packet->data[packet->len - 1] == type) {
+            found = packet->next;
+        }
+    }
+    return found;
+}
+
+typedef struct closure_result {
+    size_t compared, gameplay_compared, gameplay_equal;
+    size_t fragments, depths;
+} closure_result;
+
+/** Decode the pair MAP2 just queued and compare the client's solve of every
+ * closure cell with the server reference and the gameplay field. */
+static closure_result closure_conformance(object *pl) {
+    socket_struct *cs = CONTR(pl)->cs;
+    packet_struct *celestial = queued_command_payload_last(cs, CLIENT_CMD_CELESTIAL);
+    packet_struct *structure = queued_command_payload_last(cs, CLIENT_CMD_CELESTIAL_STRUCTURE);
+    ck_assert_ptr_nonnull(celestial);
+    ck_assert_ptr_nonnull(structure);
+    static celestial_protocol_slot_t slots[CELESTIAL_PROTOCOL_SLOTS_MAX];
+    uint32_t generation;
+    uint64_t start;
+    size_t slot_count;
+    ck_assert(celestial_protocol_read(celestial->data, celestial->len, &generation, &start, slots,
+                                      &slot_count));
+    celestial_closure_t closure;
+    ck_assert(celestial_closure_read(structure->data, structure->len, cs->mapx, cs->mapy,
+                                     &closure));
+    ck_assert_uint_eq(closure.generation, generation);
+
+    int x0 = pl->x + (cs->mapx + 1) / 2 - cs->mapx;
+    int y0 = pl->y + (cs->mapy + 1) / 2 - cs->mapy;
+    closure_member_table *members = xcalloc(1, sizeof(*members));
+    uint16_t depths = 0;
+    for (size_t i = 0; i < closure.count; i++) {
+        const celestial_closure_fragment_t *fragment = &closure.fragments[i];
+        depths |= (uint16_t)(1U << MAP2_DEPTH_INDEX(fragment->depth));
+        for (int y = 0; y < fragment->height; y++) {
+            for (int x = 0; x < fragment->width; x++) {
+                if (fragment->values[(size_t)x + (size_t)fragment->width * y] == 0) {
+                    continue;
+                }
+                spatial_cell cell;
+                ck_assert(spatial_resolve(pl->map, x0 + fragment->x + x, y0 + fragment->y + y,
+                                          fragment->depth, &cell));
+                closure_member_add(members, cell.map, cell.x, cell.y,
+                                   fragment->values[(size_t)x + (size_t)fragment->width * y]);
+            }
+        }
+    }
+
+    closure_result result = {.fragments = closure.count};
+    for (int i = 0; i < MAP2_LEVELS; i++) {
+        result.depths += (depths >> i) & 1U;
+    }
+    for (size_t i = 0; i < closure.count; i++) {
+        const celestial_closure_fragment_t *fragment = &closure.fragments[i];
+        if (fragment->slot == CELESTIAL_PROTOCOL_SLOT_NONE) {
+            continue;
+        }
+        const celestial_protocol_slot_t *slot = NULL;
+        for (size_t s = 0; s < slot_count; s++) {
+            if (slots[s].slot == fragment->slot) {
+                slot = &slots[s];
+            }
+        }
+        ck_assert_ptr_nonnull(slot);
+        celestial_model_t model;
+        celestial_model_evaluate(&slot->current, &model);
+        size_t cells = (size_t)fragment->width * fragment->height;
+        int32_t *values = xcalloc(cells, sizeof(*values));
+        int32_t (*rgb)[3] = xcalloc(cells, sizeof(*rgb));
+        ck_assert(celestial_closure_solve(&closure, i, &model, values, rgb));
+
+        mapstruct *map = NULL;
+        int32_t *reference = NULL;
+        int32_t (*reference_rgb)[3] = NULL;
+        for (int y = 0; y < fragment->height; y++) {
+            for (int x = 0; x < fragment->width; x++) {
+                size_t index = (size_t)x + (size_t)fragment->width * y;
+                if (fragment->values[index] == 0) {
+                    continue;
+                }
+                spatial_cell cell;
+                ck_assert(spatial_resolve(pl->map, x0 + fragment->x + x, y0 + fragment->y + y,
+                                          fragment->depth, &cell));
+                if (map == NULL) {
+                    map = cell.map;
+                    size_t map_cells = (size_t)map->width * map->height;
+                    reference = xcalloc(map_cells, sizeof(*reference));
+                    reference_rgb = xcalloc(map_cells, sizeof(*reference_rgb));
+                    ck_assert(celestial_light_closure_reference_for_test(
+                        map, (uint64_t)todtick, closure_member_test, members, reference,
+                        reference_rgb));
+                }
+                /* One fragment is one map. */
+                ck_assert_ptr_eq(cell.map, map);
+                size_t real = (size_t)cell.x + (size_t)map->width * cell.y;
+                ck_assert_msg(values[index] == reference[real] &&
+                                  memcmp(rgb[index], reference_rgb[real], sizeof(rgb[index])) == 0,
+                              "%s %d,%d depth %d: client %d (%d %d %d) reference %d (%d %d %d)",
+                              map->path, cell.x, cell.y, fragment->depth, values[index],
+                              rgb[index][0], rgb[index][1], rgb[index][2], reference[real],
+                              reference_rgb[real][0], reference_rgb[real][1],
+                              reference_rgb[real][2]);
+                result.compared++;
+                const MapSpace *space = GET_MAP_SPACE_PTR(map, cell.x, cell.y);
+                if (map->celestial_light_valid) {
+                    result.gameplay_compared++;
+                    result.gameplay_equal +=
+                        space->celestial_light_value == values[index] &&
+                        memcmp(space->celestial_light_rgb, rgb[index], sizeof(rgb[index])) == 0;
+                }
+            }
+        }
+        free(reference_rgb);
+        free(reference);
+        free(rgb);
+        free(values);
+    }
+    free(members);
+    celestial_closure_free(&closure);
+    return result;
+}
+
+static void closure_fixture_schema(mapstruct *map) {
+    map->celestial_schema = 1;
+    map->celestial_schema_seen = true;
+    map->celestial_sky_above = CELESTIAL_SKY_OPEN;
+    map->celestial_sky_seen = true;
+    map->celestial_v1_header_seen = true;
+    map->celestial_width_seen = true;
+    map->celestial_height_seen = true;
+    map->region = region_world();
+}
+
+static object *closure_structure(mapstruct *map, int x, int y, uint8_t type, int flag,
+                                 const char *key, const char *value) {
+    object *op = arch_get("letter");
+    op->type = type;
+    op->x = x;
+    op->y = y;
+    if (flag >= 0) {
+        SET_FLAG(op, flag);
+    }
+    if (key != NULL) {
+        ck_assert(object_set_value(op, key, value, true));
+    }
+    op = object_insert_map(op, map, NULL, INS_NO_MERGE);
+    ck_assert_ptr_nonnull(op);
+    return op;
+}
+
+/** An open-sky map with every kind of horizontal structure in view, none of
+ * it blocking sight, so the closure holds every structured cell. */
+static mapstruct *closure_open_world(const char *path) {
+    mapstruct *map = get_empty_map(64, 64);
+    FREE_AND_COPY_HASH(map->path, path);
+    closure_fixture_schema(map);
+    for (int y = 16; y < 48; y++) {
+        for (int x = 16; x < 48; x++) {
+            closure_structure(map, x, y, MISC_OBJECT, -1, NULL, NULL);
+        }
+    }
+    for (int x = 34; x <= 37; x++) {
+        closure_structure(map, x, 29, DOOR, FLAG_DOOR_CLOSED, "celestial_transmission_closed",
+                          "opaque");
+    }
+    for (int y = 29; y <= 32; y++) {
+        closure_structure(map, 37, y, DOOR, FLAG_DOOR_CLOSED, "celestial_transmission_closed",
+                          "opaque");
+    }
+    closure_structure(map, 35, 32, DOOR, -1, "celestial_transmission_open", "glass");
+    closure_structure(map, 30, 34, MISC_OBJECT, -1, "celestial_transmission", "glass");
+    closure_structure(map, 31, 34, MISC_OBJECT, -1, "celestial_transmission", "glass");
+    closure_structure(map, 28, 30, MISC_OBJECT, -1, "celestial_transmission", "grate");
+    closure_structure(map, 26, 26, GATE, FLAG_NO_PASS, "celestial_transmission_closed", "grate");
+    closure_structure(map, 27, 26, GATE, -1, "celestial_transmission_open", "open");
+    object *partial = closure_structure(map, 29, 36, MISC_OBJECT, -1, "celestial_transmission",
+                                        "glass");
+    ck_assert(object_set_value(partial, "celestial_faces", "N,E", true));
+    return map;
+}
+
+static const uint64_t closure_hours[] = {
+    5 * HOURS_PER_MONTH + 7,  5 * HOURS_PER_MONTH + 10, 5 * HOURS_PER_MONTH + 12,
+    5 * HOURS_PER_MONTH + 16, 5 * HOURS_PER_MONTH + 21, 5 * HOURS_PER_MONTH + 2,
+};
+
+static closure_result closure_draw(object *pl, uint64_t hour) {
+    todtick = (unsigned long)hour;
+    for (mapstruct *map = first_map; map != NULL; map = map->next) {
+        if (map->celestial_schema == 1 && map->spaces != NULL) {
+            (void)celestial_light_rebuild(map, hour);
+        }
+    }
+    CONTR(pl)->update_los = 1;
+    socket_buffer_clear(CONTR(pl)->cs);
+    draw_client_map(pl);
+    ck_assert_uint_gt(validate_queued_map_payloads(CONTR(pl)->cs), 0);
+    return closure_conformance(pl);
+}
+
+START_TEST(test_celestial_closure_matches_server_solver_and_gameplay) {
+    mapstruct *old_map;
+    object *pl;
+    check_setup_env_pl(&old_map, &pl);
+    unsigned long saved_hour = todtick;
+    (void)celestial_override_clear();
+    mapstruct *map = closure_open_world("/closure/open");
+    request_move_player(&pl, map, 32, 32);
+    for (size_t h = 0; h < arraysize(closure_hours); h++) {
+        closure_result result = closure_draw(pl, closure_hours[h]);
+        ck_assert_uint_gt(result.compared, 500);
+        /* Nothing the solver reads is hidden here, so the disclosed closure
+         * reproduces the gameplay field exactly. */
+        ck_assert_uint_eq(result.gameplay_compared, result.compared);
+        ck_assert_uint_eq(result.gameplay_equal, result.compared);
+    }
+    todtick = saved_hour;
+}
+END_TEST
+
+START_TEST(test_celestial_closure_matches_server_solver_under_roofs) {
+    mapstruct *old_map;
+    object *pl;
+    check_setup_env_pl(&old_map, &pl);
+    unsigned long saved_hour = todtick;
+    (void)celestial_override_clear();
+    mapstruct *lower = closure_open_world("/closure/lower");
+    mapstruct *upper = get_empty_map(64, 64);
+    FREE_AND_COPY_HASH(upper->path, "/closure/upper");
+    closure_fixture_schema(upper);
+    FREE_AND_COPY_HASH(lower->tile_path[TILED_UP], upper->path);
+    FREE_AND_COPY_HASH(upper->tile_path[TILED_DOWN], lower->path);
+    lower->tile_map[TILED_UP] = upper;
+    upper->tile_map[TILED_DOWN] = lower;
+    lower->celestial_sky_above = CELESTIAL_SKY_LINKED;
+    lower->celestial_boundary[TILED_UP] = CELESTIAL_BOUNDARY_CONTINUOUS;
+    upper->celestial_boundary[TILED_DOWN] = CELESTIAL_BOUNDARY_CONTINUOUS;
+    for (int y = 27; y <= 33; y++) {
+        for (int x = 33; x <= 39; x++) {
+            object *roof = arch_get("roof_thatch");
+            ck_assert_ptr_nonnull(roof);
+            roof->x = x;
+            roof->y = y;
+            ck_assert_ptr_nonnull(object_insert_map(roof, upper, NULL, 0));
+        }
+    }
+    request_move_player(&pl, lower, 35, 30);
+    for (size_t h = 0; h < arraysize(closure_hours); h++) {
+        closure_result result = closure_draw(pl, closure_hours[h]);
+        ck_assert_uint_gt(result.compared, 500);
+    }
+    todtick = saved_hour;
+}
+END_TEST
+
+/** A cell of an authored map with a given kind of celestial structure. */
+typedef enum closure_site {
+    CLOSURE_SITE_OUTDOOR,
+    CLOSURE_SITE_INDOOR,
+    CLOSURE_SITE_UPPER,
+    CLOSURE_SITE_DOOR,
+    CLOSURE_SITE_GATE,
+    CLOSURE_SITE_APERTURE,
+    CLOSURE_SITES
+} closure_site;
+
+static bool closure_site_matches(mapstruct *map, int x, int y, closure_site site) {
+    if (site == CLOSURE_SITE_OUTDOOR) {
+        return celestial_structure_cell_exposed(map, x, y);
+    }
+    if (site == CLOSURE_SITE_INDOOR) {
+        return !celestial_structure_cell_exposed(map, x, y) &&
+               !(GET_MAP_FLAGS(map, x, y) & P_BLOCKSVIEW) && GET_MAP_OB(map, x, y) != NULL;
+    }
+    if (site == CLOSURE_SITE_UPPER) {
+        return map->tile_map[TILED_UP] != NULL && !(GET_MAP_FLAGS(map, x, y) & P_BLOCKSVIEW) &&
+               GET_MAP_OB(map, x, y) != NULL;
+    }
+    for (object *op = GET_MAP_OB(map, x, y); op != NULL; op = op->above) {
+        bool gate = op->type == GATE || strstr(op->arch->name, "gate") != NULL;
+        if ((site == CLOSURE_SITE_DOOR && op->type == DOOR && !gate) ||
+            (site == CLOSURE_SITE_GATE && gate) ||
+            (site == CLOSURE_SITE_APERTURE && op->type != DOOR && op->type != GATE &&
+             celestial_structure_transmission(object_get_value(op, "celestial_transmission")) !=
+                 CELESTIAL_TRANSMISSION_INVALID)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+START_TEST(test_celestial_closure_matches_server_solver_in_brynknot) {
+    static const char *const paths[] = {
+        "/shattered_islands/world_0_67", "/shattered_islands/world_1_67",
+        "/shattered_islands/world_2_67", "/shattered_islands/world_0_68",
+        "/shattered_islands/world_1_68", "/shattered_islands/world_2_68",
+        "/shattered_islands/world_0_69", "/shattered_islands/world_1_69",
+        "/shattered_islands/world_2_69", "/shattered_islands/world_0_70",
+        "/shattered_islands/world_1_70", "/shattered_islands/world_2_70",
+        "/shattered_islands/world_2_68_-1", "/shattered_islands/world_1_68_-1",
+    };
+    mapstruct *old_map;
+    object *pl;
+    check_setup_env_pl(&old_map, &pl);
+    unsigned long saved_hour = todtick;
+    (void)celestial_override_clear();
+    mapstruct *found_map[CLOSURE_SITES] = {0};
+    int found_x[CLOSURE_SITES], found_y[CLOSURE_SITES];
+    for (size_t i = 0; i < arraysize(paths); i++) {
+        mapstruct *map = ready_map_name(paths[i], NULL, MAP_NO_DYNAMIC);
+        ck_assert_msg(map != NULL, "Could not load %s", paths[i]);
+        for (mapstruct *upper = map; upper->tile_path[TILED_UP] != NULL;) {
+            upper = get_map_from_tiled(upper, TILED_UP);
+            ck_assert_ptr_nonnull(upper);
+        }
+    }
+    for (mapstruct *map = first_map; map != NULL; map = map->next) {
+        if (map->spaces == NULL || strstr(map->path, "/shattered_islands/world_") == NULL) {
+            continue;
+        }
+        for (int y = 0; y < map->height; y++) {
+            for (int x = 0; x < map->width; x++) {
+                for (int site = 0; site < CLOSURE_SITES; site++) {
+                    if (found_map[site] == NULL && closure_site_matches(map, x, y, site)) {
+                        found_map[site] = map;
+                        found_x[site] = x;
+                        found_y[site] = y;
+                    }
+                }
+            }
+        }
+    }
+    for (int site = 0; site < CLOSURE_SITES; site++) {
+        /* Brynknot authors its apertures on doors and gates; standalone glass
+         * and grates are covered by the synthetic fixtures. */
+        if (site == CLOSURE_SITE_APERTURE && found_map[site] == NULL) {
+            continue;
+        }
+        ck_assert_msg(found_map[site] != NULL, "Brynknot has no site of kind %d", site);
+        request_move_player(&pl, found_map[site], found_x[site], found_y[site]);
+        for (size_t h = 0; h < arraysize(closure_hours); h += 2) {
+            closure_result result = closure_draw(pl, closure_hours[h]);
+            ck_assert_uint_gt(result.compared, 0);
+            fprintf(stderr,
+                    "closure %s %d,%d kind %d hour %zu: %zu cells, %zu fragments, %zu depths, "
+                    "%zu/%zu equal to gameplay\n",
+                    found_map[site]->path, found_x[site], found_y[site], site, h,
+                    result.compared, result.fragments, result.depths, result.gameplay_equal,
+                    result.gameplay_compared);
+        }
+    }
+    todtick = saved_hour;
+}
+END_TEST
+
+/** Decode the last queued closure, or return false when none was queued. */
+static bool closure_last(object *pl, celestial_closure_t *closure) {
+    socket_struct *cs = CONTR(pl)->cs;
+    packet_struct *structure = queued_command_payload_last(cs, CLIENT_CMD_CELESTIAL_STRUCTURE);
+    if (structure == NULL) {
+        return false;
+    }
+    ck_assert(celestial_closure_read(structure->data, structure->len, cs->mapx, cs->mapy,
+                                     closure));
+    return true;
+}
+
+static uint32_t closure_cell(object *pl, const celestial_closure_t *closure, int x, int y) {
+    socket_struct *cs = CONTR(pl)->cs;
+    int x0 = pl->x + (cs->mapx + 1) / 2 - cs->mapx;
+    int y0 = pl->y + (cs->mapy + 1) / 2 - cs->mapy;
+    return celestial_closure_value(closure, 0, x - x0, y - y0);
+}
+
+static void closure_redraw(object *pl) {
+    CONTR(pl)->update_los = 1;
+    socket_buffer_clear(CONTR(pl)->cs);
+    draw_client_map(pl);
+    ck_assert_uint_gt(validate_queued_map_payloads(CONTR(pl)->cs), 0);
+}
+
+START_TEST(test_celestial_closure_discloses_only_sent_structure) {
+    mapstruct *old_map;
+    object *pl;
+    check_setup_env_pl(&old_map, &pl);
+    unsigned long saved_hour = todtick;
+    todtick = 5 * HOURS_PER_MONTH + 12;
+    mapstruct *map = closure_open_world("/closure/disclosure");
+    object *door = closure_structure(map, 30, 32, DOOR, -1, "celestial_transmission_open",
+                                     "glass");
+    ck_assert(object_set_value(door, "celestial_transmission_closed", "opaque", true));
+    object *far_door = closure_structure(map, 40, 32, DOOR, -1, "celestial_transmission_open",
+                                         "glass");
+    ck_assert(object_set_value(far_door, "celestial_transmission_closed", "opaque", true));
+    object *pane = closure_structure(map, 32, 30, MISC_OBJECT, FLAG_IS_INVISIBLE,
+                                     "celestial_transmission", "glass");
+    ck_assert_ptr_nonnull(pane);
+    request_move_player(&pl, map, 32, 32);
+    closure_redraw(pl);
+    celestial_closure_t closure;
+    ck_assert(closure_last(pl, &closure));
+    uint32_t generation = closure.generation;
+    uint32_t open_door = closure_cell(pl, &closure, 30, 32);
+    ck_assert_uint_ne(open_door, 0);
+    /* The open glass door: glass faces with an aperture. */
+    ck_assert_uint_eq((open_door >> CELESTIAL_CLOSURE_CLASS_SHIFT(1)) & 3U, 1);
+    ck_assert_uint_ne(open_door & CELESTIAL_CLOSURE_APERTURE(1), 0);
+    /* An invisible pane is not sent, so it discloses nothing. */
+    uint32_t pane_cell = closure_cell(pl, &closure, 32, 30);
+    ck_assert_uint_ne(pane_cell, 0);
+    for (int face = 1; face < 5; face++) {
+        ck_assert_uint_eq((pane_cell >> CELESTIAL_CLOSURE_CLASS_SHIFT(face)) & 3U, 3);
+        ck_assert_uint_eq(pane_cell & CELESTIAL_CLOSURE_APERTURE(face), 0);
+    }
+    uint32_t far_open = closure_cell(pl, &closure, 40, 32);
+    ck_assert_uint_ne(far_open, 0);
+    celestial_closure_free(&closure);
+
+    /* An unchanged view sends no new pair. */
+    closure_redraw(pl);
+    ck_assert_ptr_null(queued_command_payload_last(CONTR(pl)->cs, CLIENT_CMD_CELESTIAL_STRUCTURE));
+    ck_assert_ptr_null(queued_command_payload_last(CONTR(pl)->cs, CLIENT_CMD_CELESTIAL));
+
+    /* Closing a visible door sends both payloads with the next generation. */
+    SET_FLAG(door, FLAG_DOOR_CLOSED);
+    closure_redraw(pl);
+    ck_assert(closure_last(pl, &closure));
+    ck_assert_uint_eq(closure.generation, generation + 1);
+    ck_assert_ptr_nonnull(queued_command_payload_last(CONTR(pl)->cs, CLIENT_CMD_CELESTIAL));
+    uint32_t closed_door = closure_cell(pl, &closure, 30, 32);
+    ck_assert_uint_eq((closed_door >> CELESTIAL_CLOSURE_CLASS_SHIFT(1)) & 3U, 0);
+    generation = closure.generation;
+    celestial_closure_free(&closure);
+
+    /* A wall hides the far door, which stays as it was when last seen while
+     * its real state changes out of sight. */
+    for (int y = 30; y <= 34; y++) {
+        closure_structure(map, 38, y, MISC_OBJECT, FLAG_BLOCKSVIEW, NULL, NULL);
+    }
+    closure_redraw(pl);
+    if (closure_last(pl, &closure)) {
+        ck_assert_uint_eq(closure_cell(pl, &closure, 40, 32), far_open);
+        generation = closure.generation;
+        celestial_closure_free(&closure);
+    }
+    SET_FLAG(far_door, FLAG_DOOR_CLOSED);
+    closure_redraw(pl);
+    /* Nothing visible changed: no pair at all, so neither the state nor its
+     * timing reaches the client. */
+    ck_assert_ptr_null(queued_command_payload_last(CONTR(pl)->cs, CLIENT_CMD_CELESTIAL_STRUCTURE));
+    MapCell *remembered = map_client_cache_cell(&CONTR(pl)->cs->lastmap, 0,
+                                                40 - (pl->x + (CONTR(pl)->cs->mapx + 1) / 2 -
+                                                      CONTR(pl)->cs->mapx),
+                                                32 - (pl->y + (CONTR(pl)->cs->mapy + 1) / 2 -
+                                                      CONTR(pl)->cs->mapy),
+                                                false);
+    ck_assert_ptr_nonnull(remembered);
+    ck_assert_uint_eq(remembered->celestial_structure, far_open);
+    (void)generation;
+    todtick = saved_hour;
+}
+END_TEST
+
+START_TEST(test_celestial_closure_omits_plugin_controlled_static_faces) {
+    mapstruct *old_map;
+    object *pl;
+    check_setup_env_pl(&old_map, &pl);
+    unsigned long saved_hour = todtick;
+    todtick = 5 * HOURS_PER_MONTH + 12;
+    mapstruct *lower = closure_open_world("/closure/ask-lower");
+    mapstruct *upper = get_empty_map(64, 64);
+    FREE_AND_COPY_HASH(upper->path, "/closure/ask-upper");
+    closure_fixture_schema(upper);
+    FREE_AND_COPY_HASH(lower->tile_path[TILED_UP], upper->path);
+    FREE_AND_COPY_HASH(upper->tile_path[TILED_DOWN], lower->path);
+    lower->tile_map[TILED_UP] = upper;
+    upper->tile_map[TILED_DOWN] = lower;
+    lower->celestial_sky_above = CELESTIAL_SKY_LINKED;
+    lower->celestial_boundary[TILED_UP] = CELESTIAL_BOUNDARY_CONTINUOUS;
+    upper->celestial_boundary[TILED_DOWN] = CELESTIAL_BOUNDARY_CONTINUOUS;
+    /* The viewer stands under a roof, which the camera cuts away. */
+    object *scripted = NULL;
+    for (int y = 29; y <= 33; y++) {
+        for (int x = 29; x <= 33; x++) {
+            object *roof = arch_get("roof_thatch");
+            roof->x = x;
+            roof->y = y;
+            roof = object_insert_map(roof, upper, NULL, 0);
+            ck_assert_ptr_nonnull(roof);
+            if (x == 32 && y == 31) {
+                scripted = roof;
+            }
+        }
+    }
+    /* A plugin decides per viewer whether this roof cell is shown. */
+    scripted->event_flags |= EVENT_FLAG(EVENT_ASK_SHOW);
+    request_move_player(&pl, lower, 31, 31);
+    closure_redraw(pl);
+    celestial_closure_t closure;
+    ck_assert(closure_last(pl, &closure));
+    uint32_t under_plain = closure_cell(pl, &closure, 30, 31);
+    uint32_t under_scripted = closure_cell(pl, &closure, 32, 31);
+    ck_assert_uint_ne(under_plain, 0);
+    ck_assert_uint_ne(under_scripted, 0);
+    ck_assert_uint_eq((under_plain >> CELESTIAL_CLOSURE_OVERHEAD_SHIFT) & 3U, 0);
+    ck_assert_uint_eq((under_scripted >> CELESTIAL_CLOSURE_OVERHEAD_SHIFT) & 3U, 3);
+    celestial_closure_free(&closure);
+    todtick = saved_hour;
+}
+END_TEST
+
+/** An indoor viewer under a cut-away roof whose one sky opening, above the
+ * viewer, is reached only through a door on the hidden upper level. */
+typedef struct closure_hidden_door {
+    mapstruct *lower, *upper;
+    object *door;
+} closure_hidden_door;
+
+static closure_hidden_door closure_hidden_door_fixture(void) {
+    closure_hidden_door fixture;
+    fixture.lower = closure_open_world("/closure/door-lower");
+    fixture.upper = get_empty_map(64, 64);
+    mapstruct *lower = fixture.lower, *upper = fixture.upper;
+    FREE_AND_COPY_HASH(upper->path, "/closure/door-upper");
+    closure_fixture_schema(upper);
+    FREE_AND_COPY_HASH(lower->tile_path[TILED_UP], upper->path);
+    FREE_AND_COPY_HASH(upper->tile_path[TILED_DOWN], lower->path);
+    lower->tile_map[TILED_UP] = upper;
+    upper->tile_map[TILED_DOWN] = lower;
+    lower->celestial_sky_above = CELESTIAL_SKY_LINKED;
+    lower->celestial_boundary[TILED_UP] = CELESTIAL_BOUNDARY_CONTINUOUS;
+    upper->celestial_boundary[TILED_DOWN] = CELESTIAL_BOUNDARY_CONTINUOUS;
+    /* A roof over the room except above the viewer's cell (32, 30). */
+    for (int y = 26; y <= 36; y++) {
+        for (int x = 26; x <= 38; x++) {
+            if (x == 32 && y == 30) {
+                continue;
+            }
+            object *roof = arch_get("roof_thatch");
+            roof->x = x;
+            roof->y = y;
+            ck_assert_ptr_nonnull(object_insert_map(roof, upper, NULL, 0));
+        }
+    }
+    /* The opening is covered above and walled on three sides; its fourth
+     * side is a door to the open upper level. */
+    upper->celestial_rectangles = xcalloc(1, sizeof(celestial_rectangle_t));
+    upper->celestial_rectangle_count = 1;
+    upper->celestial_rectangles[0] = (celestial_rectangle_t){
+        .type = CELESTIAL_RECT_SKY_COVERED, .x = 32, .y = 30, .width = 1, .height = 1};
+    closure_structure(upper, 31, 30, MISC_OBJECT, FLAG_BLOCKSVIEW, NULL, NULL);
+    closure_structure(upper, 33, 30, MISC_OBJECT, FLAG_BLOCKSVIEW, NULL, NULL);
+    closure_structure(upper, 32, 29, MISC_OBJECT, FLAG_BLOCKSVIEW, NULL, NULL);
+    fixture.door = closure_structure(upper, 32, 31, DOOR, -1, "celestial_transmission_open",
+                                     "open");
+    ck_assert(object_set_value(fixture.door, "celestial_transmission_closed", "opaque", true));
+    return fixture;
+}
+
+static void closure_hidden_door_set(closure_hidden_door *fixture, bool closed) {
+    if (closed) {
+        SET_FLAG(fixture->door, FLAG_DOOR_CLOSED);
+    } else {
+        CLEAR_FLAG(fixture->door, FLAG_DOOR_CLOSED);
+    }
+    celestial_light_invalidate(fixture->upper);
+}
+
+START_TEST(test_hidden_door_state_does_not_reach_base_radiance) {
+    mapstruct *old_map;
+    object *pl;
+    check_setup_env_pl(&old_map, &pl);
+    unsigned long saved_hour = todtick;
+    (void)celestial_override_clear();
+    closure_hidden_door fixture = closure_hidden_door_fixture();
+    /* The viewer stands under the roof, which the camera cuts away; the room
+     * cell under the opening is in view. */
+    request_move_player(&pl, fixture.lower, 34, 32);
+    MapSpace *room = GET_MAP_SPACE_PTR(fixture.lower, 32, 30);
+
+    /* Find an hour when the hidden door decides the room's gameplay light,
+     * which is what the base used to carry. */
+    int found = -1;
+    int32_t open_value = 0, closed_value = 0;
+    for (int hour = 5; hour <= 19 && found < 0; hour++) {
+        todtick = 5 * HOURS_PER_MONTH + hour;
+        closure_hidden_door_set(&fixture, false);
+        celestial_light_ensure(fixture.lower);
+        open_value = room->celestial_light_value;
+        closure_hidden_door_set(&fixture, true);
+        celestial_light_ensure(fixture.lower);
+        closed_value = room->celestial_light_value;
+        if (open_value != closed_value) {
+            found = hour;
+        }
+    }
+    ck_assert_msg(found >= 0, "the hidden door never changes the room's light");
+    ck_assert_int_gt(open_value, closed_value);
+
+    todtick = 5 * HOURS_PER_MONTH + found;
+    /* A steady lamp keeps the room's objects visible in both door states:
+     * MAP2 already shows nothing in a room too dark to see, which is
+     * gameplay visibility; this test isolates what the door alone sends. */
+    object *lamp = arch_get("letter");
+    lamp->glow_radius = 13;
+    lamp->light_color = UINT32_C(0xffffff);
+    lamp->x = 33;
+    lamp->y = 31;
+    ck_assert_ptr_nonnull(object_insert_map(lamp, fixture.lower, NULL, INS_NO_MERGE));
+    closure_hidden_door_set(&fixture, false);
+    closure_redraw(pl);
+    socket_struct *cs = CONTR(pl)->cs;
+    int ax = 32 - (pl->x + (cs->mapx + 1) / 2 - cs->mapx);
+    int ay = 30 - (pl->y + (cs->mapy + 1) / 2 - cs->mapy);
+    MapCell *cell = map_client_cache_cell(&cs->lastmap, 0, ax, ay, false);
+    ck_assert_ptr_nonnull(cell);
+    ck_assert_uint_ne(cell->light_known[0], 0);
+    uint16_t base[NUM_SUB_LAYERS], base_rgb[NUM_SUB_LAYERS][3];
+    memcpy(base, cell->light_radiance, sizeof(base));
+    memcpy(base_rgb, cell->light_rgb_radiance, sizeof(base_rgb));
+    celestial_closure_t closure;
+    ck_assert(closure_last(pl, &closure));
+    /* Neither the opening nor the door is in the viewer's closure. */
+    ck_assert_uint_ne(closure_cell(pl, &closure, 32, 30), 0);
+    int x0 = pl->x + (cs->mapx + 1) / 2 - cs->mapx, y0 = pl->y + (cs->mapy + 1) / 2 - cs->mapy;
+    ck_assert_uint_eq(celestial_closure_value(&closure, 1, 32 - x0, 30 - y0), 0);
+    ck_assert_uint_eq(celestial_closure_value(&closure, 1, 32 - x0, 31 - y0), 0);
+    celestial_closure_free(&closure);
+
+    /* Closing the door out of sight changes the gameplay field, but not one
+     * byte the viewer receives: the base and the closure stay as they were. */
+    closure_hidden_door_set(&fixture, true);
+    closure_redraw(pl);
+    ck_assert_int_eq(room->celestial_light_value, closed_value);
+    cell = map_client_cache_cell(&cs->lastmap, 0, ax, ay, false);
+    ck_assert_ptr_nonnull(cell);
+    ck_assert(memcmp(cell->light_radiance, base, sizeof(base)) == 0);
+    ck_assert(memcmp(cell->light_rgb_radiance, base_rgb, sizeof(base_rgb)) == 0);
+    ck_assert_ptr_null(queued_command_payload_last(cs, CLIENT_CMD_CELESTIAL_STRUCTURE));
+    ck_assert_ptr_null(queued_command_payload_last(cs, CLIENT_CMD_CELESTIAL));
+    todtick = saved_hour;
+}
+END_TEST
+
+START_TEST(test_celestial_closure_applies_map2_direction_filtering) {
+    mapstruct *old_map;
+    object *pl;
+    check_setup_env_pl(&old_map, &pl);
+    unsigned long saved_hour = todtick;
+    todtick = 5 * HOURS_PER_MONTH + 12;
+    mapstruct *lower = closure_open_world("/closure/direction-lower");
+    mapstruct *upper = get_empty_map(64, 64);
+    FREE_AND_COPY_HASH(upper->path, "/closure/direction-upper");
+    closure_fixture_schema(upper);
+    FREE_AND_COPY_HASH(lower->tile_path[TILED_UP], upper->path);
+    FREE_AND_COPY_HASH(upper->tile_path[TILED_DOWN], lower->path);
+    lower->tile_map[TILED_UP] = upper;
+    upper->tile_map[TILED_DOWN] = lower;
+    lower->celestial_sky_above = CELESTIAL_SKY_LINKED;
+    lower->celestial_boundary[TILED_UP] = CELESTIAL_BOUNDARY_CONTINUOUS;
+    upper->celestial_boundary[TILED_DOWN] = CELESTIAL_BOUNDARY_CONTINUOUS;
+    /* The viewer stands under a roof, which the camera cuts away. The roofs
+     * west and east of the viewer are drawn by direction: MAP2 shows a
+     * direction-0 object west of the center, never east of it. */
+    object *roofs[2] = {NULL, NULL};
+    for (int y = 29; y <= 33; y++) {
+        for (int x = 29; x <= 33; x++) {
+            object *roof = arch_get("roof_thatch");
+            roof->x = x;
+            roof->y = y;
+            if (y == 31 && (x == 30 || x == 32)) {
+                SET_FLAG(roof, FLAG_DRAW_DIRECTION);
+                roof->direction = 0;
+            }
+            roof = object_insert_map(roof, upper, NULL, 0);
+            ck_assert_ptr_nonnull(roof);
+            if (y == 31 && (x == 30 || x == 32)) {
+                roofs[x == 30 ? 0 : 1] = roof;
+            }
+        }
+    }
+    request_move_player(&pl, lower, 31, 31);
+    socket_struct *cs = CONTR(pl)->cs;
+    ck_assert(map2_direction_shown(roofs[0], pl, cs->mapx_2 - 1, cs->mapy_2));
+    ck_assert(!map2_direction_shown(roofs[1], pl, cs->mapx_2 + 1, cs->mapy_2));
+    closure_redraw(pl);
+    celestial_closure_t closure;
+    ck_assert(closure_last(pl, &closure));
+    uint32_t under_shown = closure_cell(pl, &closure, 30, 31);
+    uint32_t under_omitted = closure_cell(pl, &closure, 32, 31);
+    ck_assert_uint_ne(under_shown, 0);
+    ck_assert_uint_ne(under_omitted, 0);
+    /* The shown roof shades; the omitted one is never disclosed. */
+    ck_assert_uint_eq((under_shown >> CELESTIAL_CLOSURE_OVERHEAD_SHIFT) & 3U, 0);
+    ck_assert_uint_eq((under_omitted >> CELESTIAL_CLOSURE_OVERHEAD_SHIFT) & 3U, 3);
+    celestial_closure_free(&closure);
+    todtick = saved_hour;
+}
+END_TEST
+
+START_TEST(test_celestial_closure_omits_cells_whose_objects_are_all_filtered) {
+    mapstruct *old_map;
+    object *pl;
+    check_setup_env_pl(&old_map, &pl);
+    unsigned long saved_hour = todtick;
+    todtick = 5 * HOURS_PER_MONTH + 12;
+    mapstruct *map = get_empty_map(64, 64);
+    FREE_AND_COPY_HASH(map->path, "/closure/filtered");
+    closure_fixture_schema(map);
+    /* One cell shows its object; the other holds only an invisible one, so
+     * MAP2 presents it empty and its structure is never disclosed. */
+    closure_structure(map, 30, 32, MISC_OBJECT, -1, NULL, NULL);
+    closure_structure(map, 34, 32, MISC_OBJECT, FLAG_IS_INVISIBLE, NULL, NULL);
+    request_move_player(&pl, map, 32, 32);
+    ck_assert(!QUERY_FLAG(pl, FLAG_SEE_INVISIBLE));
+    closure_redraw(pl);
+    celestial_closure_t closure;
+    ck_assert(closure_last(pl, &closure));
+    ck_assert_uint_ne(closure_cell(pl, &closure, 30, 32), 0);
+    ck_assert_uint_eq(closure_cell(pl, &closure, 34, 32), 0);
+    celestial_closure_free(&closure);
+    todtick = saved_hour;
+}
+END_TEST
+
+START_TEST(test_celestial_closure_static_faces_read_only_selected_objects) {
+    mapstruct *old_map;
+    object *pl;
+    check_setup_env_pl(&old_map, &pl);
+    unsigned long saved_hour = todtick;
+    todtick = 5 * HOURS_PER_MONTH + 12;
+    mapstruct *lower = closure_open_world("/closure/selected-lower");
+    mapstruct *upper = get_empty_map(64, 64);
+    FREE_AND_COPY_HASH(upper->path, "/closure/selected-upper");
+    closure_fixture_schema(upper);
+    FREE_AND_COPY_HASH(lower->tile_path[TILED_UP], upper->path);
+    FREE_AND_COPY_HASH(upper->tile_path[TILED_DOWN], lower->path);
+    lower->tile_map[TILED_UP] = upper;
+    upper->tile_map[TILED_DOWN] = lower;
+    lower->celestial_sky_above = CELESTIAL_SKY_LINKED;
+    lower->celestial_boundary[TILED_UP] = CELESTIAL_BOUNDARY_CONTINUOUS;
+    upper->celestial_boundary[TILED_DOWN] = CELESTIAL_BOUNDARY_CONTINUOUS;
+    /* The viewer stands under a roof the camera cuts away. Above (32, 31) an
+     * opaque roof lies beneath a glass one on the same layer: MAP2 selects
+     * the glass, so the one beneath is never disclosed. */
+    for (int y = 29; y <= 33; y++) {
+        for (int x = 29; x <= 33; x++) {
+            object *roof = arch_get("roof_thatch");
+            roof->x = x;
+            roof->y = y;
+            ck_assert_ptr_nonnull(object_insert_map(roof, upper, NULL, 0));
+        }
+    }
+    object *glass = arch_get("roof_thatch");
+    glass->x = 32;
+    glass->y = 31;
+    ck_assert(object_set_value(glass, "celestial_transmission", "glass", true));
+    glass = object_insert_map(glass, upper, NULL, 0);
+    ck_assert_ptr_nonnull(glass);
+    MapSpace *msp = GET_MAP_SPACE_PTR(upper, 32, 31);
+    ck_assert_ptr_eq(GET_MAP_SPACE_LAYER(msp, glass->layer, glass->sub_layer), glass);
+    request_move_player(&pl, lower, 31, 31);
+    closure_redraw(pl);
+    celestial_closure_t closure;
+    ck_assert(closure_last(pl, &closure));
+    uint32_t under_glass = closure_cell(pl, &closure, 32, 31);
+    ck_assert_uint_ne(under_glass, 0);
+    ck_assert_uint_eq((under_glass >> CELESTIAL_CLOSURE_OVERHEAD_SHIFT) & 3U, 1);
+    ck_assert_uint_ne(under_glass & CELESTIAL_CLOSURE_OVERHEAD_APERTURE, 0);
+    celestial_closure_free(&closure);
+    todtick = saved_hour;
+}
+END_TEST
+
+START_TEST(test_celestial_closure_static_faces_skip_camera_hidden_exits) {
+    mapstruct *old_map;
+    object *pl;
+    check_setup_env_pl(&old_map, &pl);
+    unsigned long saved_hour = todtick;
+    todtick = 5 * HOURS_PER_MONTH + 12;
+    mapstruct *lower = closure_open_world("/closure/exit-lower");
+    mapstruct *upper = get_empty_map(64, 64);
+    FREE_AND_COPY_HASH(upper->path, "/closure/exit-upper");
+    closure_fixture_schema(upper);
+    FREE_AND_COPY_HASH(lower->tile_path[TILED_UP], upper->path);
+    FREE_AND_COPY_HASH(upper->tile_path[TILED_DOWN], lower->path);
+    lower->tile_map[TILED_UP] = upper;
+    upper->tile_map[TILED_DOWN] = lower;
+    lower->celestial_sky_above = CELESTIAL_SKY_LINKED;
+    lower->celestial_boundary[TILED_UP] = CELESTIAL_BOUNDARY_CONTINUOUS;
+    upper->celestial_boundary[TILED_DOWN] = CELESTIAL_BOUNDARY_CONTINUOUS;
+    /* The viewer stands under a roof the camera cuts away; above (32, 31) is
+     * no roof but an exit that also counts as a floor. MAP2 withholds the
+     * exit there, so it must not shade the cell below either. */
+    for (int y = 29; y <= 33; y++) {
+        for (int x = 29; x <= 33; x++) {
+            if (x == 32 && y == 31) {
+                continue;
+            }
+            object *roof = arch_get("roof_thatch");
+            roof->x = x;
+            roof->y = y;
+            ck_assert_ptr_nonnull(object_insert_map(roof, upper, NULL, 0));
+        }
+    }
+    object *exit = arch_get("stairs_down");
+    exit->x = 32;
+    exit->y = 31;
+    SET_FLAG(exit, FLAG_IS_FLOOR);
+    exit = object_insert_map(exit, upper, NULL, 0);
+    ck_assert_ptr_nonnull(exit);
+    ck_assert_uint_ne(celestial_structure_faces(exit) & CELESTIAL_FACE_DOWN, 0);
+    request_move_player(&pl, lower, 31, 31);
+    closure_redraw(pl);
+    celestial_closure_t closure;
+    ck_assert(closure_last(pl, &closure));
+    uint32_t under_exit = closure_cell(pl, &closure, 32, 31);
+    ck_assert_uint_ne(under_exit, 0);
+    ck_assert_uint_eq((under_exit >> CELESTIAL_CLOSURE_OVERHEAD_SHIFT) & 3U, 3);
+    celestial_closure_free(&closure);
+    todtick = saved_hour;
+}
+END_TEST
+
+START_TEST(test_celestial_closure_is_resent_when_the_window_moves) {
+    mapstruct *old_map;
+    object *pl;
+    check_setup_env_pl(&old_map, &pl);
+    unsigned long saved_hour = todtick;
+    todtick = 5 * HOURS_PER_MONTH + 12;
+    /* A uniform map: the window-relative closure bytes are the same after a
+     * step, but they describe other cells. */
+    mapstruct *map = get_empty_map(64, 64);
+    FREE_AND_COPY_HASH(map->path, "/closure/uniform");
+    closure_fixture_schema(map);
+    for (int y = 0; y < 64; y++) {
+        for (int x = 0; x < 64; x++) {
+            closure_structure(map, x, y, MISC_OBJECT, -1, NULL, NULL);
+        }
+    }
+    request_move_player(&pl, map, 32, 32);
+    closure_redraw(pl);
+    celestial_closure_t before;
+    ck_assert(closure_last(pl, &before));
+    packet_struct *payload =
+        queued_command_payload_last(CONTR(pl)->cs, CLIENT_CMD_CELESTIAL_STRUCTURE);
+    size_t before_len = payload->len;
+    uint8_t *before_bytes = xmalloc(before_len);
+    memcpy(before_bytes, payload->data, before_len);
+    request_move_player(&pl, map, 33, 32);
+    closure_redraw(pl);
+    celestial_closure_t after;
+    ck_assert(closure_last(pl, &after));
+    ck_assert_uint_eq(after.generation, before.generation + 1);
+    payload = queued_command_payload_last(CONTR(pl)->cs, CLIENT_CMD_CELESTIAL_STRUCTURE);
+    /* Byte for byte the same apart from the generation. */
+    ck_assert_uint_eq(payload->len, before_len);
+    ck_assert(memcmp(payload->data + 4, before_bytes + 4, before_len - 4) == 0);
+    free(before_bytes);
+    celestial_closure_free(&before);
+    celestial_closure_free(&after);
+    todtick = saved_hour;
+}
+END_TEST
+
+START_TEST(test_celestial_closure_too_large_is_sent_as_open_air) {
+    mapstruct *old_map;
+    object *pl;
+    check_setup_env_pl(&old_map, &pl);
+    unsigned long saved_hour = todtick;
+    todtick = 5 * HOURS_PER_MONTH + 12;
+    mapstruct *map = closure_open_world("/closure/large");
+    request_move_player(&pl, map, 32, 32);
+    size_t limit = map2_closure_payload_max_exchange_for_test(64);
+    closure_redraw(pl);
+    (void)map2_closure_payload_max_exchange_for_test(limit);
+    celestial_closure_t closure;
+    ck_assert(closure_last(pl, &closure));
+    /* The depth is not dropped: every cell of it is sent as an outside
+     * record, which the client solves as open air and still updates. */
+    ck_assert_uint_gt(closure.count, 0);
+    const celestial_closure_fragment_t *fragment = &closure.fragments[0];
+    ck_assert_int_eq(fragment->depth, 0);
+    uint32_t open_air = fragment->values[0];
+    ck_assert_uint_eq(open_air, CELESTIAL_CLOSURE_OUTSIDE_RECORD);
+    for (size_t i = 0; i < (size_t)fragment->width * fragment->height; i++) {
+        ck_assert_uint_eq(fragment->values[i], open_air);
+    }
+    celestial_closure_free(&closure);
+    todtick = saved_hour;
+}
+END_TEST
+
+START_TEST(test_view_prepares_every_shown_stack_for_the_next_hour) {
+    unsigned long saved_hour = todtick;
+    (void)celestial_override_clear();
+    mapstruct *west = ready_map_name("/shattered_islands/world_0_68", NULL, 0);
+    ck_assert_ptr_nonnull(west);
+    mapstruct *east = get_map_from_tiled(west, TILED_EAST);
+    ck_assert_ptr_nonnull(east);
+    object *pl = player_get_dummy(NULL, NULL);
+    todtick = 5 * HOURS_PER_MONTH + 10;
+    /* The viewer stands at the seam: the update shows both stacks. */
+    request_move_player(&pl, west, 23, 18);
+    /* The view loads the stacks it shows a few maps a tick, and a job waits
+     * for room on the budget; later updates admit the rest. */
+    for (int update = 0; update < 12; update++) {
+        pticks++;
+        closure_redraw(pl);
+        celestial_light_process_steps_for_test(10000000);
+    }
+    ck_assert_ptr_nonnull(east->tile_map[TILED_UP]);
+    ck_assert(west->celestial_light_keyframe_valid);
+    ck_assert(east->celestial_light_keyframe_valid);
+    /* At the hour boundary both promote: no stack rebuilds inside MAP2. */
+    uint64_t builds = celestial_light_rebuilds_for_test();
+    todtick++;
+    closure_redraw(pl);
+    ck_assert_uint_eq(celestial_light_rebuilds_for_test(), builds);
+    todtick = saved_hour;
+}
+END_TEST
+
+START_TEST(test_celestial_closure_fallback_resends_membership_changes) {
+    mapstruct *old_map;
+    object *pl;
+    check_setup_env_pl(&old_map, &pl);
+    unsigned long saved_hour = todtick;
+    todtick = 5 * HOURS_PER_MONTH + 12;
+    mapstruct *map = closure_open_world("/closure/fallback-membership");
+    request_move_player(&pl, map, 32, 32);
+    socket_struct *cs = CONTR(pl)->cs;
+    size_t limit = map2_closure_payload_max_exchange_for_test(64);
+    closure_redraw(pl);
+    ck_assert_ptr_nonnull(queued_command_payload_last(cs, CLIENT_CMD_CELESTIAL_STRUCTURE));
+    closure_redraw(pl);
+    ck_assert_ptr_null(queued_command_payload_last(cs, CLIENT_CMD_CELESTIAL_STRUCTURE));
+    /* An interior cell loses its only object: as outside records the bytes
+     * stay the same, but the cell left the closure, so a pair is sent. */
+    object *structure = NULL;
+    for (object *op = GET_MAP_OB(map, 30, 30); op != NULL; op = op->above) {
+        if (op->type == MISC_OBJECT) {
+            structure = op;
+        }
+    }
+    ck_assert_ptr_nonnull(structure);
+    object_remove(structure, 0);
+    object_destroy(structure);
+    closure_redraw(pl);
+    ck_assert_ptr_nonnull(queued_command_payload_last(cs, CLIENT_CMD_CELESTIAL_STRUCTURE));
+    (void)map2_closure_payload_max_exchange_for_test(limit);
+    todtick = saved_hour;
+}
+END_TEST
+
+START_TEST(test_celestial_closure_seams_ignore_out_of_view_residency) {
+    /* A seam cell whose neighbor across the seam is outside the MAP2 window:
+     * whether that map is resident (perhaps for another player) or not, and
+     * whatever its profile, the face fails closed. Inside the window the
+     * view keeps the neighbor resident, and the real seam decides. */
+    mapstruct *old_map;
+    object *pl;
+    check_setup_env_pl(&old_map, &pl);
+    mapstruct *west = get_empty_map(64, 64);
+    mapstruct *east = get_empty_map(64, 64);
+    FREE_AND_COPY_HASH(west->path, "/closure/residency-west");
+    FREE_AND_COPY_HASH(east->path, "/closure/residency-east");
+    closure_fixture_schema(west);
+    closure_fixture_schema(east);
+    FREE_AND_COPY_HASH(west->tile_path[TILED_EAST], east->path);
+    west->celestial_boundary[TILED_EAST] = CELESTIAL_BOUNDARY_CONTINUOUS;
+    east->celestial_boundary[TILED_WEST] = CELESTIAL_BOUNDARY_CONTINUOUS;
+    object *structure = closure_structure(west, 63, 32, MISC_OBJECT, -1, NULL, NULL);
+    celestial_closure_accumulator_t sent;
+    celestial_closure_begin(&sent);
+    celestial_closure_accumulate(&sent, structure);
+    uint8_t all = 0x3fU, east_outside = 0x3fU & ~(1U << 1);
+    uint32_t values[2];
+    for (int resident = 0; resident < 2; resident++) {
+        west->tile_map[TILED_EAST] = resident ? east : NULL;
+        east->tile_map[TILED_WEST] = resident ? west : NULL;
+        values[resident] =
+            celestial_closure_cell_value(&sent, west, 63, 32, pl, 16, 16, east_outside);
+    }
+    ck_assert_uint_eq(values[0], values[1]);
+    ck_assert_uint_eq(values[0] & CELESTIAL_CLOSURE_CONTINUOUS_EAST, 0);
+    /* Inside the window the resident neighbor's real seam is continuous. */
+    west->tile_map[TILED_EAST] = east;
+    east->tile_map[TILED_WEST] = west;
+    ck_assert_uint_ne(celestial_closure_cell_value(&sent, west, 63, 32, pl, 16, 16, all) &
+                          CELESTIAL_CLOSURE_CONTINUOUS_EAST,
+                      0);
+    /* A neighbor on the same map is continuous wherever it lies. */
+    ck_assert_uint_ne(celestial_closure_cell_value(&sent, west, 63, 32, pl, 16, 16, 0) &
+                          CELESTIAL_CLOSURE_CONTINUOUS_WEST,
+                      0);
+    west->tile_map[TILED_EAST] = NULL;
+    east->tile_map[TILED_WEST] = NULL;
+}
+END_TEST
+
+START_TEST(test_celestial_closure_splits_maps_repeated_by_a_link_cycle) {
+    /* Two narrow maps linked east and west into a cycle alternate across the
+     * window, so each map's bounding rectangle covers the other's cells:
+     * the depth is sent as non-overlapping row runs, and MAP2 publishes. */
+    mapstruct *old_map;
+    object *pl;
+    check_setup_env_pl(&old_map, &pl);
+    unsigned long saved_hour = todtick;
+    todtick = 5 * HOURS_PER_MONTH + 12;
+    mapstruct *a = get_empty_map(3, 64);
+    mapstruct *b = get_empty_map(3, 64);
+    FREE_AND_COPY_HASH(a->path, "/closure/cycle-a");
+    FREE_AND_COPY_HASH(b->path, "/closure/cycle-b");
+    closure_fixture_schema(a);
+    closure_fixture_schema(b);
+    a->tile_map[TILED_EAST] = b;
+    a->tile_map[TILED_WEST] = b;
+    b->tile_map[TILED_EAST] = a;
+    b->tile_map[TILED_WEST] = a;
+    for (int y = 28; y <= 36; y++) {
+        for (int x = 0; x < 3; x++) {
+            closure_structure(a, x, y, MISC_OBJECT, -1, NULL, NULL);
+            closure_structure(b, x, y, MISC_OBJECT, -1, NULL, NULL);
+        }
+    }
+    request_move_player(&pl, a, 1, 32);
+    closure_redraw(pl);
+    celestial_closure_t closure;
+    ck_assert(closure_last(pl, &closure));
+    size_t depth0 = 0;
+    for (size_t i = 0; i < closure.count; i++) {
+        depth0 += closure.fragments[i].depth == 0;
+    }
+    /* More than one fragment per map: the placements are separated. */
+    ck_assert_uint_gt(depth0, 2);
+    celestial_closure_free(&closure);
+    a->tile_map[TILED_EAST] = a->tile_map[TILED_WEST] = NULL;
+    b->tile_map[TILED_EAST] = b->tile_map[TILED_WEST] = NULL;
+    todtick = saved_hour;
+}
+END_TEST
+
+START_TEST(test_celestial_closure_headers_too_large_coalesce_by_depth) {
+    mapstruct *old_map;
+    object *pl;
+    check_setup_env_pl(&old_map, &pl);
+    unsigned long saved_hour = todtick;
+    todtick = 5 * HOURS_PER_MONTH + 12;
+    mapstruct *west = get_empty_map(64, 64);
+    mapstruct *east = get_empty_map(64, 64);
+    FREE_AND_COPY_HASH(west->path, "/closure/coalesce-west");
+    FREE_AND_COPY_HASH(east->path, "/closure/coalesce-east");
+    closure_fixture_schema(west);
+    closure_fixture_schema(east);
+    west->tile_map[TILED_EAST] = east;
+    east->tile_map[TILED_WEST] = west;
+    /* Structure on both sides of the seam puts both maps in the closure. */
+    for (int y = 28; y <= 36; y++) {
+        for (int x = 56; x < 64; x++) {
+            closure_structure(west, x, y, MISC_OBJECT, -1, NULL, NULL);
+        }
+        for (int x = 0; x < 4; x++) {
+            closure_structure(east, x, y, MISC_OBJECT, -1, NULL, NULL);
+        }
+    }
+    request_move_player(&pl, west, 60, 32);
+    /* Normally each map is its own fragment. */
+    closure_redraw(pl);
+    celestial_closure_t closure;
+    ck_assert(closure_last(pl, &closure));
+    size_t depth0 = 0;
+    for (size_t i = 0; i < closure.count; i++) {
+        depth0 += closure.fragments[i].depth == 0;
+    }
+    ck_assert_uint_eq(depth0, 2);
+    celestial_closure_free(&closure);
+    /* With no room even for open-air fragment headers, each depth becomes one
+     * open-air fragment over both maps, so every cell is still stored. */
+    size_t limit = map2_closure_payload_max_exchange_for_test(1);
+    closure_redraw(pl);
+    (void)map2_closure_payload_max_exchange_for_test(limit);
+    ck_assert(closure_last(pl, &closure));
+    ck_assert_uint_gt(closure.count, 0);
+    for (size_t i = 0; i < closure.count; i++) {
+        const celestial_closure_fragment_t *fragment = &closure.fragments[i];
+        for (size_t j = i + 1; j < closure.count; j++) {
+            ck_assert_int_ne(closure.fragments[j].depth, fragment->depth);
+        }
+        if (fragment->depth == 0) {
+            int east_x = 64 - pl->x + CONTR(pl)->cs->mapx_2;
+            ck_assert_int_lt(fragment->x, east_x);
+            ck_assert_int_ge(fragment->x + fragment->width, east_x + 1);
+        }
+        for (size_t cell = 0; cell < (size_t)fragment->width * fragment->height; cell++) {
+            ck_assert_uint_eq(fragment->values[cell], fragment->values[0]);
+        }
+        ck_assert_uint_eq(fragment->values[0], CELESTIAL_CLOSURE_OUTSIDE_RECORD);
+    }
+    celestial_closure_free(&closure);
+    /* Too many fragments coalesce the same way, whatever their size: after
+     * an ordinary update restores both fragments, a cap of one merges them. */
+    closure_redraw(pl);
+    celestial_closure_t capped;
+    size_t fragments_limit = map2_closure_fragments_max_exchange_for_test(1);
+    closure_redraw(pl);
+    (void)map2_closure_fragments_max_exchange_for_test(fragments_limit);
+    ck_assert(closure_last(pl, &capped));
+    /* Collection stops at the cap and describes each depth directly, the
+     * same shape as the size fallback: one outside-record fragment per depth
+     * over its closure cells. */
+    size_t capped_depth0 = 0;
+    for (size_t i = 0; i < capped.count; i++) {
+        const celestial_closure_fragment_t *fragment = &capped.fragments[i];
+        for (size_t j = 0; j < i; j++) {
+            ck_assert_int_ne(capped.fragments[j].depth, fragment->depth);
+        }
+        for (size_t cell = 0; cell < (size_t)fragment->width * fragment->height; cell++) {
+            ck_assert_uint_eq(fragment->values[cell], CELESTIAL_CLOSURE_OUTSIDE_RECORD);
+        }
+        if (fragment->depth == 0) {
+            capped_depth0++;
+            int east_x = 64 - pl->x + CONTR(pl)->cs->mapx_2;
+            ck_assert_int_lt(fragment->x, east_x);
+            ck_assert_int_ge(fragment->x + fragment->width, east_x + 1);
+        }
+    }
+    ck_assert_uint_eq(capped_depth0, 1);
+    celestial_closure_free(&capped);
+    west->tile_map[TILED_EAST] = NULL;
+    east->tile_map[TILED_WEST] = NULL;
+    todtick = saved_hour;
+}
+END_TEST
+
 static Suite *suite(void) {
     Suite *s = suite_create("request");
     TCase *tc_core = tcase_create("Core");
@@ -3571,6 +5327,29 @@ static Suite *suite(void) {
     tcase_add_unchecked_fixture(tc_core, check_setup, check_teardown);
     tcase_add_checked_fixture(tc_core, check_test_setup, check_test_teardown);
     suite_add_tcase(s, tc_core);
+    TCase *tc_closure = tcase_create("Celestial closure");
+    /* Full-field server and client solves over authored Brynknot views. */
+    tcase_set_timeout(tc_closure, 600);
+    tcase_add_unchecked_fixture(tc_closure, check_setup, check_teardown);
+    tcase_add_checked_fixture(tc_closure, check_test_setup, check_test_teardown);
+    suite_add_tcase(s, tc_closure);
+    tcase_add_test(tc_closure, test_celestial_closure_matches_server_solver_and_gameplay);
+    tcase_add_test(tc_closure, test_celestial_closure_matches_server_solver_under_roofs);
+    tcase_add_test(tc_closure, test_celestial_closure_matches_server_solver_in_brynknot);
+    tcase_add_test(tc_closure, test_celestial_closure_discloses_only_sent_structure);
+    tcase_add_test(tc_closure, test_celestial_closure_omits_plugin_controlled_static_faces);
+    tcase_add_test(tc_closure, test_celestial_closure_applies_map2_direction_filtering);
+    tcase_add_test(tc_closure, test_celestial_closure_static_faces_read_only_selected_objects);
+    tcase_add_test(tc_closure, test_hidden_door_state_does_not_reach_base_radiance);
+    tcase_add_test(tc_closure, test_view_prepares_every_shown_stack_for_the_next_hour);
+    tcase_add_test(tc_closure, test_celestial_closure_static_faces_skip_camera_hidden_exits);
+    tcase_add_test(tc_closure, test_celestial_closure_omits_cells_whose_objects_are_all_filtered);
+    tcase_add_test(tc_closure, test_celestial_closure_is_resent_when_the_window_moves);
+    tcase_add_test(tc_closure, test_celestial_closure_too_large_is_sent_as_open_air);
+    tcase_add_test(tc_closure, test_celestial_closure_headers_too_large_coalesce_by_depth);
+    tcase_add_test(tc_closure, test_celestial_closure_splits_maps_repeated_by_a_link_cycle);
+    tcase_add_test(tc_closure, test_celestial_closure_seams_ignore_out_of_view_residency);
+    tcase_add_test(tc_closure, test_celestial_closure_fallback_resends_membership_changes);
     tcase_add_test(tc_core, test_removed_player_connection_keeps_servicing_queued_output);
     tcase_add_test(tc_core, test_map_name_metadata_handles_transient_unnamed_maps);
     tcase_add_test(tc_core, test_talk_target_binds_actor_without_selection_acknowledgement);
@@ -3640,15 +5419,23 @@ static Suite *suite(void) {
     tcase_add_test(tc_core, test_map_exit_semantic_not_disclosed_by_boundary_geometry);
     tcase_add_test(tc_core, test_greyton_roof_only_cover_hides_city_portal_face);
     tcase_add_test(tc_core, test_region_exploration_grants_only_visible_public_base_cells);
-    tcase_add_test(tc_core, test_timed_endpoint_tracks_rgb_only_changes_without_redundant_updates);
-    tcase_add_test(tc_core, test_pending_neighbor_endpoint_resends_without_player_generation_change);
-    tcase_add_test(tc_core, test_timed_endpoint_refresh_keeps_colored_scalar_present);
-    tcase_add_test(tc_core, test_map_rgb_cache_tracks_hue_changes_and_neutral_reset);
+    tcase_add_test(tc_core, test_celestial_inputs_precede_map_and_resend_only_on_change);
+    tcase_add_test(tc_core, test_celestial_profiles_come_only_from_authorized_cells);
+    tcase_add_test(tc_core, test_celestial_generation_exhaustion_closes_the_connection);
+    tcase_add_test(tc_core, test_aborted_celestial_publication_commits_no_exploration);
+    tcase_add_test(tc_core, test_celestial_profiles_skip_maps_without_closure_records);
+    tcase_add_test(tc_core, test_view_skips_preparation_of_stacks_it_renders_nothing_of);
+    tcase_add_test(tc_core, test_remembered_fog_is_bound_to_its_map_cell);
+    tcase_add_test(tc_core, test_local_light_color_stays_out_of_base_radiance);
     tcase_add_test(tc_core, test_map_exit_semantic_tracks_visible_layer_and_cache_changes);
     tcase_add_test(tc_core,
                    test_map_exit_semantic_accepts_usable_destination_forms_without_loading);
     tcase_add_test(tc_core, test_dense_colored_level_splits_at_tile_boundaries);
     tcase_add_test(tc_core, test_odd_view_los_matches_emitted_map_coordinates);
+    tcase_add_test(tc_core, test_client_lighting_fields_follow_sent_objects_only);
+    tcase_add_test(tc_core, test_client_lighting_cache_fields_add_no_padding);
+    tcase_add_test(tc_core, test_client_lighting_remembered_tiles_keep_coarse_light);
+    tcase_add_test(tc_core, test_remembered_light_records_split_at_tile_boundaries);
     return s;
 }
 

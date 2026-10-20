@@ -228,10 +228,17 @@ typedef struct map_cell_snapshot {
     int16_t support_height;
     uint8_t fow;
     uint8_t structural_fow;
+    uint8_t local_light[NUM_SUB_LAYERS];
+    uint16_t occluder;
+    uint16_t occluder_horizontal;
+    uint8_t occluder_vertical;
+    uint8_t client_light_known;
 } map_cell_snapshot_t;
 
 /** Version of the copyable, opt-in lighting diagnostic record. */
-#define MAP_LIGHTING_DIAGNOSTIC_VERSION UINT8_C(1)
+/* v2: the received sample is protocol 1085's signed Q4.11 base, before the
+ * client composes local and celestial light. */
+#define MAP_LIGHTING_DIAGNOSTIC_VERSION UINT8_C(2)
 
 /** Reasons a diagnostic light sample is zero, unavailable, or transformed. */
 typedef enum map_lighting_diagnostic_reason {
@@ -259,8 +266,9 @@ typedef struct map_lighting_diagnostic {
 
     /** Current server-authorized MAP2 aggregate endpoint is present. */
     bool received;
-    uint16_t received_scalar;
-    uint16_t received_rgb[3];
+    /** Signed Q4.11 base words, as composition reads them. */
+    int16_t received_scalar;
+    int16_t received_rgb[3];
     bool received_rgb_explicit;
 
     /** The optional timed MAP2 endpoint which the client may interpolate. */
@@ -269,8 +277,8 @@ typedef struct map_lighting_diagnostic {
     uint64_t keyframe_generation;
     uint64_t keyframe_start_seconds;
     uint64_t keyframe_end_seconds;
-    uint16_t next_scalar;
-    uint16_t next_rgb[3];
+    int16_t next_scalar;
+    int16_t next_rgb[3];
     bool next_rgb_explicit;
 
     /** Client working value after temporal resolution and bounded borrowing. */
@@ -460,6 +468,8 @@ bool widget_map_light_keyframe_capacity_test(void);
 bool widget_map_temporal_lighting_test(void);
 /** Verify diagnostic stages, deterministic fixtures, and fog privacy state. */
 bool widget_map_lighting_diagnostic_test(void);
+/** Verify protocol 1085 emitter, coarse local light and occluder state. */
+bool widget_map_client_lighting_state_test(void);
 /** Verify the complete negotiated overscan window remains a render candidate. */
 bool widget_map_projection_contract_test(void);
 #endif
@@ -467,6 +477,18 @@ bool widget_map_projection_contract_test(void);
 extern void map_level_scroll(int dz);
 
 extern void map_clear_cell(int x, int y, bool hard);
+/** Store one closure cell's solved celestial field (client_celestial_cell_fn). */
+extern void map_celestial_store(void *context, int depth, int x, int y, const int32_t current[4],
+                                const int32_t next[4]);
+/** The celestial field last solved for a MAP2 window cell, if any. */
+extern bool map_celestial_field(int depth, int x, int y, bool next, int16_t field[4]);
+/** The game clock became valid or moved to another minute: relight the
+ * celestial fields at the synchronized time. */
+extern void map_celestial_clock_changed(void);
+struct celestial_closure;
+/** Clear the celestial field of every window cell a newly published closure
+ * leaves out. */
+extern void map_celestial_retire_outside(const struct celestial_closure *closure);
 
 extern void map_set_structural_support_height(int x, int y, int16_t height);
 
@@ -475,6 +497,28 @@ extern void map_set_fow(int x, int y, bool fow);
 extern bool map_get_fow(int x, int y);
 
 extern void map_set_light_radiance(int x, int y, int sub_layer, uint16_t radiance);
+extern void
+map_set_layer_emitter(int x, int y, int layer, int8_t radius, uint8_t flags, uint32_t color);
+extern bool map_get_layer_emitter(int x, int y, int layer, int8_t *radius, uint8_t *flags,
+                                  uint32_t *color);
+extern void map_set_local_light(int x, int y, uint8_t value);
+extern void map_set_local_light_layers(int x, int y, uint8_t count, const uint8_t *levels);
+/** Signed coarse level, vision floor and, if flags is not NULL, the
+ * MAP2_LOCAL_LIGHT_TLI bit of one sub-layer. */
+extern bool map_get_local_light_layer(int x, int y, uint8_t sub_layer, int8_t *level,
+                                      bool *vision_floor, uint8_t *flags);
+extern void map_set_occluder(int x, int y, uint16_t bits, uint16_t horizontal, uint8_t vertical);
+/** Whether lighting renders smoothly: always, except in offline proofs. */
+extern bool map_lighting_is_smooth(void);
+/** Select the discrete projection for an offline conformance proof only. */
+extern void map_set_discrete_lighting_proof(bool discrete);
+/**
+ * Bound emitter-field rebuilds per presented frame (on by default). Offline
+ * proofs turn it off so every frame shows fully rebuilt fields.
+ */
+extern void map_set_emitter_rebuild_budget(bool enabled);
+extern bool map_get_local_light(int x, int y, int8_t *level, bool *vision_floor);
+extern bool map_get_occluder(int x, int y, uint16_t *bits, uint16_t *horizontal, uint8_t *vertical);
 extern void
 map_set_light_rgb_radiance(int x, int y, uint8_t bitmap, const uint16_t rgb[NUM_SUB_LAYERS][3]);
 
@@ -698,6 +742,8 @@ extern bool minimap_redraw_due(void);
 
 /** Force the next minimap draw to rebuild its retained GPU canvas. */
 extern void minimap_redraw_force(void);
+/** Request a minimap redraw at its normal throttle. */
+extern void minimap_redraw_request(void);
 /** Hide any retained minimap from a superseded map/session generation. */
 extern void minimap_invalidate_map_generation(void);
 

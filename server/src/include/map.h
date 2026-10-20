@@ -693,6 +693,26 @@ typedef struct mapdef {
     /** Parsed celestial-v1 schema number (zero means legacy content). */
     uint8_t celestial_schema;
 
+    /** Advances whenever a local light source counter on this map changes;
+     * coarse light caches validate against the maps their walk reaches. */
+    uint64_t light_local_epoch;
+
+    /** Stamp of the last source change whose light can reach this map's
+     * blocks: a coarse cache entry confirmed at it needs no revalidation, so
+     * activity elsewhere keeps it on the constant-time path. */
+    uint64_t light_local_reach_generation;
+
+    /** Cached coarse level of each of this map's blocks, allocated on first
+     * use and freed with the map (light_local_forget()). */
+    struct light_local_cache_entry *light_local_cache;
+    size_t light_local_cache_blocks;
+
+    /** Every map some block's walk reached, ordered by address: one shared
+     * dependency set the blocks revalidate against, so its size grows with
+     * the topology rather than with blocks times reachable maps. */
+    struct mapdef **light_local_deps;
+    size_t light_local_deps_count, light_local_deps_capacity;
+
     /** Parsed celestial-v1 sky anchor. */
     uint8_t celestial_sky_above;
 
@@ -733,9 +753,6 @@ typedef struct mapdef {
 
     /** Absolute hour of the complete next field; phase keys alone may repeat. */
     uint64_t celestial_light_next_hour;
-
-    /** Monotonic generation of the published field and endpoint readiness. */
-    uint64_t celestial_light_generation_id;
 
     /** True when the next-hour field is complete for this map stack. */
     bool celestial_light_keyframe_valid;
@@ -802,6 +819,10 @@ typedef struct mapdef {
 
     /** Used by relative_tile_position() to mark visited maps */
     uint32_t traversed;
+
+    /** The last MAP2 update that listed this map as shown (server thread
+     * only; zero is never a pass). */
+    uint64_t map2_shown_pass;
 
     /**
      * Indicates the base light value on this map.

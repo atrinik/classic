@@ -9,6 +9,24 @@ The game and metaserver protocols are separate contract families. This package
 currently publishes only the classic game command registry. Add another family
 only with its own namespace, specification, version, fixtures, and validation.
 
+Protocol v1085 makes lighting client-computed; it is the only lighting model,
+with no option, negotiation or legacy path. MAP2 carries a signed Q4.11 base
+radiance without local or celestial light, plus per-object emitters, occluder
+faces and coarse local levels for authorized cells
+([client lighting contract](../server/doc/CLIENT_LIGHTING.md)). Two
+server-to-client commands are appended:
+- `CELESTIAL` (ID 34) carries each shown region profile's light constants and
+  the current and next hour's phases, in up to 255 slots.
+- `CELESTIAL_STRUCTURE` (ID 35) carries the viewer's celestial closure, at most
+  256 fragments.
+
+The two commands share a generation starting at 1 and form one publication,
+sent immediately before the MAP2 update it belongs to. The client stages both
+halves and publishes them only together with that update. It reconnects when
+it must discard a staged half, since the server never resends one
+([client celestial contract](../server/doc/CLIENT_CELESTIAL.md)). Published
+command IDs are unchanged.
+
 Protocol v1083 adds the paired `BOOK_EDIT` commands for bounded book editing,
 copying and permanent signing. Published access and exploration command IDs are preserved;
 BOOK_EDIT is appended at client-to-server ID 26 and server-to-client ID 33. The authored
@@ -105,4 +123,4 @@ includes attributions and provenance evidence.
 [Classic admission contract](RENDEZVOUS_ADMISSION.md) owns the mandatory pre-upgrade
 challenge/work identities in `schema/rendezvous-admission.json`, their generated
 C/Python bindings and shared synthetic fixture. Run the existing generator and
-protocol tests after transport schema edits; game command revision stays 1084.
+protocol tests after transport schema edits; game command revision stays 1085.

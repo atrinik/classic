@@ -28,6 +28,7 @@
 #include <decls.h>
 
 #include <stdint.h>
+#include <toolkit/celestial_model.h>
 
 /**
  * @file
@@ -52,6 +53,68 @@ extern void light_radiance_from_raw(const MapSpace *space,
                                     uint16_t *scalar_radiance,
                                     uint16_t radiance[3]);
 
+
+/** Signed, source-anonymous coarse local light level of one cell (protocol 1085). */
+extern int8_t light_local_level(mapstruct *map, int x, int y);
+
+/** Free a map's coarse light cache, with the map. */
+/** Note a change of the links between maps or of a map's residency, the
+ * topology coarse local light walks. */
+extern void light_local_topology_changed(void);
+extern void light_local_forget(mapstruct *map);
+
+#ifdef ATRINIK_TESTING
+/** Coarse-light topology walks performed so far. */
+extern uint64_t light_local_walks_for_test(void);
+extern uint64_t light_local_rehashes_for_test(void);
+/** Set the coarse walk's region bound, returning the previous one. */
+extern size_t light_local_regions_max_exchange_for_test(size_t max);
+#endif
+
+/** The signed coarse level of a block's strongest positive and negative raw
+ * contributions: each sign is quantized before they compete. */
+extern int8_t light_local_level_from_extrema(int32_t positive, int32_t negative);
+
+/** Bit position of the vertical attenuation in combined occluder bits; the
+ * wire carries it as the occluder's trailing byte. */
+#define LIGHT_OCCLUDER_VERTICAL_SHIFT 16
+/** Horizontal face nibbles (north, east, south, west) of a server occluder. */
+#define LIGHT_OCCLUDER_HORIZONTAL_SHIFT 32
+/** Server-only: which cardinal faces a sent object authors, one bit each. */
+#define LIGHT_OCCLUDER_AUTHORED_SHIFT 48
+/** Server-only: a sent view blocker makes faces no sent object authors opaque. */
+#define LIGHT_OCCLUDER_BLOCKER_FALLBACK (UINT64_C(1) << 52)
+/** Server-only bits that light_occluder_finish() resolves and strips. */
+#define LIGHT_OCCLUDER_INTERNAL ((UINT64_C(15) << LIGHT_OCCLUDER_AUTHORED_SHIFT) | \
+                                 LIGHT_OCCLUDER_BLOCKER_FALLBACK)
+
+/** MAP2 occluder bits of one object being sent to the viewer (protocol 1085). */
+extern uint64_t light_occluder_object_bits(const object *op);
+
+/** MAP2 occluder face bits of one cell; in_view bit i is set when the north,
+ * east, south, west, upper or lower neighbor is in the viewer's view. */
+extern uint16_t light_occluder_faces(mapstruct *map, int x, int y, uint8_t in_view);
+
+/** Whether a sent object's emitter opts in to client flicker (protocol 1085). */
+extern bool light_emitter_flickers(const object *op);
+
+/** Whether MAP2 may disclose an object's emitter to a viewer (protocol 1085). */
+extern bool light_emitter_disclosed(const object *viewer, const object *op);
+
+/** Combine the occluder bits of two sent objects of one cell. */
+extern uint64_t light_occluder_combine(uint64_t first, uint64_t second);
+
+/** Resolve combined occluder bits of a cell for the wire: a face no sent
+ * object authors is opaque if any sent object blocks view, as the server's
+ * implicit fallback applies only when no object authors the face. */
+extern uint64_t light_occluder_finish(uint64_t bits);
+
+/** The shared celestial model's inputs for one map and gameplay hour: its
+ * effective profile's light constants and phases, any lunar override applied. */
+extern void celestial_light_model_inputs(const mapstruct *map,
+                                         uint64_t absolute_hour,
+                                         celestial_model_inputs_t *inputs);
+
 /** Invalidate the bounded celestial field after structural/topology changes. */
 extern void celestial_light_invalidate(mapstruct *map);
 
@@ -67,8 +130,11 @@ extern void celestial_light_ensure(mapstruct *map);
 /** Synchronously ensure both hourly fields (offline callers and solver oracle). */
 extern bool celestial_light_keyframe_ensure(mapstruct *map, uint64_t absolute_hour);
 
-/** Ensure current lighting, queue next hour, and return only complete readiness. */
-extern bool celestial_light_keyframe_request(mapstruct *map, uint64_t absolute_hour);
+/** Ensure the current field, promoting a prepared one at an hour boundary,
+ * then queue the next hour's field of the map's stack on the budgeted solver
+ * unless it is ready or queued. Called for every map a view update showed,
+ * after its MAP2 publication. */
+extern void celestial_light_prepare_next(mapstruct *map);
 
 /** Advance queued cell work on the server thread within this monotonic budget. */
 extern void celestial_light_process_pending(uint64_t budget_us);
@@ -76,8 +142,57 @@ extern void celestial_light_process_pending(uint64_t budget_us);
 /** Cancel every queued stack retaining this map before its storage is released. */
 extern void celestial_light_forget(mapstruct *map);
 
+/** Celestial structure of one cell built from the objects MAP2 sends to a
+ * viewer (CLIENT_CELESTIAL.md, disclosure rule). */
+typedef struct celestial_closure_accumulator {
+    /** Coefficient of each face: down, north, east, south, west. */
+    uint16_t coefficient[5];
+    /** Faces some sent object authors, and faces with an aperture. */
+    uint8_t found, aperture;
+    /** A sent object blocks view: unauthored cardinal faces are opaque. */
+    bool blocker;
+    /** Some object of the cell was sent; a cell whose every object was
+     * filtered is shown empty and stays outside the closure. */
+    bool sent;
+} celestial_closure_accumulator_t;
+
+/** Start a cell's accumulator with every face open. */
+extern void celestial_closure_begin(celestial_closure_accumulator_t *accumulator);
+
+/** Add one object MAP2 sends for the cell. */
+extern void celestial_closure_accumulate(celestial_closure_accumulator_t *accumulator,
+                                         const object *op);
+
+/** The cell's closure value (toolkit/celestial_closure.h): its faces from the
+ * accumulated objects, and its sky cover, sky exit and continuity from the
+ * map's authored structure and links. ax and ay are the cell's MAP2 window
+ * position, which decides what a direction-drawn object shows. in_window
+ * marks the north, east, south, west, upper and lower neighbors inside the
+ * MAP2 window (and its depth range), whose maps the view keeps resident: a
+ * face towards another map outside it fails closed, so no record depends on
+ * another map's residency. */
+extern uint32_t celestial_closure_cell_value(const celestial_closure_accumulator_t *accumulator,
+                                             mapstruct *map, int x, int y, const object *viewer,
+                                             int ax, int ay, uint8_t in_window);
+
+/** Whether MAP2 shows a FLAG_DRAW_DIRECTION object at window position ax,
+ * ay to the viewer; true for every other object. */
+extern bool map2_direction_shown(const object *op, const object *viewer, int ax, int ay);
+
 /** Update exact cell transport geometry and report a semantic change. */
 extern bool celestial_light_geometry_update(mapstruct *map, int x, int y);
+
+#ifdef ATRINIK_TESTING
+/** The disclosed closure record of a map cell, zero outside the closure. */
+typedef uint32_t (*celestial_reference_member_fn)(void *context, mapstruct *map, int x, int y);
+/** Solve one map with the server solver on the disclosed closure: real maps,
+ * links and authored cover, the faces the viewer was shown, and every cell
+ * outside the closure open air under an open sky. */
+extern bool celestial_light_closure_reference_for_test(mapstruct *map, uint64_t absolute_hour,
+                                                       celestial_reference_member_fn member,
+                                                       void *context, int32_t *values,
+                                                       int32_t (*rgb)[3]);
+#endif
 
 #ifdef ATRINIK_TESTING
 /** Swap the batch counter for isolated overflow tests with no pending jobs. */
@@ -89,9 +204,6 @@ extern uint64_t celestial_light_rebuilds_for_test(void);
 extern size_t celestial_light_pending_memory_for_test(void);
 extern void celestial_light_pending_memory_limit_for_test(size_t limit);
 #endif
-
-/** Return the nonzero generation of the authoritative field/endpoint pair. */
-extern uint64_t celestial_light_generation(const mapstruct *map);
 
 extern void adjust_light_source(mapstruct *map, int x, int y, int light);
 

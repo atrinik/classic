@@ -64,7 +64,9 @@ bool map_protocol_continuation_matches(const map_protocol_continuation_state_t *
 void map_protocol_continuation_advance(map_protocol_continuation_state_t *state);
 
 /**
- * Validate one complete protocol-v1080 CLIENT_CMD_MAP payload.
+ * Validate one complete protocol-1085 CLIENT_CMD_MAP payload, including its
+ * signed radiance, emitter, local-light and occluder fields. Protocol 1085
+ * is the only layout accepted: no earlier wire format is supported.
  *
  * No endpoint state is changed. The caller supplies the negotiated wire look
  * dimensions used to bound tile coordinates.
@@ -74,6 +76,30 @@ bool map_protocol_validate(const uint8_t *data,
                            size_t pos,
                            int map_width,
                            int map_height);
+
+/**
+ * Encode a protocol-1085 coarse local light byte.
+ * @param level Signed level, -MAP2_LOCAL_LIGHT_LEVEL_MAX..MAP2_LOCAL_LIGHT_LEVEL_MAX.
+ * @param vision_floor Whether the viewer's vision floor applies after composition.
+ */
+uint8_t map_protocol_local_light_encode(int level, bool vision_floor);
+
+/**
+ * Decode a protocol-1085 coarse local light byte. level and vision_floor are
+ * mandatory and must not be NULL (an unchecked precondition).
+ * @return False for reserved bits or the invalid level -16; outputs are then
+ * unchanged.
+ */
+bool map_protocol_local_light_decode(uint8_t value, int8_t *level, bool *vision_floor);
+
+/** Largest signed Q4.11 radiance magnitude; -32768 is never encoded (1085). */
+#define MAP2_SIGNED_RADIANCE_MAX 32767
+
+/**
+ * Encode raw light as protocol-1085 signed Q4.11 base radiance: the legacy
+ * Q5.11 rounding applied to the magnitude, saturated to +/-32767.
+ */
+int16_t map_protocol_signed_radiance_encode(int64_t raw_light);
 
 /** Validate a MAP2 envelope and return side-effect-free routing metadata. */
 bool map_protocol_inspect(const uint8_t *data,

@@ -17,12 +17,12 @@ SPEC.loader.exec_module(GENERATE)
 class GenerateTests(unittest.TestCase):
     def test_repository_schema_is_valid(self) -> None:
         schema = GENERATE.load_schema(ROOT / "schema/game-commands.json")
-        self.assertEqual(schema["protocol_version"], 1084)
+        self.assertEqual(schema["protocol_version"], 1085)
         self.assertEqual(schema["item_name_size"], 128)
         self.assertEqual(schema["item_extra_message_size"], 256)
         self.assertEqual(schema["player_status"]["max_statuses"], 48)
         self.assertEqual(len(schema["client_to_server"]), 27)
-        self.assertEqual(len(schema["server_to_client"]), 34)
+        self.assertEqual(len(schema["server_to_client"]), 36)
 
     def test_book_edit_preserves_published_access_command_ids(self) -> None:
         schema = GENERATE.load_schema(ROOT / "schema/game-commands.json")
@@ -32,6 +32,12 @@ class GenerateTests(unittest.TestCase):
         self.assertEqual((s2c["ACCESS_RESULT"], s2c["ACCESS_ADMIN_RESULT"],
                           s2c["ACCESS_POLICY"]), (29, 30, 31))
         self.assertEqual((c2s["BOOK_EDIT"], s2c["BOOK_EDIT"]), (26, 33))
+
+    def test_celestial_is_appended_after_published_ids(self) -> None:
+        schema = GENERATE.load_schema(ROOT / "schema/game-commands.json")
+        s2c = {entry["symbol"]: entry["id"] for entry in schema["server_to_client"]}
+        self.assertEqual(s2c["CELESTIAL"], 34)
+        self.assertEqual(s2c["CELESTIAL_STRUCTURE"], 35)
     def test_depth_targeting_preserves_published_target_command_ids(self) -> None:
         schema = GENERATE.load_schema(ROOT / "schema/game-commands.json")
         c2s = {entry["symbol"]: entry["id"] for entry in schema["client_to_server"]}

@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -68,6 +68,11 @@ void init_world_darkness(void) {
 void tick_the_clock(void) {
     timeofday_t tod;
 
+    /* Protocol time must stay representable: the clock stops at its bound,
+     * and a stopped clock applies no hourly effect again. */
+    if (todtick >= TODCLOCK_MAX) {
+        return;
+    }
     todtick++;
 
     if (todtick % 20 == 0) {

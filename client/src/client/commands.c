@@ -36,6 +36,7 @@
 #include <book.h>
 #include <book_edit.h>
 #include <client.h>
+#include <client_celestial.h>
 #include <commands.h>
 #include <effects.h>
 #include <image.h>
@@ -750,6 +751,32 @@ void socket_command_player_status(uint8_t *data, size_t len, size_t pos) {
     WIDGET_REDRAW_ALL(ACTIVE_EFFECTS_ID);
 }
 
+void socket_command_celestial(uint8_t *data, size_t len, size_t pos) {
+    if (pos > len || !client_celestial_apply(data + pos, len - pos)) {
+        if (pos > len || client_celestial_take_reconnect()) {
+            LOG(ERROR, "Rejected a malformed celestial packet; reconnecting.");
+            client_socket_close(&csocket);
+            return;
+        }
+        LOG(PACKET, "Rejected stale celestial packet.");
+    }
+}
+
+/** @copydoc socket_command_struct::handle_func */
+void socket_command_celestial_structure(uint8_t *data, size_t len, size_t pos) {
+    int wire_width = MAP_LOOK_TO_WIRE_SIZE(setting_get_int(OPT_CAT_MAP, OPT_MAP_WIDTH));
+    int wire_height = MAP_LOOK_TO_WIRE_SIZE(setting_get_int(OPT_CAT_MAP, OPT_MAP_HEIGHT));
+    if (pos > len ||
+        !client_celestial_apply_structure(data + pos, len - pos, wire_width, wire_height)) {
+        if (pos > len || client_celestial_take_reconnect()) {
+            LOG(ERROR, "Rejected an undecodable celestial structure packet; reconnecting.");
+            client_socket_close(&csocket);
+            return;
+        }
+        LOG(PACKET, "Rejected stale celestial structure packet.");
+    }
+}
+
 /**
  * Plays the footstep sounds when moving on the map.
  */
@@ -801,8 +828,15 @@ void socket_command_mapstats(uint8_t *data, size_t len, size_t pos) {
         } else if (type == CMD_MAPSTATS_TIME) {
             uint64_t game_seconds = packet_reader_read_uint64(&reader);
             uint32_t millis_per_game_minute = packet_reader_read_uint32(&reader);
+            uint64_t before, after;
+            bool known = telemetry_game_time_seconds(&before);
             telemetry_game_time_sync(game_seconds, millis_per_game_minute);
             WIDGET_REDRAW_ALL(GAME_TIME_ID);
+            /* A MAP2 update may have been presented before this sample
+             * arrived, its celestial light at the start of the hour. */
+            if (telemetry_game_time_seconds(&after) && (!known || before / 60 != after / 60)) {
+                map_celestial_clock_changed();
+            }
         } else {
             packet_reader_set_error(&reader, PACKET_ERROR_UNSUPPORTED);
         }
@@ -911,11 +945,29 @@ static void map_pending_effects_commit(void) {
     }
 }
 
+/**
+ * Drop a buffered MAP2 generation that will never be applied. A celestial
+ * pair staged for it is abandoned with it, since the server considers that
+ * publication delivered.
+ * @return Whether a staged half was lost, so the caller must reconnect.
+ */
+static bool socket_command_map_batch_discard(void) {
+    map_pending_batch_reset();
+    client_celestial_abandon_staged();
+    return client_celestial_take_reconnect();
+}
+
 void socket_command_map_abort_pending(void) {
     map_pending_batch_reset();
     map_light_keyframe_transaction_abort();
     map_state_transaction_abort();
     map_pending_effects_abort();
+    /* The celestial pair belongs to the update that failed. */
+    client_celestial_abandon_staged();
+    if (client_celestial_take_reconnect()) {
+        LOG(ERROR, "A failed map update lost its celestial publication; reconnecting.");
+        client_socket_close(&csocket);
+    }
     map_continuation_visible_change = false;
     map_continuation_region_fow_update = false;
 }
@@ -1256,9 +1308,10 @@ static void socket_command_map_apply(uint8_t *data, size_t len, size_t pos) {
 
                 /* Clear this layer. */
                 if (type == MAP2_LAYER_CLEAR) {
+                    uint8_t cleared_layer = packet_reader_read_uint8(&reader);
                     map_set_data(x,
                                  y,
-                                 packet_reader_read_uint8(&reader),
+                                 cleared_layer,
                                  0,
                                  0,
                                  0,
@@ -1286,6 +1339,7 @@ static void socket_command_map_apply(uint8_t *data, size_t len, size_t pos) {
                                  0,
                                  "",
                                  0);
+                    map_set_layer_emitter(x, y, cleared_layer, 0, 0, 0);
                 } else { /* We have some data. */
                     int16_t face, height = 0, zoom_x = 0, zoom_y = 0, align = 0, rotate = 0;
                     uint8_t flags, obj_flags, quick_pos = 0, probe = 0, draw_double = 0, alpha = 0,
@@ -1294,6 +1348,9 @@ static void socket_command_map_apply(uint8_t *data, size_t len, size_t pos) {
                         roof, door, exit, glow_speed;
                     char player_name[64], player_color[COLOR_BUF], glow[COLOR_BUF];
                     uint32_t target_object_count = 0;
+                    int8_t emitter_radius = 0;
+                    uint8_t emitter_flags = 0;
+                    uint32_t emitter_color = 0;
 
                     anim_speed = anim_facing = anim_flags = anim_state = 0;
                     priority = secondpass = roof = door = exit = glow_speed = 0;
@@ -1391,6 +1448,15 @@ static void socket_command_map_apply(uint8_t *data, size_t len, size_t pos) {
                             glow_speed = packet_reader_read_uint8(&reader);
                         }
 
+                        /* Bounds were checked by map_protocol_validate(). */
+                        if (flags2 & MAP2_FLAG2_EMITTER) {
+                            emitter_radius = packet_reader_read_int8(&reader);
+                            emitter_flags = packet_reader_read_uint8(&reader);
+                            emitter_color = (uint32_t)packet_reader_read_uint8(&reader) << 16;
+                            emitter_color |= (uint32_t)packet_reader_read_uint8(&reader) << 8;
+                            emitter_color |= packet_reader_read_uint8(&reader);
+                        }
+
                         if (flags2 & MAP2_FLAG2_ROOF) {
                             roof = 1;
                         }
@@ -1435,6 +1501,7 @@ static void socket_command_map_apply(uint8_t *data, size_t len, size_t pos) {
                                  exit,
                                  glow,
                                  glow_speed);
+                    map_set_layer_emitter(x, y, type, emitter_radius, emitter_flags, emitter_color);
                 }
             }
 
@@ -1503,6 +1570,22 @@ static void socket_command_map_apply(uint8_t *data, size_t len, size_t pos) {
                 }
             }
 
+            if (ext_flags & MAP2_FLAG_EXT_LOCAL_LIGHT) {
+                uint8_t count = packet_reader_read_uint8(&reader);
+                uint8_t levels[NUM_SUB_LAYERS] = {0};
+                for (uint8_t i = 0; i < count && i < NUM_SUB_LAYERS; i++) {
+                    levels[i] = packet_reader_read_uint8(&reader);
+                }
+                map_set_local_light_layers(x, y, count, levels);
+            }
+
+            if (ext_flags & MAP2_FLAG_EXT_OCCLUDER) {
+                uint16_t occluder = packet_reader_read_uint16(&reader);
+                uint16_t horizontal = packet_reader_read_uint16(&reader);
+                uint8_t vertical = packet_reader_read_uint8(&reader);
+                map_set_occluder(x, y, occluder, horizontal, vertical);
+            }
+
             if (fow_updated) {
                 map_set_fow(x, y, tile_fow);
             }
@@ -1556,6 +1639,16 @@ static void socket_command_map_apply(uint8_t *data, size_t len, size_t pos) {
         return;
     }
 
+    /* The celestial pair staged for this update is checked before anything
+     * commits: an inconsistent pair fails the whole update (and reconnects),
+     * so no consumer ever sees it complete. */
+    if (!client_celestial_publishable()) {
+        LOG(ERROR, "Rejected a map update without a consistent celestial publication.");
+        client_celestial_reject_staged();
+        socket_command_map_abort_pending();
+        return;
+    }
+
     if (map_light_keyframe_transaction_pending()) {
         map_light_keyframe_transaction_commit();
     }
@@ -1579,10 +1672,28 @@ static void socket_command_map_apply(uint8_t *data, size_t len, size_t pos) {
     }
 
     map_state_transaction_commit();
+    /* The celestial pair staged before this update is published with it. */
+    if (client_celestial_publish(map_celestial_store, NULL)) {
+        map_celestial_retire_outside(client_celestial_closure());
+    } else if (client_celestial_take_reconnect()) {
+        LOG(ERROR, "Rejected an inconsistent celestial publication; reconnecting.");
+        client_socket_close(&csocket);
+    }
     map_pending_effects_commit();
     map_publication_generation++;
     map_continuation_visible_change = false;
     map_continuation_region_fow_update = false;
+}
+
+void socket_command_map_replay(uint8_t *data, size_t len, size_t pos) {
+    /* A replay carries no celestial commands: before the first publication,
+     * stage the empty one a server with nothing celestial in view sends. */
+    if (client_celestial_generation() == 0 && !client_celestial_staged()) {
+        int wire_width = MAP_LOOK_TO_WIRE_SIZE(setting_get_int(OPT_CAT_MAP, OPT_MAP_WIDTH));
+        int wire_height = MAP_LOOK_TO_WIRE_SIZE(setting_get_int(OPT_CAT_MAP, OPT_MAP_HEIGHT));
+        (void)client_celestial_stage_empty(wire_width, wire_height);
+    }
+    socket_command_map(data, len, pos);
 }
 
 /** @copydoc socket_command_struct::handle_func */
@@ -1605,7 +1716,12 @@ void socket_command_map(uint8_t *data, size_t len, size_t pos) {
     if (info.mapstat != MAP_UPDATE_CMD_PARTIAL) {
         if (map_pending_batch.continuation.pending) {
             LOG(PACKET, "Discarded interrupted unpublished map generation.");
-            map_pending_batch_reset();
+            if (socket_command_map_batch_discard()) {
+                LOG(ERROR, "An interrupted map update lost its celestial publication; "
+                           "reconnecting.");
+                client_socket_close(&csocket);
+                return;
+            }
         }
         if (info.continuation == 0) {
             socket_command_map_apply(data, len, pos);
@@ -1629,7 +1745,10 @@ void socket_command_map(uint8_t *data, size_t len, size_t pos) {
                                            info.sub_layer,
                                            info.depths)) {
         LOG(PACKET, "Rejected unsolicited, mismatched, or out-of-sequence map continuation.");
-        map_pending_batch_reset();
+        if (socket_command_map_batch_discard()) {
+            LOG(ERROR, "A rejected map update lost its celestial publication; reconnecting.");
+            client_socket_close(&csocket);
+        }
         return;
     }
 
@@ -1694,24 +1813,13 @@ static packet_struct *map_seam_test_packet(uint8_t mapstat, uint16_t continuatio
     packet_writer_write_uint8(packet, mapstat == MAP_UPDATE_CMD_NEW ? 23 : 0);
     packet_writer_write_uint8(packet, 18);
     packet_writer_write_uint8(packet, 0);
-    packet_writer_write_uint16(
-        packet,
-        continuation | (mapstat == MAP_UPDATE_CMD_PARTIAL ? 0 : MAP2_CONTINUATION_TIMED_LIGHT));
-    if (mapstat != MAP_UPDATE_CMD_PARTIAL) {
-        packet_writer_write_uint64(packet, mapstat == MAP_UPDATE_CMD_NEW ? 700 : 701);
-        packet_writer_write_uint64(packet, 3600);
-        packet_writer_write_uint64(packet, 7200);
-        packet_writer_write_uint8(packet, MAP2_LIGHT_KEYFRAME_CONTINUOUS);
-    }
+    packet_writer_write_uint16(packet, continuation);
     packet_writer_write_uint8(packet, 1);
     packet_writer_write_int8(packet, 0);
     packet_struct *level = packet_new(0, 32, 32);
     packet_writer_write_uint16(level, MAP2_MASK_LIGHT_LEVEL);
     packet_writer_write_uint16(level, 200);
     packet_writer_write_uint8(level, 0);
-    packet_writer_write_uint8(level, MAP2_FLAG_EXT_LIGHT_KEYFRAME);
-    packet_writer_write_uint8(level, 1);
-    packet_writer_write_uint16(level, 300);
     packet_writer_write_uint8(level, 0);
     packet_writer_write_uint32(packet, (uint32_t)level->len);
     packet_writer_write_packet(packet, level);
@@ -1725,10 +1833,7 @@ static bool map_seam_test_state(bool destination, uint64_t generation, bool buff
                   destination ? "/shattered_islands/world_1_68"
                               : "/shattered_islands/world_0_68") == 0 &&
            strcmp(MapData.name_new, "Brynknot") == 0 && MapData.posx == (destination ? 0 : 23) &&
-           MapData.posy == 18 && MapData.light_keyframe_valid &&
-           MapData.light_keyframe_generation == (destination ? 701 : 700) &&
-           MapData.light_keyframe_start_seconds == 3600 &&
-           MapData.light_keyframe_end_seconds == 7200 && !map_state_transaction_active() &&
+           MapData.posy == 18 && !MapData.light_keyframe_valid && !map_state_transaction_active() &&
            !MapData.continuation.pending &&
            socket_command_map_buffered_generation_test_pending() == buffered;
 }
@@ -1749,27 +1854,27 @@ bool socket_command_map_connected_seam_test(void) {
         goto cleanup;
     }
     uint64_t generation = map_publication_generation;
-    socket_command_map(source->data, source->len, 0);
+    socket_command_map_replay(source->data, source->len, 0);
     success = map_seam_test_state(false, ++generation, false);
-    socket_command_map(complete->data, complete->len, 0);
+    socket_command_map_replay(complete->data, complete->len, 0);
     success = map_seam_test_state(true, ++generation, false) && success;
 
-    socket_command_map(source->data, source->len, 0);
+    socket_command_map_replay(source->data, source->len, 0);
     success = map_seam_test_state(false, ++generation, false) && success;
-    socket_command_map(first->data, first->len, 0);
+    socket_command_map_replay(first->data, first->len, 0);
     success = map_seam_test_state(false, generation, true) && success;
-    socket_command_map(last->data, last->len, 0);
+    socket_command_map_replay(last->data, last->len, 0);
     success = map_seam_test_state(true, ++generation, false) && success;
 
-    socket_command_map(source->data, source->len, 0);
+    socket_command_map_replay(source->data, source->len, 0);
     success = map_seam_test_state(false, ++generation, false) && success;
-    socket_command_map(first->data, first->len, 0);
+    socket_command_map_replay(first->data, first->len, 0);
     success = map_seam_test_state(false, generation, true) && success;
     /* Truncate the declared level payload: neither metadata nor position may publish. */
-    socket_command_map(last->data, last->len - 1, 0);
+    socket_command_map_replay(last->data, last->len - 1, 0);
     success = map_seam_test_state(false, generation, false) && success;
     /* The rejected generation must not poison the next valid seam publication. */
-    socket_command_map(complete->data, complete->len, 0);
+    socket_command_map_replay(complete->data, complete->len, 0);
     success = map_seam_test_state(true, ++generation, false) && success;
 cleanup:
     socket_command_map_abort_pending();
@@ -1814,6 +1919,21 @@ bool socket_command_map_continuation_transaction_test(void) {
     socket_command_map_abort_pending();
     success = success && !socket_command_map_buffered_generation_test_pending() &&
               MapData.posx == 17 && MapData.posy == 23 && cpl.target_object_index == saved_target;
+    /* A buffered generation dropped by an interrupting envelope or a bad
+     * continuation takes the celestial pair staged for it along, and the
+     * loss calls for a reconnect; with nothing staged it does not. */
+    success = success && socket_command_map_buffered_generation_test_begin() &&
+              !socket_command_map_batch_discard() &&
+              !socket_command_map_buffered_generation_test_pending();
+    client_celestial_reset();
+    packet_struct *celestial = packet_new(0, 32, 0);
+    success = success && celestial_protocol_write(celestial, 1, 0, NULL, 0) &&
+              client_celestial_apply(celestial->data, celestial->len) &&
+              socket_command_map_buffered_generation_test_begin() &&
+              socket_command_map_batch_discard() &&
+              !socket_command_map_buffered_generation_test_pending() &&
+              !client_celestial_publish(NULL, NULL) && !client_celestial_take_reconnect();
+    packet_free(celestial);
 
     map_state_transaction_begin(false);
     MapData.posx = 18;

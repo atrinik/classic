@@ -520,7 +520,8 @@ static bool profile_finalize(region_celestial_profile_t *profile, char *error, s
         !validate_cycle("lunar", &profile->lunar, profile->lunar_period, error, error_size)) {
         return false;
     }
-    if (profile->day_brightness > 1024 || profile->night_brightness > 1024 ||
+    if (profile->day_brightness > CELESTIAL_MODEL_BRIGHTNESS_MAX ||
+        profile->night_brightness > CELESTIAL_MODEL_BRIGHTNESS_MAX ||
         profile->moon_max > 20 || profile->starlight_strength > 2) {
         return region_error(error, error_size, "effective celestial radiance is out of range");
     }

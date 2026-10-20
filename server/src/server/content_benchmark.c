@@ -410,7 +410,8 @@ static bool issue566_celestial_enabled(void) {
 }
 
 /* One warm pass over every base cell, as one MAP2 update of the whole cohort
- * would sample it: darkness for each cell plus the keyframe request. */
+ * would sample it: the view's next-hour preparation once per map, then the
+ * gameplay darkness gate for each cell. */
 static uint64_t issue566_view_pass(mapstruct *const *loaded, size_t count, uint64_t *calls,
                                    uint64_t *digest) {
     uint64_t started = datetime_monotonic_us();
@@ -420,14 +421,14 @@ static uint64_t issue566_view_pass(mapstruct *const *loaded, size_t count, uint6
     celestial_dependencies_cache_begin();
     for (size_t i = 0; i < count; i++) {
         mapstruct *map = loaded[i];
+        celestial_light_prepare_next(map);
         for (int y = 0; y < MAP_HEIGHT(map); y++) {
             for (int x = 0; x < MAP_WIDTH(map); x++) {
-                bool ready = celestial_light_keyframe_request(map, (uint64_t)todtick);
                 int darkness = map_get_darkness(map, x, y, NULL);
                 const MapSpace *space = GET_MAP_SPACE_PTR(map, x, y);
                 /* FNV-1a over everything this pass observed, so a faster
                  * build must publish identical illumination. */
-                int64_t observed[] = {darkness, ready, space->celestial_light_value,
+                int64_t observed[] = {darkness, space->celestial_light_value,
                                       space->celestial_light_rgb[0],
                                       space->celestial_light_rgb[1],
                                       space->celestial_light_rgb[2]};

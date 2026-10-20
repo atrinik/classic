@@ -144,10 +144,9 @@ static void assert_aborted(object *pl) {
     MapCell *cell = map_client_cache_cell(&cs->lastmap, 0, cs->mapx_2, cs->mapy_2, false);
     ck_assert_ptr_nonnull(cell);
     MapCell cleared = {0};
-    ck_assert_mem_eq(&cell->cleared,
-                     &cleared.cleared,
-                     sizeof(*cell) - offsetof(MapCell, cleared));
-    ck_assert_uint_eq(cs->lastmap_light_generation, 0);
+    ck_assert_mem_eq((const char *)cell + MAP_CELL_CLEAR_START,
+                     (const char *)&cleared + MAP_CELL_CLEAR_START,
+                     sizeof(*cell) - MAP_CELL_CLEAR_START);
     ck_assert_ptr_null(view->last_update);
     ck_assert(!view->los_view_valid);
     ck_assert(view->update_los);

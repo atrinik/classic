@@ -291,8 +291,8 @@ endif ()
 file(STRINGS
     "${atrinik_protocol_SOURCE_DIR}/generated/c/include/atrinik/protocol/game_commands.h"
     ATRINIK_PROTOCOL_VERSION_LINE REGEX "^#define ATRINIK_PROTOCOL_VERSION [0-9]+U$")
-if (NOT ATRINIK_PROTOCOL_VERSION_LINE MATCHES " 1084U$")
-    message(FATAL_ERROR "Client requires classic game protocol v1084")
+if (NOT ATRINIK_PROTOCOL_VERSION_LINE MATCHES " 1085U$")
+    message(FATAL_ERROR "Client requires classic game protocol v1085")
 endif ()
 if (NOT TARGET Atrinik::Core)
     set(LIBATRINIK_PACKAGE_LAYOUT ON CACHE BOOL "" FORCE)
@@ -538,6 +538,24 @@ if (BUILD_TESTING)
     target_include_directories(client-lighting-transfer-tests PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/src/include)
     add_test(NAME client-lighting-transfer COMMAND client-lighting-transfer-tests)
+
+    add_executable(client-lighting-tests
+        src/tests/client_lighting.c
+        src/client/client_lighting.c)
+    atrinik_configure_target(client-lighting-tests)
+    target_include_directories(client-lighting-tests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/include)
+    target_link_libraries(client-lighting-tests PRIVATE Atrinik::Core)
+    add_test(NAME client-lighting COMMAND client-lighting-tests)
+
+    add_executable(client-celestial-tests
+        src/tests/client_celestial.c
+        src/client/client_celestial.c)
+    atrinik_configure_target(client-celestial-tests)
+    target_include_directories(client-celestial-tests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/include)
+    target_link_libraries(client-celestial-tests PRIVATE Atrinik::Core)
+    add_test(NAME client-celestial COMMAND client-celestial-tests)
 
     add_executable(client-gpu-light-row-tests src/tests/gpu_light_row.c)
     atrinik_configure_target(client-gpu-light-row-tests)
@@ -1345,7 +1363,6 @@ if (BUILD_TESTING)
         living-outline-retained-fow
         remembered-floor-smooth
         remembered-floor-discrete
-        timed-light
         map-overlay-linked-depth
         map-overlay-widget-state
         map-overlay-elevated

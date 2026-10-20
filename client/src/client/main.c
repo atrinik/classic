@@ -35,6 +35,7 @@
 #include <capture_privacy.h>
 #include <access_resolver.h>
 #include <client.h>
+#include <client_celestial.h>
 #include <commands.h>
 #include <config.h>
 #include <effects.h>
@@ -326,6 +327,7 @@ static int game_status_chain(void) {
     } else if (cpl.state == ST_STARTCONNECT) {
         draw_info_format(COLOR_GREEN, "Trying server %s...", selected_server->name);
         keepalive_reset();
+        client_celestial_reset();
         cpl.state = ST_CONNECT;
     } else if (cpl.state == ST_CONNECT) {
         if (!string_is_hex_fixed(selected_server->quic_certificate_sha256, 64, true)) {
@@ -1115,21 +1117,24 @@ int main(int argc, char *argv[]) {
         bool capacity = widget_map_light_keyframe_capacity_test();
         bool temporal = widget_map_temporal_lighting_test();
         bool diagnostic = widget_map_lighting_diagnostic_test();
+        bool client_lighting = widget_map_client_lighting_state_test();
         bool projection = widget_map_projection_contract_test();
         bool descriptor = socket_command_map_timed_light_same_test();
         bool continuation = socket_command_map_continuation_transaction_test();
         bool clock_suspend = presentation_clock_suspend_test();
-        if (!(sparse && transaction && capacity && temporal && diagnostic && projection &&
-              descriptor && continuation && clock_suspend)) {
+        if (!(sparse && transaction && capacity && temporal && diagnostic && client_lighting &&
+              projection && descriptor && continuation && clock_suspend)) {
             fprintf(
                 stderr,
                 "map state test failed: sparse=%d transaction=%d capacity=%d temporal=%d "
-                "diagnostic=%d projection=%d descriptor=%d continuation=%d presentation-clock=%d\n",
+                "diagnostic=%d client-lighting=%d projection=%d descriptor=%d continuation=%d "
+                "presentation-clock=%d\n",
                 sparse,
                 transaction,
                 capacity,
                 temporal,
                 diagnostic,
+                client_lighting,
                 projection,
                 descriptor,
                 continuation,
@@ -1428,6 +1433,13 @@ int main(int argc, char *argv[]) {
             }
 
             play_action_sounds();
+        }
+        if (cpl.state == ST_PLAY && !map_state_transaction_active()) {
+            /* Solve the published celestial closure a few milliseconds a
+             * frame; a fragment is the smallest unit. Stores are not
+             * journaled, so none lands in a cache a MAP2 update may still
+             * move or roll back. */
+            client_celestial_process(3000);
         }
         rich_presence_tick();
         live_movement_tick();

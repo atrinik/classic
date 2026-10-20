@@ -408,7 +408,10 @@ START_TEST(test_map_protocol_validates_colored_light_extension) {
 }
 END_TEST
 
-START_TEST(test_map_protocol_validates_timed_light_keyframes) {
+START_TEST(test_map_protocol_rejects_retired_timed_light) {
+    /* Protocol 1085 retired the timed-light descriptor and its endpoint
+     * extension: a packet carrying either is malformed, never a legacy
+     * layout the client would interpolate on top of its own lighting. */
     packet_struct *packet = map_protocol_test_packet_with_marker(MAP2_CONTINUATION_TIMED_LIGHT);
     packet_writer_write_uint64(packet, 7);
     packet_writer_write_uint64(packet, 1000);
@@ -416,58 +419,6 @@ START_TEST(test_map_protocol_validates_timed_light_keyframes) {
     packet_writer_write_uint8(packet, MAP2_LIGHT_KEYFRAME_CONTINUOUS);
     packet_writer_write_uint8(packet, 1);
     map_protocol_test_level(packet, 0, NULL);
-    ck_assert(map_protocol_validate(packet->data, packet->len, 0, 21, 21));
-
-    /* The descriptor is fixed-width and every prefix of it is malformed. */
-    for (size_t len = 0; len < packet->len; len++) {
-        ck_assert(!map_protocol_validate(packet->data, len, 0, 21, 21));
-    }
-
-    /* Descriptor fields begin immediately after the six-byte MAP2 prefix. */
-    packet->data[6 + 7] = 0;
-    packet->data[6 + 6] = 0;
-    ck_assert(!map_protocol_validate(packet->data, packet->len, 0, 21, 21));
-    packet_free(packet);
-
-    packet = map_protocol_test_packet_with_marker(MAP2_CONTINUATION_TIMED_LIGHT);
-    packet_writer_write_uint64(packet, 1);
-    packet_writer_write_uint64(packet, 1000);
-    packet_writer_write_uint64(packet, 1000);
-    packet_writer_write_uint8(packet, MAP2_LIGHT_KEYFRAME_CONTINUOUS);
-    packet_writer_write_uint8(packet, 1);
-    map_protocol_test_level(packet, 0, NULL);
-    ck_assert(!map_protocol_validate(packet->data, packet->len, 0, 21, 21));
-    packet_free(packet);
-
-    packet = map_protocol_test_packet_with_marker(MAP2_CONTINUATION_TIMED_LIGHT);
-    packet_writer_write_uint64(packet, 1);
-    packet_writer_write_uint64(packet, 1000);
-    packet_writer_write_uint64(packet, 4600);
-    packet_writer_write_uint8(packet, 0x80);
-    packet_writer_write_uint8(packet, 1);
-    map_protocol_test_level(packet, 0, NULL);
-    ck_assert(!map_protocol_validate(packet->data, packet->len, 0, 21, 21));
-    packet_free(packet);
-
-    packet = map_protocol_test_packet_with_marker(MAP2_CONTINUATION_TIMED_LIGHT);
-    packet_writer_write_uint64(packet, 1);
-    packet_writer_write_uint64(packet, 1000);
-    packet_writer_write_uint64(packet, 4601);
-    packet_writer_write_uint8(packet, MAP2_LIGHT_KEYFRAME_CONTINUOUS);
-    packet_writer_write_uint8(packet, 1);
-    map_protocol_test_level(packet, 0, NULL);
-    ck_assert(!map_protocol_validate(packet->data, packet->len, 0, 21, 21));
-    packet_free(packet);
-
-    packet = map_protocol_test_packet_with_marker(MAP2_CONTINUATION_TIMED_LIGHT);
-    packet_writer_write_uint64(packet, 1);
-    packet_writer_write_uint64(packet, 1000);
-    packet_writer_write_uint64(packet, 4600);
-    packet_writer_write_uint8(packet, MAP2_LIGHT_KEYFRAME_CONTINUOUS);
-    packet_writer_write_uint8(packet, 1);
-    map_protocol_test_level(packet, 0, NULL);
-    packet->data[4] = 0;
-    packet->data[5] = 1;
     ck_assert(!map_protocol_validate(packet->data, packet->len, 0, 21, 21));
     packet_free(packet);
 
@@ -478,31 +429,186 @@ START_TEST(test_map_protocol_validates_timed_light_keyframes) {
     packet_writer_write_uint8(level, MAP2_FLAG_EXT_LIGHT_KEYFRAME);
     packet_writer_write_uint8(level, 1);
     packet_writer_write_uint16(level, 2180);
-    packet_writer_write_uint8(level, 1);
-    packet_writer_write_uint16(level, 2180);
-    packet_writer_write_uint16(level, 2170);
-    packet_writer_write_uint16(level, 2160);
+    packet_writer_write_uint8(level, 0);
     packet = map_protocol_test_packet(1);
+    map_protocol_test_level(packet, 0, level);
+    ck_assert(!map_protocol_validate(packet->data, packet->len, 0, 21, 21));
+    packet_free(packet);
+    packet_free(level);
+
+    /* The same envelope without the retired forms is valid. */
+    packet = map_protocol_test_packet(1);
+    map_protocol_test_level(packet, 0, NULL);
+    ck_assert(map_protocol_validate(packet->data, packet->len, 0, 21, 21));
+    packet_free(packet);
+}
+END_TEST
+
+/** One cell with an emitter layer and both client-lighting extensions. */
+static packet_struct *map_protocol_client_lighting_level_full(int8_t radius,
+                                                             uint8_t emitter_flags,
+                                                             uint32_t color,
+                                                             uint8_t level_value,
+                                                             uint16_t occluder,
+                                                             uint8_t vertical) {
+    packet_struct *level = packet_new(0, 32, 16);
+    packet_writer_write_uint16(level, 0);
+    packet_writer_write_uint8(level, 1);
+    packet_writer_write_uint8(level, 0);
+    packet_writer_write_uint16(level, 1);
+    packet_writer_write_uint8(level, 0);
+    packet_writer_write_uint8(level, MAP2_FLAG_MORE);
+    packet_writer_write_uint32(level, MAP2_FLAG2_EMITTER);
+    packet_writer_write_int8(level, radius);
+    packet_writer_write_uint8(level, emitter_flags);
+    packet_writer_write_uint8(level, (uint8_t)(color >> 16));
+    packet_writer_write_uint8(level, (uint8_t)(color >> 8));
+    packet_writer_write_uint8(level, (uint8_t)color);
+    packet_writer_write_uint8(level, MAP2_FLAG_EXT_LOCAL_LIGHT | MAP2_FLAG_EXT_OCCLUDER);
+    packet_writer_write_uint8(level, 1);
+    packet_writer_write_uint8(level, level_value);
+    packet_writer_write_uint16(level, occluder);
+    packet_writer_write_uint16(level, 0x4321);
+    packet_writer_write_uint8(level, vertical);
+    return level;
+}
+
+static packet_struct *map_protocol_client_lighting_level_color(int8_t radius, uint32_t color,
+                                                              uint8_t level_value,
+                                                              uint16_t occluder) {
+    return map_protocol_client_lighting_level_full(radius, 0, color, level_value, occluder, 0);
+}
+
+static bool map_protocol_client_lighting_valid_full(int8_t radius, uint8_t emitter_flags,
+                                                    uint8_t vertical, uint8_t ext_extra) {
+    packet_struct *level = map_protocol_client_lighting_level_full(
+        radius, emitter_flags, radius > 0 ? UINT32_C(0xff8040) : 0, 0, 0, vertical);
+    if (ext_extra != 0) {
+        /* Rewrite the extended flags byte that follows the emitter payload. */
+        level->data[level->len - 8] |= ext_extra;
+    }
+    packet_struct *packet = map_protocol_test_packet(1);
+    map_protocol_test_level(packet, 0, level);
+    bool valid = map_protocol_validate(packet->data, packet->len, 0, 21, 21);
+    packet_free(packet);
+    packet_free(level);
+    return valid;
+}
+
+/** Positive emitters get an orange color and darkness the achromatic one. */
+static packet_struct *map_protocol_client_lighting_level(int8_t radius, uint8_t level_value,
+                                                        uint16_t occluder) {
+    return map_protocol_client_lighting_level_color(radius, radius > 0 ? UINT32_C(0xff8040) : 0,
+                                                    level_value, occluder);
+}
+
+static bool map_protocol_client_lighting_valid_color(int8_t radius, uint32_t color) {
+    packet_struct *level = map_protocol_client_lighting_level_color(radius, color, 0, 0);
+    packet_struct *packet = map_protocol_test_packet(1);
+    map_protocol_test_level(packet, 0, level);
+    bool valid = map_protocol_validate(packet->data, packet->len, 0, 21, 21);
+    packet_free(packet);
+    packet_free(level);
+    return valid;
+}
+
+static bool map_protocol_client_lighting_valid(int8_t radius, uint8_t level_value,
+                                               uint16_t occluder) {
+    packet_struct *level = map_protocol_client_lighting_level(radius, level_value, occluder);
+    packet_struct *packet = map_protocol_test_packet(1);
+    map_protocol_test_level(packet, 0, level);
+    bool valid = map_protocol_validate(packet->data, packet->len, 0, 21, 21);
+    packet_free(packet);
+    packet_free(level);
+    return valid;
+}
+
+START_TEST(test_map_protocol_validates_client_lighting_fields) {
+    uint8_t all_geometry = MAP2_OCCLUDER_BLOCKSVIEW | MAP2_OCCLUDER_FLOOR | MAP2_OCCLUDER_ROOF |
+                           MAP2_OCCLUDER_DOOR_CLOSED;
+    ck_assert(map_protocol_client_lighting_valid(13,
+                                                 map_protocol_local_light_encode(15, true),
+                                                 all_geometry));
+    ck_assert(map_protocol_client_lighting_valid(-13,
+                                                 map_protocol_local_light_encode(-15, false),
+                                                 0x0f0f));
+    /* The former single attenuation nibble is reserved: faces have their own. */
+    ck_assert(!map_protocol_client_lighting_valid(1, 0, 0x0010));
+    /* Up and down face bits are valid; bits 14-15 are reserved. */
+    ck_assert(map_protocol_client_lighting_valid(1, 0, 0x3000));
+    ck_assert(!map_protocol_client_lighting_valid(1, 0, 0x4000));
+    ck_assert(map_protocol_client_lighting_valid(1, map_protocol_local_light_encode(0, false), 0));
+    /* A zero radius, level -16 and reserved local-light bits are malformed.
+     * Every occluder byte is meaningful. */
+    ck_assert(!map_protocol_client_lighting_valid(0, 0, 0));
+    /* Radii are unclamped: the whole nonzero int8 range is valid. */
+    ck_assert(map_protocol_client_lighting_valid(INT8_MAX, 0, 0));
+    ck_assert(map_protocol_client_lighting_valid(INT8_MIN, 0, 0));
+    ck_assert(!map_protocol_client_lighting_valid(1, 0x10, 0));
+    /* Bit 5 carries the viewer's tli override. */
+    ck_assert(map_protocol_client_lighting_valid(1, MAP2_LOCAL_LIGHT_TLI, 0));
+    /* Bit 6 is reserved. */
+    ck_assert(!map_protocol_client_lighting_valid(1, 0x40, 0));
+    ck_assert(!map_protocol_client_lighting_valid(
+        1, map_protocol_local_light_encode(-15, true) | 0x40, 0));
+    /* Positive light may be black (valid content the server renders as a
+     * zero linear vector) and darkness is achromatic. */
+    ck_assert(map_protocol_client_lighting_valid_color(5, UINT32_C(0x000001)));
+    ck_assert(map_protocol_client_lighting_valid_color(5, 0));
+    ck_assert(map_protocol_client_lighting_valid_color(-5, 0));
+    ck_assert(!map_protocol_client_lighting_valid_color(-5, UINT32_C(0x000100)));
+    /* Flicker is a light-only opt-in; other emitter flag bits are reserved. */
+    ck_assert(map_protocol_client_lighting_valid_full(5, MAP2_EMITTER_FLICKER, 0, 0));
+    ck_assert(!map_protocol_client_lighting_valid_full(-5, MAP2_EMITTER_FLICKER, 0, 0));
+    ck_assert(!map_protocol_client_lighting_valid_full(5, 0x02, 0, 0));
+    ck_assert(!map_protocol_client_lighting_valid_full(5, 0x80, 0, 0));
+    /* The vertical byte carries a nibble; its high nibble is reserved. */
+    ck_assert(map_protocol_client_lighting_valid_full(5, 0, 0x0f, 0));
+    ck_assert(!map_protocol_client_lighting_valid_full(5, 0, 0x10, 0));
+    /* Levels come with a count of 1..NUM_SUB_LAYERS. */
+    for (int count = 0; count <= NUM_SUB_LAYERS + 1; count++) {
+        packet_struct *level = packet_new(0, 32, 16);
+        packet_writer_write_uint16(level, 0);
+        packet_writer_write_uint8(level, 0);
+        packet_writer_write_uint8(level, MAP2_FLAG_EXT_LOCAL_LIGHT);
+        packet_writer_write_uint8(level, (uint8_t)count);
+        for (int i = 0; i < count; i++) {
+            packet_writer_write_uint8(level, map_protocol_local_light_encode(i - 3, false));
+        }
+        packet_struct *packet = map_protocol_test_packet(1);
+        map_protocol_test_level(packet, 0, level);
+        bool valid = map_protocol_validate(packet->data, packet->len, 0, 21, 21);
+        ck_assert_int_eq(valid, count >= 1 && count <= NUM_SUB_LAYERS);
+        packet_free(packet);
+        packet_free(level);
+    }
+    /* The former aggregate bitmap flag is no longer part of 1085. */
+    ck_assert(!map_protocol_client_lighting_valid_full(5, 0, 0, 32));
+
+    /* Signed base radiance is odd-symmetric and saturates symmetrically. */
+    static const int64_t raw[] = {0, 1, 160, 1280, 20479, 20480, INT64_C(1) << 40};
+    static const int16_t expected[] = {0, 2, 256, 2048, 32766, 32767, 32767};
+    for (size_t i = 0; i < sizeof(raw) / sizeof(raw[0]); i++) {
+        ck_assert_int_eq(map_protocol_signed_radiance_encode(raw[i]), expected[i]);
+        ck_assert_int_eq(map_protocol_signed_radiance_encode(-raw[i]), -expected[i]);
+    }
+    ck_assert_int_eq(map_protocol_signed_radiance_encode(INT64_MIN), -32767);
+
+    for (int level = -MAP2_LOCAL_LIGHT_LEVEL_MAX; level <= MAP2_LOCAL_LIGHT_LEVEL_MAX; level++) {
+        for (int floor_bit = 0; floor_bit < 2; floor_bit++) {
+            int8_t decoded = 0;
+            bool vision_floor = false;
+            ck_assert(map_protocol_local_light_decode(
+                map_protocol_local_light_encode(level, floor_bit != 0), &decoded, &vision_floor));
+            ck_assert_int_eq(decoded, level);
+            ck_assert_int_eq(vision_floor, floor_bit != 0);
+        }
+    }
+
+    packet_struct *level = map_protocol_client_lighting_level(4, 3, MAP2_OCCLUDER_FLOOR);
+    packet_struct *packet = map_protocol_test_packet(1);
     map_protocol_test_level(packet, 0, level);
     ck_assert(map_protocol_validate(packet->data, packet->len, 0, 21, 21));
-
-    /* RGB endpoints must be a subset of the scalar endpoint bitmap. */
-    level->data[9] = 2;
-    packet = map_protocol_test_packet(1);
-    map_protocol_test_level(packet, 0, level);
-    ck_assert(!map_protocol_validate(packet->data, packet->len, 0, 21, 21));
-    packet_free(packet);
-
-    /* Reserved sub-layer bits and every truncated endpoint are rejected. */
-    level->data[6] = UINT8_C(1) << MAP2_PROTOCOL_SUB_LAYERS;
-    packet = map_protocol_test_packet(1);
-    map_protocol_test_level(packet, 0, level);
-    ck_assert(!map_protocol_validate(packet->data, packet->len, 0, 21, 21));
-    packet_free(packet);
-    level->data[6] = 1;
-    level->data[9] = 1;
-    packet = map_protocol_test_packet(1);
-    map_protocol_test_level(packet, 0, level);
     size_t packet_len = packet->len;
     for (size_t len = 0; len < packet_len; len++) {
         ck_assert(!map_protocol_validate(packet->data, len, 0, 21, 21));
@@ -1307,11 +1413,12 @@ static Suite *suite(void) {
                    test_map_protocol_accepts_exit_flag_and_rejects_unknown_or_truncated_flags);
     tcase_add_test(tc_core, test_map_protocol_enforces_layer_string_bounds);
     tcase_add_test(tc_core, test_map_protocol_validates_colored_light_extension);
-    tcase_add_test(tc_core, test_map_protocol_validates_timed_light_keyframes);
+    tcase_add_test(tc_core, test_map_protocol_rejects_retired_timed_light);
     tcase_add_test(tc_core, test_map_protocol_accepts_bounded_continuation);
     tcase_add_test(tc_core, test_map_protocol_continuation_state_is_bounded_and_ordered);
     tcase_add_test(tc_core, test_map_protocol_rejects_unterminated_metadata);
     tcase_add_test(tc_core, test_map_protocol_enforces_metadata_string_bounds);
+    tcase_add_test(tc_core, test_map_protocol_validates_client_lighting_fields);
 
     return s;
 }

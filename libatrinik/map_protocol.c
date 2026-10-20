@@ -91,12 +91,6 @@ static bool map_packet_read_uint32(map_packet_reader_t *reader, uint32_t *value)
     return packet_reader_error(reader) == PACKET_ERROR_NONE;
 }
 
-/** Read a network-order uint64 from a MAP validation cursor. */
-static bool map_packet_read_uint64(map_packet_reader_t *reader, uint64_t *value) {
-    *value = packet_reader_read_uint64(reader);
-    return packet_reader_error(reader) == PACKET_ERROR_NONE;
-}
-
 /** Skip one required bounded NUL-terminated string in a MAP command. */
 static bool map_packet_skip_string(map_packet_reader_t *reader, size_t max_len) {
     (void)packet_reader_read_string_view(reader, max_len);
@@ -111,7 +105,7 @@ socket_command_map_validate_level(map_packet_reader_t *reader, int wire_width, i
     const uint32_t known_flags2 = MAP2_FLAG2_ALPHA | MAP2_FLAG2_ROTATE | MAP2_FLAG2_ZOOM |
                                   MAP2_FLAG2_TARGET | MAP2_FLAG2_PROBE | MAP2_FLAG2_PRIORITY |
                                   MAP2_FLAG2_SECONDPASS | MAP2_FLAG2_GLOW | MAP2_FLAG2_ROOF |
-                                  MAP2_FLAG2_DOOR | MAP2_FLAG2_EXIT;
+                                  MAP2_FLAG2_DOOR | MAP2_FLAG2_EXIT | MAP2_FLAG2_EMITTER;
 
     while (reader->pos < reader->len) {
         uint16_t mask;
@@ -251,13 +245,32 @@ socket_command_map_validate_level(map_packet_reader_t *reader, int wire_width, i
                      !map_packet_skip(reader, sizeof(uint8_t)))) {
                     return false;
                 }
+                if (flags2 & MAP2_FLAG2_EMITTER) {
+                    int8_t radius;
+                    uint8_t emitter_flags, red, green, blue;
+
+                    /* Darkness is achromatic and never flickers. Positive
+                     * light may be black: its zero linear vector dilutes hue
+                     * exactly as the server's resolver weighs it. */
+                    if (!map_packet_read_int8(reader, &radius) || radius == 0 ||
+                        !map_packet_read_uint8(reader, &emitter_flags) ||
+                        (emitter_flags & MAP2_EMITTER_RESERVED) != 0 ||
+                        (radius < 0 && (emitter_flags & MAP2_EMITTER_FLICKER) != 0) ||
+                        !map_packet_read_uint8(reader, &red) ||
+                        !map_packet_read_uint8(reader, &green) ||
+                        !map_packet_read_uint8(reader, &blue) ||
+                        (radius < 0 && (red | green | blue) != 0)) {
+                        return false;
+                    }
+                }
             }
         }
 
         uint8_t ext_flags;
         if (!map_packet_read_uint8(reader, &ext_flags) ||
+            /* The timed-light endpoint extension is retired in 1085. */
             (ext_flags & ~(MAP2_FLAG_EXT_ANIM | MAP2_FLAG_EXT_LIGHT_RADIANCE_RGB16 |
-                           MAP2_FLAG_EXT_LIGHT_KEYFRAME)) != 0) {
+                           MAP2_FLAG_EXT_LOCAL_LIGHT | MAP2_FLAG_EXT_OCCLUDER)) != 0) {
             return false;
         }
 
@@ -271,30 +284,6 @@ socket_command_map_validate_level(map_packet_reader_t *reader, int wire_width, i
 
             for (uint8_t sub_layer = 0; sub_layer < MAP2_PROTOCOL_SUB_LAYERS; sub_layer++) {
                 if ((bitmap & (UINT8_C(1) << sub_layer)) &&
-                    !map_packet_skip(reader, sizeof(uint16_t) * 3)) {
-                    return false;
-                }
-            }
-        }
-
-        if (ext_flags & MAP2_FLAG_EXT_LIGHT_KEYFRAME) {
-            uint8_t scalar_bitmap, rgb_bitmap;
-            if (!map_packet_read_uint8(reader, &scalar_bitmap) ||
-                (scalar_bitmap & ~((UINT8_C(1) << MAP2_PROTOCOL_SUB_LAYERS) - 1)) != 0) {
-                return false;
-            }
-            for (uint8_t sub_layer = 0; sub_layer < MAP2_PROTOCOL_SUB_LAYERS; sub_layer++) {
-                if ((scalar_bitmap & (UINT8_C(1) << sub_layer)) &&
-                    !map_packet_skip(reader, sizeof(uint16_t))) {
-                    return false;
-                }
-            }
-            if (!map_packet_read_uint8(reader, &rgb_bitmap) ||
-                (rgb_bitmap & ~scalar_bitmap) != 0) {
-                return false;
-            }
-            for (uint8_t sub_layer = 0; sub_layer < MAP2_PROTOCOL_SUB_LAYERS; sub_layer++) {
-                if ((rgb_bitmap & (UINT8_C(1) << sub_layer)) &&
                     !map_packet_skip(reader, sizeof(uint16_t) * 3)) {
                     return false;
                 }
@@ -320,6 +309,38 @@ socket_command_map_validate_level(map_packet_reader_t *reader, int wire_width, i
                     return false;
                 }
                 seen_sub_layers[sub_layer] = true;
+            }
+        }
+
+        if (ext_flags & MAP2_FLAG_EXT_LOCAL_LIGHT) {
+            uint8_t count;
+
+            if (!map_packet_read_uint8(reader, &count) || count == 0 ||
+                count > MAP2_PROTOCOL_SUB_LAYERS) {
+                return false;
+            }
+            for (uint8_t i = 0; i < count; i++) {
+                uint8_t value;
+                int8_t level;
+                bool vision_floor;
+
+                if (!map_packet_read_uint8(reader, &value) ||
+                    !map_protocol_local_light_decode(value, &level, &vision_floor)) {
+                    return false;
+                }
+            }
+        }
+
+        if (ext_flags & MAP2_FLAG_EXT_OCCLUDER) {
+            uint16_t occluder, horizontal;
+            uint8_t vertical;
+
+            if (!map_packet_read_uint16(reader, &occluder) ||
+                (occluder & MAP2_OCCLUDER_RESERVED) != 0 ||
+                !map_packet_read_uint16(reader, &horizontal) ||
+                !map_packet_read_uint8(reader, &vertical) ||
+                (vertical & MAP2_OCCLUDER_VERTICAL_RESERVED) != 0) {
+                return false;
             }
         }
     }
@@ -393,24 +414,12 @@ bool map_protocol_inspect(const uint8_t *data,
         player_sub_layer >= MAP2_PROTOCOL_SUB_LAYERS ||
         (new_map_width != 0 && (xpos >= new_map_width || ypos >= new_map_height)) ||
         !map_packet_read_uint16(&reader, &continuation_marker) ||
-        (mapstat == MAP_UPDATE_CMD_PARTIAL &&
-         ((continuation_marker & MAP2_CONTINUATION_TIMED_LIGHT) != 0 ||
-          (continuation_marker & ~MAP2_CONTINUATION_TIMED_LIGHT) == 0)) ||
-        (continuation_marker & ~MAP2_CONTINUATION_TIMED_LIGHT) > MAP2_PROTOCOL_CONTINUATIONS_MAX) {
+        /* The timed-light descriptor is retired in 1085: its marker bit is
+         * malformed rather than a legacy layout. */
+        (continuation_marker & MAP2_CONTINUATION_TIMED_LIGHT) != 0 ||
+        (mapstat == MAP_UPDATE_CMD_PARTIAL && continuation_marker == 0) ||
+        continuation_marker > MAP2_PROTOCOL_CONTINUATIONS_MAX) {
         return false;
-    }
-
-    if ((continuation_marker & MAP2_CONTINUATION_TIMED_LIGHT) != 0) {
-        uint64_t generation;
-        uint64_t start_seconds, end_seconds;
-        uint8_t flags;
-        if (mapstat == MAP_UPDATE_CMD_PARTIAL || !map_packet_read_uint64(&reader, &generation) ||
-            generation == 0 || !map_packet_read_uint64(&reader, &start_seconds) ||
-            !map_packet_read_uint64(&reader, &end_seconds) || end_seconds <= start_seconds ||
-            end_seconds - start_seconds != 3600 || !map_packet_read_uint8(&reader, &flags) ||
-            flags == 0 || (flags & ~(MAP2_LIGHT_KEYFRAME_CONTINUOUS | MAP2_LIGHT_KEYFRAME_SNAP)) != 0) {
-            return false;
-        }
     }
 
     if (!map_packet_read_uint8(&reader, &level_count) || level_count == 0 ||
@@ -454,7 +463,7 @@ bool map_protocol_inspect(const uint8_t *data,
             .x = xpos,
             .y = ypos,
             .sub_layer = player_sub_layer,
-            .continuation = continuation_marker & ~MAP2_CONTINUATION_TIMED_LIGHT,
+            .continuation = continuation_marker,
             .depths = level_mask,
         };
     }
@@ -468,4 +477,33 @@ bool map_protocol_validate(const uint8_t *data,
                            int map_width_limit,
                            int map_height_limit) {
     return map_protocol_inspect(data, len, pos, map_width_limit, map_height_limit, NULL);
+}
+
+uint8_t map_protocol_local_light_encode(int level, bool vision_floor) {
+    HARD_ASSERT(level >= -MAP2_LOCAL_LIGHT_LEVEL_MAX && level <= MAP2_LOCAL_LIGHT_LEVEL_MAX);
+    return (uint8_t)((unsigned)level & MAP2_LOCAL_LIGHT_LEVEL_MASK) |
+           (vision_floor ? MAP2_LOCAL_LIGHT_VISION_FLOOR : 0);
+}
+
+bool map_protocol_local_light_decode(uint8_t value, int8_t *level, bool *vision_floor) {
+    if ((value & MAP2_LOCAL_LIGHT_RESERVED) != 0) {
+        return false;
+    }
+    int bits = value & MAP2_LOCAL_LIGHT_LEVEL_MASK;
+    int decoded = bits >= 0x10 ? bits - 0x20 : bits;
+    if (decoded < -MAP2_LOCAL_LIGHT_LEVEL_MAX) {
+        return false;
+    }
+    *level = (int8_t)decoded;
+    *vision_floor = (value & MAP2_LOCAL_LIGHT_VISION_FLOOR) != 0;
+    return true;
+}
+
+int16_t map_protocol_signed_radiance_encode(int64_t raw_light) {
+    /* The legacy rounding on the magnitude keeps Q(-r) == -Q(r), so equal
+     * light and darkness cancel exactly; saturation is symmetric too. */
+    uint64_t magnitude = raw_light < 0 ? (uint64_t)-(raw_light + 1) + 1 : (uint64_t)raw_light;
+    uint64_t encoded = magnitude >= UINT64_C(20480) ? MAP2_SIGNED_RADIANCE_MAX
+                                                    : (magnitude * 8 + 2) / 5;
+    return raw_light < 0 ? (int16_t)-(int64_t)encoded : (int16_t)encoded;
 }
