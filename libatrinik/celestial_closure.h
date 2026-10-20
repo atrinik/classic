@@ -107,17 +107,19 @@ typedef struct celestial_closure {
     void *lattice;
 } celestial_closure_t;
 
-/** Free a closure's storage and reset it to empty. */
+/** Free a closure's storage and reset it to empty; NULL is ignored. */
 void celestial_closure_free(celestial_closure_t *closure);
 
 /**
  * Build a closure from fragments, taking ownership of the heap-allocated
  * fragment array and of each fragment's value array. *closure is
  * overwritten, never freed: pass an empty one, freeing a populated closure
- * first.
- * @return False, freeing everything (the fragments included), for any
- * fragment the codec would reject, for more than
- * CELESTIAL_CLOSURE_FRAGMENTS_MAX fragments, or when an allocation fails.
+ * first. closure is mandatory (unchecked); fragments may be NULL only when
+ * count is 0.
+ * @return False, freeing everything (the fragments included), for a window
+ * dimension outside 1..255, any fragment the codec would reject, more than
+ * CELESTIAL_CLOSURE_FRAGMENTS_MAX fragments, NULL fragments with a positive
+ * count, or when an allocation fails.
  */
 bool celestial_closure_build(celestial_closure_t *closure, uint32_t generation, int window_width,
                              int window_height, celestial_closure_fragment_t *fragments,
@@ -133,11 +135,13 @@ bool celestial_closure_build(celestial_closure_t *closure, uint32_t generation, 
 bool celestial_closure_write(struct packet_struct *packet, const celestial_closure_t *closure);
 
 /** Encoded size of the closure's fragments in bytes; they need valid value
- * arrays, but the closure need not be built (the server sizes candidates). */
+ * arrays, but the closure need not be built (the server sizes candidates).
+ * closure is mandatory (unchecked). */
 size_t celestial_closure_size(const celestial_closure_t *closure);
 
 /**
- * Decode CELESTIAL_STRUCTURE for a window of the given size.
+ * Decode CELESTIAL_STRUCTURE for a window of the given size, each dimension
+ * 1..255 (any other window is rejected as malformed).
  * @return False, leaving *closure empty, for a payload longer than
  * PACKET_PAYLOAD_MAX, truncation, trailing bytes,
  * more than CELESTIAL_CLOSURE_FRAGMENTS_MAX fragments, a run of length 0, a
@@ -165,7 +169,8 @@ bool celestial_closure_decode(const uint8_t *data, size_t len, int window_width,
 /** Whether a decoded value is valid for a closure cell (or zero). */
 bool celestial_closure_value_valid(uint32_t value);
 
-/** The value of a window cell, zero when it is outside the closure. */
+/** The value of a window cell, zero when it is outside the closure or the
+ * coordinates are outside the window. closure is mandatory (unchecked). */
 uint32_t celestial_closure_value(const celestial_closure_t *closure, int depth, int x, int y);
 
 /**
