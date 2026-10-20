@@ -59,7 +59,9 @@ typedef enum socket_role {
  */
 #define MAP_UPDATE_CMD_PARTIAL 3
 
-/** High bit of the complete-update continuation marker announces a timed-light descriptor. */
+/** Retired in protocol 1085: reserved, never set. A continuation marker with
+ * this bit (once a timed-light descriptor) is malformed and rejected by every
+ * 1085 decoder; the name is kept so validators can reject it. */
 #define MAP2_CONTINUATION_TIMED_LIGHT UINT16_C(0x8000)
 
 /** First valid tiled-map identifier in a connected MAP update. */
@@ -105,6 +107,9 @@ typedef enum socket_role {
 /** Maximum byte length of MAP weather or region metadata. */
 #define MAP2_PROTOCOL_METADATA_SHORT_MAX 255
 
+/** Flags of the retired timed-light descriptor (MAP2_CONTINUATION_TIMED_LIGHT):
+ * never on the protocol-1085 wire, kept only for the client's unreachable
+ * keyframe internals. */
 /** Continuous hourly rollover. */
 #define MAP2_LIGHT_KEYFRAME_CONTINUOUS 1
 /** Immediate local/profile snap or rebase. */
@@ -428,9 +433,14 @@ typedef struct socket_face_batch_response {
  *@{*/
 /** An animation. */
 #define MAP2_FLAG_EXT_ANIM 1
-/** Complete per-tile set of explicitly colored Q5.11 RGB radiance follows. */
+/** Complete per-tile set of RGB base radiance follows: a sub-layer bitmap,
+ * then three signed Q4.11 words (map_protocol_signed_radiance_encode()) per
+ * set sub-layer. Valid in 1085, though a 1085 server never sends it: its base
+ * is achromatic. */
 #define MAP2_FLAG_EXT_LIGHT_RADIANCE_RGB16 2
-/** Next authoritative hourly aggregate-light endpoint follows. */
+/** Retired in protocol 1085: reserved, never set. A level record with this
+ * flag (once a timed-light endpoint) is malformed and rejected by every 1085
+ * decoder. */
 #define MAP2_FLAG_EXT_LIGHT_KEYFRAME 4
 /** Coarse, source-anonymous local light levels follow (1085): a count n of
  * 1..MAP2_PROTOCOL_SUB_LAYERS, then n level bytes. Level i applies to sub-layer i, and
