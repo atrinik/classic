@@ -3132,7 +3132,8 @@ void draw_client_map2(object *pl) {
                  * structure stays undisclosed. */
                 if (cell_celestial.sent) {
                     mp->celestial_structure =
-                        celestial_closure_cell_value(&cell_celestial, m, nx, ny, pl, ax, ay);
+                        celestial_closure_cell_value(&cell_celestial, m, nx, ny, pl, ax, ay,
+                                                     map2_neighbors_in_view(pl, depth, ax, ay));
                     map2_closure_maps[MAP2_DEPTH_INDEX(depth)][ax][ay] = m;
                     /* Only a cell with a closure record takes a profile slot:
                      * empty or fully filtered maps neither disclose theirs nor

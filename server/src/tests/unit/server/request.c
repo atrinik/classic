@@ -5139,6 +5139,51 @@ START_TEST(test_celestial_closure_fallback_resends_membership_changes) {
 }
 END_TEST
 
+START_TEST(test_celestial_closure_seams_ignore_out_of_view_residency) {
+    /* A seam cell whose neighbor across the seam is outside the view: its
+     * continuity comes from this map's authored link and boundary alone, so
+     * the neighbor being resident (perhaps for another player) or not never
+     * changes the record. In view, the real two-sided seam decides. */
+    mapstruct *old_map;
+    object *pl;
+    check_setup_env_pl(&old_map, &pl);
+    mapstruct *west = get_empty_map(64, 64);
+    mapstruct *east = get_empty_map(64, 64);
+    FREE_AND_COPY_HASH(west->path, "/closure/residency-west");
+    FREE_AND_COPY_HASH(east->path, "/closure/residency-east");
+    closure_fixture_schema(west);
+    closure_fixture_schema(east);
+    FREE_AND_COPY_HASH(west->tile_path[TILED_EAST], east->path);
+    west->celestial_boundary[TILED_EAST] = CELESTIAL_BOUNDARY_CONTINUOUS;
+    east->celestial_boundary[TILED_WEST] = CELESTIAL_BOUNDARY_CONTINUOUS;
+    object *structure = closure_structure(west, 63, 32, MISC_OBJECT, -1, NULL, NULL);
+    celestial_closure_accumulator_t sent;
+    celestial_closure_begin(&sent);
+    celestial_closure_accumulate(&sent, structure);
+    /* Every neighbor in view except the eastern one, across the seam. */
+    uint8_t in_view = 0x3fU & ~(1U << 1);
+    uint32_t values[2];
+    for (int resident = 0; resident < 2; resident++) {
+        west->tile_map[TILED_EAST] = resident ? east : NULL;
+        east->tile_map[TILED_WEST] = resident ? west : NULL;
+        values[resident] = celestial_closure_cell_value(&sent, west, 63, 32, pl, 16, 16, in_view);
+    }
+    ck_assert_uint_eq(values[0], values[1]);
+    ck_assert_uint_ne(values[0] & CELESTIAL_CLOSURE_CONTINUOUS_EAST, 0);
+    /* Authored as a discontinuous seam, it stays closed either way. */
+    west->celestial_boundary[TILED_EAST] = CELESTIAL_BOUNDARY_DISCONTINUOUS;
+    for (int resident = 0; resident < 2; resident++) {
+        west->tile_map[TILED_EAST] = resident ? east : NULL;
+        east->tile_map[TILED_WEST] = resident ? west : NULL;
+        values[resident] = celestial_closure_cell_value(&sent, west, 63, 32, pl, 16, 16, in_view);
+    }
+    ck_assert_uint_eq(values[0], values[1]);
+    ck_assert_uint_eq(values[0] & CELESTIAL_CLOSURE_CONTINUOUS_EAST, 0);
+    west->tile_map[TILED_EAST] = NULL;
+    east->tile_map[TILED_WEST] = NULL;
+}
+END_TEST
+
 START_TEST(test_celestial_closure_splits_maps_repeated_by_a_link_cycle) {
     /* Two narrow maps linked east and west into a cycle alternate across the
      * window, so each map's bounding rectangle covers the other's cells:
@@ -5302,6 +5347,7 @@ static Suite *suite(void) {
     tcase_add_test(tc_closure, test_celestial_closure_too_large_is_sent_as_open_air);
     tcase_add_test(tc_closure, test_celestial_closure_headers_too_large_coalesce_by_depth);
     tcase_add_test(tc_closure, test_celestial_closure_splits_maps_repeated_by_a_link_cycle);
+    tcase_add_test(tc_closure, test_celestial_closure_seams_ignore_out_of_view_residency);
     tcase_add_test(tc_closure, test_celestial_closure_fallback_resends_membership_changes);
     tcase_add_test(tc_core, test_removed_player_connection_keeps_servicing_queued_output);
     tcase_add_test(tc_core, test_map_name_metadata_handles_transient_unnamed_maps);
