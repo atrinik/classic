@@ -121,8 +121,8 @@ const char *celestial_lunar_phase_name(celestial_lunar_phase phase);
 
 /**
  * Evaluate the deterministic lunar orbit and starlight.
- * @return False, with a zeroed sample, for an input outside its documented
- * ranges.
+ * @return False for a NULL sample, with nothing written; false, with a
+ * zeroed sample, for a NULL input or one outside its documented ranges.
  */
 bool celestial_lunar_evaluate(const celestial_lunar_input *input, celestial_lunar_sample *sample);
 

@@ -69,6 +69,11 @@ static inline uint64_t client_lighting_occluder(uint16_t bits, uint16_t horizont
            (uint64_t)(vertical & MAP2_OCCLUDER_VERTICAL_MASK) << 32;
 }
 
+/** Most emitters one evaluation accepts: far above any MAP2 window's sent
+ * layers (cells × layers × depths), small enough that grouped radii and
+ * color weights stay within 64 bits. */
+#define CLIENT_LIGHTING_EMITTERS_MAX ((size_t)1 << 24)
+
 /**
  * Evaluate the local light of one level of a stack of levels, each a
  * width-by-height grid, as the server's 3D transport does: every emitter of
@@ -80,6 +85,8 @@ static inline uint64_t client_lighting_occluder(uint16_t bits, uint16_t horizont
  * Level z + 1 lies above z.
  * @param emitters Emitters with their level in z: count elements, mandatory
  * when count is positive (an unchecked precondition).
+ * @param count At most CLIENT_LIGHTING_EMITTERS_MAX (a HARD_ASSERT
+ * precondition), which keeps every grouped sum within 64 bits.
  * @param cells Output of width * height cells of the target level,
  * mandatory for a positive grid (an unchecked precondition).
  */

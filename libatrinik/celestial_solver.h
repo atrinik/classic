@@ -129,10 +129,12 @@ typedef struct celestial_solver_ops {
 
 /**
  * A celestial lattice: its operations and their context. Both are owned by
- * the caller and must outlive every solver call that receives the lattice
- * and every ray or cursor initialized from it. The solver calls the
- * operations synchronously on the calling thread, never retains them past a
- * call, and does not reenter a solver entry point from an operation. Nothing
+ * the caller and must outlive every solver call that receives the lattice,
+ * every ray or cursor initialized from it, and every stepped job created
+ * from it (celestial_solver_job_create() copies the handle and keeps the ops
+ * pointer and context until the job is freed). The solver calls the
+ * operations synchronously on the calling thread, retains them only in such
+ * a job, and does not reenter a solver entry point from an operation. Nothing
  * in the solver is shared between calls, so lattices may be solved on
  * different threads concurrently as long as each operation set and context
  * is used by one thread at a time; operations that mutate their context

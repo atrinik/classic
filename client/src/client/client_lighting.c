@@ -216,7 +216,7 @@ static void client_lighting_add(const client_lighting_grid_t *grid,
                                 int y,
                                 int z,
                                 int mask,
-                                int sign,
+                                int64_t sign,
                                 int target,
                                 const int64_t linear[3]) {
     if (mask == 0) {
@@ -242,7 +242,7 @@ static void client_lighting_add(const client_lighting_grid_t *grid,
             client_lighting_accumulator_t *cell =
                 &accumulators[(size_t)(y + dy) * grid->width + (x + dx)];
             if (target == 0) {
-                cell->scalar += (int64_t)sign * value;
+                cell->scalar += sign * value;
             } else if (target == 1) {
                 cell->positive += value;
             } else {
@@ -251,7 +251,7 @@ static void client_lighting_add(const client_lighting_grid_t *grid,
                 for (size_t channel = 0; channel < 3; channel++) {
                     cell->color[channel] += (int64_t)value * linear[channel];
                 }
-                cell->weight += (int64_t)sign * value * UINT16_MAX;
+                cell->weight += sign * value * UINT16_MAX;
             }
         }
     }
@@ -332,8 +332,8 @@ static void client_lighting_accumulate(const client_lighting_grid_t *grid,
                             light_profile_mask((int)MIN(INT_MAX, positive_radius)), 1, 1, NULL);
         for (int profile = 1; profile < LIGHT_PROFILE_COUNT; profile++) {
             if (multiplicity[profile] != 0) {
-                client_lighting_add(grid, accumulators, x, y, z, profile,
-                                    (int)multiplicity[profile], 2, linear[profile]);
+                client_lighting_add(grid, accumulators, x, y, z, profile, multiplicity[profile],
+                                    2, linear[profile]);
             }
         }
     }
@@ -370,6 +370,8 @@ void client_lighting_evaluate_stack(int levels,
                                     const client_lighting_emitter_t *emitters,
                                     size_t count,
                                     client_lighting_cell_t *cells) {
+    /* The bound keeps every grouped sum and weight within 64 bits. */
+    HARD_ASSERT(count <= CLIENT_LIGHTING_EMITTERS_MAX);
     /* A grid without cells, or one whose byte size cannot be represented,
      * has no output to clear. */
     if (width <= 0 || height <= 0 ||

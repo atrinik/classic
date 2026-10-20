@@ -30,6 +30,7 @@
  */
 
 #include <global.h>
+#include <initialization.h>
 #include <weather.h>
 #include <server_main.h>
 #include <server.h>
@@ -45,7 +46,8 @@ void command_settime(object *op, const char *command, char *params) {
 
     get_tod(&tod);
 
-    while (tod.hour != hour) {
+    /* A clock stopped at its bound cannot reach another hour. */
+    while (tod.hour != hour && todtick < TODCLOCK_MAX) {
         tick_the_clock();
         get_tod(&tod);
     }

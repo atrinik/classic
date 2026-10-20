@@ -298,6 +298,13 @@ START_TEST(test_clock_stops_at_its_bound_without_hourly_effects) {
     tick_the_clock();
     ck_assert_uint_eq(todtick, TODCLOCK_MAX);
     ck_assert_int_eq(world_darkness, darkness);
+    /* /settime cannot reach another hour of a stopped clock: it returns. */
+    timeofday_t tod;
+    get_tod(&tod);
+    char other[8];
+    snprintf(other, sizeof(other), "%d", (tod.hour + 1) % HOURS_PER_DAY);
+    command_settime(NULL, "settime", other);
+    ck_assert_uint_eq(todtick, TODCLOCK_MAX);
     todtick = saved;
     world_darkness = saved_darkness;
 }
