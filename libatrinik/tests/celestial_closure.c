@@ -404,6 +404,14 @@ static int test_unresolved_cells_end_rays(void) {
     require(celestial_solver_spill(&lattice, &counts.map, 1, 1, INT_MAX, 0) == 0);
     require(celestial_solver_spill(&lattice, &counts.map, INT_MAX, 1, 1, 0) == 0);
     require(celestial_solver_spill(&lattice, &counts.map, 1, 1, 0, 0) == 0);
+    /* So are halo rays: an extreme coordinate leaves the ray done. */
+    celestial_solver_ray_t halo;
+    celestial_solver_halo_ray(&lattice, &halo, &counts.map, INT_MIN, 1, CELESTIAL_MODEL_NORTH,
+                              16384);
+    require(halo.done && !halo.sky);
+    celestial_solver_halo_ray(&lattice, &halo, &counts.map, 1, INT_MAX, CELESTIAL_MODEL_NORTH,
+                              16384);
+    require(halo.done && !halo.sky);
     /* A rejected segment leaves its cursor failed, like any other. */
     celestial_solver_cursor_t cursor;
     memset(&cursor, 0x5a, sizeof(cursor));

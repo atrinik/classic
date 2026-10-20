@@ -356,7 +356,11 @@ int celestial_solver_scratch_height(const celestial_solver_lattice_t *lattice, v
  * past the map's edge only across continuous faces. */
 static bool halo_cell(const celestial_solver_lattice_t *lattice, void *map, int width,
                       int height, int x, int y, celestial_solver_cell_t *cell) {
-    if (!observe(lattice, map)) {
+    /* Bounded coordinates keep the halo offset and the displacement from
+     * the clamped start inside int. */
+    if (x < -CELESTIAL_SOLVER_COORDINATE_MAX || x > CELESTIAL_SOLVER_COORDINATE_MAX ||
+        y < -CELESTIAL_SOLVER_COORDINATE_MAX || y > CELESTIAL_SOLVER_COORDINATE_MAX ||
+        !observe(lattice, map)) {
         return false;
     }
     x -= CELESTIAL_MODEL_SPILL_PASSES;

@@ -193,7 +193,9 @@ void celestial_solver_ray_init(const celestial_solver_lattice_t *lattice,
                                celestial_solver_ray_t *ray, void *map, int x, int y,
                                uint8_t direction, int32_t elevation);
 /** As celestial_solver_ray_init(), from a cell of the map's scratch grid,
- * which extends CELESTIAL_MODEL_SPILL_PASSES cells past each edge. */
+ * which extends CELESTIAL_MODEL_SPILL_PASSES cells past each edge. A
+ * coordinate outside ±CELESTIAL_SOLVER_COORDINATE_MAX, or a cell that does
+ * not resolve, leaves the ray done. */
 void celestial_solver_halo_ray(const celestial_solver_lattice_t *lattice,
                                celestial_solver_ray_t *ray, void *map, int x, int y,
                                uint8_t direction, int32_t elevation);
