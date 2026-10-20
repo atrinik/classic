@@ -316,13 +316,16 @@ static void test_pair_publishes_only_together(void) {
     /* An update with nothing staged is ordinary. */
     TEST_CHECK(!client_celestial_publish(NULL, NULL));
     TEST_CHECK(!client_celestial_take_reconnect());
-    /* Halves of different generations do not pair, and are both expired. */
+    /* A newer half while an older half waits is out of order: it is
+     * rejected at once, the waiting half discarded and the link reset. */
     packet = encode(2, &slot, 1);
     TEST_CHECK(client_celestial_apply(packet->data, packet->len));
     packet_free(packet);
-    TEST_CHECK(stage_closure(3, NULL, 0));
+    TEST_CHECK(!stage_closure(3, NULL, 0));
+    TEST_CHECK(!client_celestial_staged() && client_celestial_take_reconnect());
     TEST_CHECK(!client_celestial_publish(NULL, NULL));
-    TEST_CHECK(client_celestial_take_reconnect());
+    TEST_CHECK(!client_celestial_take_reconnect());
+    /* A lone half is expired by its MAP2 update, which resets the link. */
     TEST_CHECK(stage_closure(2, NULL, 0));
     TEST_CHECK(!client_celestial_publish(NULL, NULL));
     TEST_CHECK(client_celestial_take_reconnect());
@@ -403,6 +406,8 @@ static void test_publishable_matches_publish(void) {
     TEST_CHECK(client_celestial_apply(packet->data, packet->len));
     packet_free(packet);
     TEST_CHECK(!client_celestial_publishable());
+    /* A lone structure half is not publishable either. */
+    client_celestial_discard_staged();
     TEST_CHECK(stage_closure(2, NULL, 0));
     TEST_CHECK(!client_celestial_publishable());
     client_celestial_discard_staged();
@@ -466,6 +471,14 @@ static void test_publishable_matches_publish(void) {
     packet_free(packet);
     TEST_CHECK(stage_closure(6, NULL, 0));
     packet = encode(7, &slot, 1);
+    TEST_CHECK(!client_celestial_apply(packet->data, packet->len));
+    packet_free(packet);
+    TEST_CHECK(!client_celestial_staged() && client_celestial_take_reconnect());
+    /* So is a newer half while only one older half waits. */
+    packet = encode(10, &slot, 1);
+    TEST_CHECK(client_celestial_apply(packet->data, packet->len));
+    packet_free(packet);
+    packet = encode(11, &slot, 1);
     TEST_CHECK(!client_celestial_apply(packet->data, packet->len));
     packet_free(packet);
     TEST_CHECK(!client_celestial_staged() && client_celestial_take_reconnect());

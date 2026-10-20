@@ -116,14 +116,15 @@ void client_celestial_reset(void) {
     client_celestial.revision = revision + 1;
 }
 
-/** A complete, consistent pair staged for the next MAP2 update: the server
- * sends every pair immediately before its update, so a newer half before
- * that update means an out-of-order sequence. */
+/** Whether a staged half is waiting that this generation overtakes: the
+ * server sends each pair's two halves back to back, immediately before its
+ * MAP2 update, so a newer half while either half of an older pair is still
+ * staged means an out-of-order sequence. */
 static bool client_celestial_pair_waiting(uint32_t generation) {
-    return client_celestial.staged_slots_valid && client_celestial.staged_closure_valid &&
-           client_celestial.staged_slots.generation ==
-               client_celestial.staged_closure.generation &&
-           generation > client_celestial.staged_slots.generation;
+    return (client_celestial.staged_slots_valid &&
+            generation > client_celestial.staged_slots.generation) ||
+           (client_celestial.staged_closure_valid &&
+            generation > client_celestial.staged_closure.generation);
 }
 
 bool client_celestial_apply(const uint8_t *data, size_t len) {
