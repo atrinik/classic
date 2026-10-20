@@ -438,6 +438,27 @@ static void test_publishable_matches_publish(void) {
     TEST_CHECK(client_celestial_publish(NULL, NULL));
     TEST_CHECK(client_celestial_generation() == 1 && client_celestial_closure()->count == 0);
     TEST_CHECK(!client_celestial_take_reconnect());
+    /* A failed empty pair leaves nothing staged and raises no reconnect. */
+    TEST_CHECK(!client_celestial_stage_empty(0, 0));
+    TEST_CHECK(!client_celestial_staged() && !client_celestial_take_reconnect());
+    /* A half older than the other staged half is stale and ignored, not a
+     * mismatch that would discard the newer half. */
+    TEST_CHECK(stage_closure(3, NULL, 0));
+    packet = encode(2, &slot, 1);
+    TEST_CHECK(!client_celestial_apply(packet->data, packet->len));
+    packet_free(packet);
+    TEST_CHECK(!client_celestial_take_reconnect());
+    packet = encode(3, &slot, 1);
+    TEST_CHECK(client_celestial_apply(packet->data, packet->len));
+    packet_free(packet);
+    TEST_CHECK(client_celestial_publishable() && client_celestial_publish(NULL, NULL));
+    TEST_CHECK(client_celestial_generation() == 3);
+    packet = encode(5, &slot, 1);
+    TEST_CHECK(client_celestial_apply(packet->data, packet->len));
+    packet_free(packet);
+    TEST_CHECK(!stage_closure(4, NULL, 0));
+    TEST_CHECK(stage_closure(5, NULL, 0) && client_celestial_publish(NULL, NULL));
+    TEST_CHECK(!client_celestial_take_reconnect());
 }
 
 static void test_generation_zero_is_malformed(void) {

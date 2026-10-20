@@ -431,6 +431,19 @@ static void test_invalid_grid_writes_nothing(void) {
     for (size_t i = 0; i < sizeof(sentinel); i++) {
         TEST_CHECK(bytes[i] == 0xab);
     }
+    /* Emitters outside the stack are ignored before any offset is taken,
+     * however extreme their coordinates. */
+    client_lighting_emitter_t outside[] = {
+        {.x = 0, .y = 0, .z = INT_MIN, .radius = 13, .color = 0xffffff},
+        {.x = 0, .y = 0, .z = INT_MAX, .radius = 13, .color = 0xffffff},
+        {.x = INT_MIN, .y = 0, .z = 0, .radius = 13, .color = 0xffffff},
+        {.x = 0, .y = INT_MAX, .z = 0, .radius = 13, .color = 0xffffff},
+    };
+    client_lighting_cell_t lit[4];
+    client_lighting_evaluate_stack(2, 0, 2, 2, NULL, outside, 4, lit);
+    for (size_t i = 0; i < 4; i++) {
+        TEST_CHECK(lit[i].scalar == 0);
+    }
 }
 
 static void test_light_crosses_levels_like_the_server(void) {

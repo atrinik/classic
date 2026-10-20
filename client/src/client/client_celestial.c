@@ -127,9 +127,13 @@ bool client_celestial_apply(const uint8_t *data, size_t len) {
     /* Generations never regress, against the published pair or a payload
      * already staged: one generation is one atomic publication, so a
      * duplicate never replaces the payload staged first. */
+    /* Stale also against the other staged half: a generation below it can
+     * never pair with it (an equal one is its pair). */
     if (generation <= client_celestial.slots.generation ||
         (client_celestial.staged_slots_valid &&
-         generation <= client_celestial.staged_slots.generation)) {
+         generation <= client_celestial.staged_slots.generation) ||
+        (client_celestial.staged_closure_valid &&
+         generation < client_celestial.staged_closure.generation)) {
         return false;
     }
     /* The payload is complete state: slots it omits are no longer shown. */
@@ -170,7 +174,9 @@ bool client_celestial_apply_structure(const uint8_t *data, size_t len, int windo
     }
     if (closure.generation <= client_celestial.slots.generation ||
         (client_celestial.staged_closure_valid &&
-         closure.generation <= client_celestial.staged_closure.generation)) {
+         closure.generation <= client_celestial.staged_closure.generation) ||
+        (client_celestial.staged_slots_valid &&
+         closure.generation < client_celestial.staged_slots.generation)) {
         celestial_closure_free(&closure);
         return false;
     }
@@ -232,21 +238,31 @@ bool client_celestial_stage_empty(int window_width, int window_height) {
         return false;
     }
     generation++;
+    /* The helper reports its own failure: a reconnect it would raise is
+     * not a lost server publication. */
+    bool reconnect = client_celestial.reconnect;
     packet_struct *packet = packet_new(0, 32, 0);
     bool staged = celestial_protocol_write(packet, generation, 0, NULL, 0) &&
                   client_celestial_apply(packet->data, packet->len);
     packet_free(packet);
     celestial_closure_t closure;
-    if (!staged ||
-        !celestial_closure_build(&closure, generation, window_width, window_height, NULL, 0)) {
-        return false;
+    if (staged &&
+        celestial_closure_build(&closure, generation, window_width, window_height, NULL, 0)) {
+        packet = packet_new(0, 32, 0);
+        staged = celestial_closure_write(packet, &closure) &&
+                 client_celestial_apply_structure(packet->data, packet->len, window_width,
+                                                  window_height);
+        packet_free(packet);
+        celestial_closure_free(&closure);
+    } else {
+        staged = false;
     }
-    packet = packet_new(0, 32, 0);
-    staged = celestial_closure_write(packet, &closure) &&
-             client_celestial_apply_structure(packet->data, packet->len, window_width,
-                                              window_height);
-    packet_free(packet);
-    celestial_closure_free(&closure);
+    if (!staged) {
+        /* Never leave one half behind: the update would see an
+         * inconsistent pair. */
+        client_celestial_discard_staged();
+        client_celestial.reconnect = reconnect;
+    }
     return staged;
 }
 

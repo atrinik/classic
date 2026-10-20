@@ -392,7 +392,17 @@ void client_lighting_evaluate_stack(int levels,
     client_lighting_accumulator_t *all = xcalloc(total, sizeof(*all));
     client_lighting_accumulator_t *flicker = xcalloc(total, sizeof(*flicker));
     client_lighting_accumulator_t *flicker_steady = xcalloc(total, sizeof(*flicker_steady));
-    memcpy(sorted, emitters, count * sizeof(*sorted));
+    /* Only emitters inside the stack are evaluated: one outside it lights
+     * nothing here, and dropping it first keeps every offset in range. */
+    size_t kept = 0;
+    for (size_t i = 0; i < count; i++) {
+        const client_lighting_emitter_t *emitter = &emitters[i];
+        if (emitter->z >= 0 && emitter->z < levels && emitter->x >= 0 && emitter->x < width &&
+            emitter->y >= 0 && emitter->y < height) {
+            sorted[kept++] = *emitter;
+        }
+    }
+    count = kept;
     qsort(sorted, count, sizeof(*sorted), client_lighting_emitter_compare);
     client_lighting_accumulate(&grid, sorted, count, CLIENT_LIGHTING_PASS_ALL, all);
     client_lighting_accumulate(&grid, sorted, count, CLIENT_LIGHTING_PASS_FLICKER_TILES, flicker);

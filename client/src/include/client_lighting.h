@@ -84,7 +84,8 @@ static inline uint64_t client_lighting_occluder(uint16_t bits, uint16_t horizont
  * row-major order (levels * width * height), or NULL for open geometry.
  * Level z + 1 lies above z.
  * @param emitters Emitters with their level in z: count elements, mandatory
- * when count is positive (an unchecked precondition).
+ * when count is positive (an unchecked precondition). An emitter outside
+ * the stack (z outside 0..levels-1, or x, y outside the grid) is ignored.
  * @param count At most CLIENT_LIGHTING_EMITTERS_MAX (a HARD_ASSERT
  * precondition), which keeps every grouped sum within 64 bits.
  * @param cells Output of width * height cells of the target level,
