@@ -635,6 +635,15 @@ static void test_worst_case_closure_cost(void) {
             wire, ms, steps, worst_step);
 }
 
+static uint16_t oversized_spill(int x, int y, int dx, int dy, void *context) {
+    (void)x;
+    (void)y;
+    (void)dx;
+    (void)dy;
+    (void)context;
+    return UINT16_MAX;
+}
+
 static void test_model_helpers_reject_edge_inputs(void) {
     /* The publish helper sums in 64 bits and saturates at the int32 range. */
     celestial_model_t bright;
@@ -657,6 +666,11 @@ static void test_model_helpers_reject_edge_inputs(void) {
     TEST_CHECK(celestial_model_round(5, 2) == 3 && celestial_model_round(4, 3) == 1);
     /* Relaxation rejects invalid dimensions before reading the grid. */
     int32_t one = 1;
+    /* A spill coefficient above full transmission is clamped to it: the
+     * relaxed value never exceeds a full-transmission neighbor's. */
+    int32_t pair[2] = {INT32_MAX, 0};
+    TEST_CHECK(celestial_model_relax(pair, 2, 1, oversized_spill, NULL));
+    TEST_CHECK(pair[0] == INT32_MAX && pair[1] > 0 && pair[1] < INT32_MAX);
     TEST_CHECK(!celestial_model_relax(&one, -1, 1, NULL, NULL));
     TEST_CHECK(!celestial_model_relax(&one, 1, 0, NULL, NULL));
 }

@@ -206,7 +206,8 @@ int32_t celestial_model_ray_value(const uint16_t *coefficients,
                                   int32_t source,
                                   int32_t *aperture);
 
-/** Coefficient of spilling light from (x + dx, y + dy) into (x, y). */
+/** Coefficient of spilling light from (x + dx, y + dy) into (x, y), in
+ * 0..CELESTIAL_MODEL_SCALE (256); a larger value is clamped to 256. */
 typedef uint16_t (*celestial_model_spill_fn)(int x, int y, int dx, int dy, void *context);
 
 /**

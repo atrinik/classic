@@ -386,6 +386,9 @@ static void test_compose_by_sign_over_the_coarse_floor(void) {
     TEST_CHECK(client_lighting_compose(2 * step + 50, 2) == 2 * step + 50);
     /* Grouped visible light keeps its value above the coarse bin. */
     TEST_CHECK(client_lighting_compose(1000, 2) == 1000);
+    /* Every int32_t emitter value is accepted, the extremes included. */
+    TEST_CHECK(client_lighting_compose(INT32_MIN, 2) == INT32_MIN);
+    TEST_CHECK(client_lighting_compose(INT32_MAX, -2) == INT32_MAX);
     TEST_CHECK(client_lighting_compose(0, -1) == -step);
     TEST_CHECK(client_lighting_compose(-step - 20, -1) == -step - 20);
     TEST_CHECK(client_lighting_compose(-1000, -1) == -1000);

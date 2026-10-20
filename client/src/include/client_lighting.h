@@ -106,7 +106,8 @@ void client_lighting_evaluate(int width,
  */
 uint16_t client_lighting_flicker_gain(uint64_t time_ms);
 
-/** Combine the client's emitter scalar with the server's signed coarse level. */
+/** Combine the client's emitter scalar with the server's signed coarse level.
+ * Any int32_t emitter value is accepted: comparisons are made in 64 bits. */
 int32_t client_lighting_compose(int32_t emitter_raw, int8_t level);
 
 #endif

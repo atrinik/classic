@@ -298,7 +298,9 @@ static void client_lighting_accumulate(const client_lighting_grid_t *grid,
             i = end;
             continue;
         }
-        int radius = 0, positive_radius = 0;
+        /* Summed in 64 bits, so no count of co-located emitters overflows;
+         * the profile clamps the sum anyway. */
+        int64_t radius = 0, positive_radius = 0;
         int64_t linear[LIGHT_PROFILE_COUNT][3] = {{0}};
         int64_t multiplicity[LIGHT_PROFILE_COUNT] = {0};
         bool any = false;
@@ -323,11 +325,11 @@ static void client_lighting_accumulate(const client_lighting_grid_t *grid,
         if (!any) {
             continue;
         }
-        int scalar_mask = light_profile_mask(radius);
+        int scalar_mask = light_profile_mask((int)MAX(INT_MIN, MIN(INT_MAX, radius)));
         client_lighting_add(grid, accumulators, x, y, z, abs(scalar_mask),
                             scalar_mask < 0 ? -1 : 1, 0, NULL);
-        client_lighting_add(grid, accumulators, x, y, z, light_profile_mask(positive_radius), 1,
-                            1, NULL);
+        client_lighting_add(grid, accumulators, x, y, z,
+                            light_profile_mask((int)MIN(INT_MAX, positive_radius)), 1, 1, NULL);
         for (int profile = 1; profile < LIGHT_PROFILE_COUNT; profile++) {
             if (multiplicity[profile] != 0) {
                 client_lighting_add(grid, accumulators, x, y, z, profile,
@@ -454,17 +456,19 @@ uint16_t client_lighting_flicker_gain(uint64_t time_ms) {
 
 int32_t client_lighting_compose(int32_t emitter_raw, int8_t level) {
     int32_t step = MAP2_LOCAL_LIGHT_LEVEL_RAW;
-    int32_t local = emitter_raw;
+    /* Compared in 64 bits, so no emitter value overflows when negated. */
+    int64_t local = emitter_raw;
+    int64_t floor = (int64_t)level * step;
     /* The coarse level is a floor (a ceiling for darkness) under the emitter
      * field, never a cap: it bins the strongest single source while the field
      * groups a tile's sent emitters, which may exceed that bin. */
     /* An emitter field of the opposite sign that is at least as strong as the
      * floor is exact sent light and wins: the coarse sign comes from single
      * sources, so grouped sent emitters can outweigh it. */
-    if (level > 0 && local < level * step && -local < level * step) {
-        local = level * step;
-    } else if (level < 0 && local > level * step && local < -level * step) {
-        local = level * step;
+    if (level > 0 && local < floor && -local < floor) {
+        local = floor;
+    } else if (level < 0 && local > floor && local < -floor) {
+        local = floor;
     }
-    return local;
+    return (int32_t)local;
 }

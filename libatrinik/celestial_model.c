@@ -284,22 +284,27 @@ void celestial_model_relax_row(const int32_t *values,
                                int y,
                                celestial_model_spill_fn spill,
                                void *context) {
+    /* Indices in size_t: an accepted grid's cell count may exceed INT_MAX. */
+    size_t stride = (size_t)width;
     for (int x = 0; x < width; x++) {
-        int32_t best = values[x + width * y];
+        int32_t best = values[(size_t)x + stride * (size_t)y];
         for (int dy = -1; dy <= 1; dy++) {
             for (int dx = -1; dx <= 1; dx++) {
                 if ((dx == 0 && dy == 0) || x + dx < 0 || y + dy < 0 || x + dx >= width ||
                     y + dy >= height) {
                     continue;
                 }
+                /* A coefficient above full transmission is clamped to it; the
+                 * callback runs once. */
                 uint16_t coefficient = spill(x, y, dx, dy, context);
-                int32_t candidate =
-                    celestial_model_transmit(values[x + dx + width * (y + dy)], coefficient);
+                coefficient = MIN(coefficient, CELESTIAL_MODEL_SCALE);
+                int32_t candidate = celestial_model_transmit(
+                    values[(size_t)(x + dx) + stride * (size_t)(y + dy)], coefficient);
                 candidate = celestial_model_transmit(candidate, dx != 0 && dy != 0 ? 181 : 192);
                 best = MAX(best, candidate);
             }
         }
-        next[x + width * y] = best;
+        next[(size_t)x + stride * (size_t)y] = best;
     }
 }
 
