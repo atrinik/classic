@@ -459,6 +459,22 @@ static void test_publishable_matches_publish(void) {
     TEST_CHECK(!stage_closure(4, NULL, 0));
     TEST_CHECK(stage_closure(5, NULL, 0) && client_celestial_publish(NULL, NULL));
     TEST_CHECK(!client_celestial_take_reconnect());
+    /* A newer half while a complete pair waits for its MAP2 update is out of
+     * order: the waiting pair is discarded and the connection resets. */
+    packet = encode(6, &slot, 1);
+    TEST_CHECK(client_celestial_apply(packet->data, packet->len));
+    packet_free(packet);
+    TEST_CHECK(stage_closure(6, NULL, 0));
+    packet = encode(7, &slot, 1);
+    TEST_CHECK(!client_celestial_apply(packet->data, packet->len));
+    packet_free(packet);
+    TEST_CHECK(!client_celestial_staged() && client_celestial_take_reconnect());
+    packet = encode(8, &slot, 1);
+    TEST_CHECK(client_celestial_apply(packet->data, packet->len));
+    packet_free(packet);
+    TEST_CHECK(stage_closure(8, NULL, 0));
+    TEST_CHECK(!stage_closure(9, NULL, 0));
+    TEST_CHECK(!client_celestial_staged() && client_celestial_take_reconnect());
 }
 
 static void test_generation_zero_is_malformed(void) {

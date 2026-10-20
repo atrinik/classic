@@ -79,8 +79,9 @@ static inline uint64_t client_lighting_occluder(uint16_t bits, uint16_t horizont
  * Evaluate the local light of one level of a stack of levels, each a
  * width-by-height grid, as the server's 3D transport does: every emitter of
  * every level reaches the target level within its profile, through the
- * occluders of the cells between. Every emitter is evaluated; none is
- * dropped for capacity.
+ * occluders of the cells between. Within CLIENT_LIGHTING_EMITTERS_MAX
+ * every emitter in the stack is evaluated and none is dropped; a larger set
+ * is not evaluated at all (see count).
  * @param occluders client_lighting_occluder() words, level by level, each in
  * row-major order (levels * width * height), or NULL for open geometry.
  * Level z + 1 lies above z.

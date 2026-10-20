@@ -116,6 +116,16 @@ void client_celestial_reset(void) {
     client_celestial.revision = revision + 1;
 }
 
+/** A complete, consistent pair staged for the next MAP2 update: the server
+ * sends every pair immediately before its update, so a newer half before
+ * that update means an out-of-order sequence. */
+static bool client_celestial_pair_waiting(uint32_t generation) {
+    return client_celestial.staged_slots_valid && client_celestial.staged_closure_valid &&
+           client_celestial.staged_slots.generation ==
+               client_celestial.staged_closure.generation &&
+           generation > client_celestial.staged_slots.generation;
+}
+
 bool client_celestial_apply(const uint8_t *data, size_t len) {
     static celestial_protocol_slot_t slots[CELESTIAL_PROTOCOL_SLOTS_MAX];
     uint32_t generation;
@@ -133,6 +143,11 @@ bool client_celestial_apply(const uint8_t *data, size_t len) {
     /* Generations never regress, against the published pair or a payload
      * already staged: one generation is one atomic publication, so a
      * duplicate never replaces the payload staged first. */
+    if (client_celestial_pair_waiting(generation)) {
+        /* Out of order: the staged pair's update never came first. */
+        client_celestial_reject_staged();
+        return false;
+    }
     /* Stale also against the other staged half: a generation below it can
      * never pair with it (an equal one is its pair). */
     if (generation <= client_celestial.slots.generation ||
@@ -176,6 +191,12 @@ bool client_celestial_apply_structure(const uint8_t *data, size_t len, int windo
         celestial_closure_free(&closure);
         client_celestial.reconnect = true;
         client_celestial_discard_staged();
+        return false;
+    }
+    if (client_celestial_pair_waiting(closure.generation)) {
+        /* Out of order: the staged pair's update never came first. */
+        celestial_closure_free(&closure);
+        client_celestial_reject_staged();
         return false;
     }
     if (closure.generation <= client_celestial.slots.generation ||

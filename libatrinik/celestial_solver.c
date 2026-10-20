@@ -634,13 +634,17 @@ celestial_solver_job_t *celestial_solver_job_create(const celestial_solver_latti
     job->width = map_width + 2 * CELESTIAL_MODEL_SPILL_PASSES;
     job->height = map_height + 2 * CELESTIAL_MODEL_SPILL_PASSES;
     size_t cells = (size_t)job->width * job->height;
-    job->direct = calloc(cells, sizeof(*job->direct));
-    job->diffuse = calloc(cells, sizeof(*job->diffuse));
-    job->aperture_direct = calloc(cells, sizeof(*job->aperture_direct));
-    job->moon = calloc(cells, sizeof(*job->moon));
-    job->moon_aperture = calloc(cells, sizeof(*job->moon_aperture));
-    job->starlight = calloc(cells, sizeof(*job->starlight));
-    job->relax_next = calloc(cells, sizeof(*job->relax_next));
+    /* Not zeroed, so creating a job initializes nothing in bulk: the sky,
+     * sun and moon rows overwrite every cell of their grids, a relaxation
+     * pass writes its other grid row by row before reading it, and without
+     * a moon its grids are cleared a row per sky step instead. */
+    job->direct = malloc(cells * sizeof(*job->direct));
+    job->diffuse = malloc(cells * sizeof(*job->diffuse));
+    job->aperture_direct = malloc(cells * sizeof(*job->aperture_direct));
+    job->moon = malloc(cells * sizeof(*job->moon));
+    job->moon_aperture = malloc(cells * sizeof(*job->moon_aperture));
+    job->starlight = malloc(cells * sizeof(*job->starlight));
+    job->relax_next = malloc(cells * sizeof(*job->relax_next));
     job->spill = (spill_table){.lattice = &job->lattice, .map = map, .width = job->width,
                                .height = job->height, .map_width = map_width,
                                .map_height = map_height};
@@ -671,6 +675,12 @@ celestial_solver_status_t celestial_solver_job_step(celestial_solver_job_t *job)
             job->starlight[index] = celestial_solver_ray_value(&ray, model->starlight, NULL);
             job->lit[0] |= job->diffuse[index] != 0;
             job->lit[2] |= job->starlight[index] != 0;
+        }
+        if (model->moon == 0) {
+            /* The moon stage is skipped, but publish reads its grids. */
+            memset(&job->moon[(size_t)width * job->row], 0, (size_t)width * sizeof(*job->moon));
+            memset(&job->moon_aperture[(size_t)width * job->row], 0,
+                   (size_t)width * sizeof(*job->moon_aperture));
         }
         break;
     case STAGE_SUN:
