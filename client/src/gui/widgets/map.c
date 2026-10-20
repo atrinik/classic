@@ -6650,8 +6650,8 @@ map_lighting_diagnostic_emit_tile(int depth, int x, int y, int sub_layer, bool s
     draw_info_format(COLOR_WHITE,
                      "lightdiag v%u x=%d y=%d depth=%d sub=%u "
                      "state=visible:%u remembered:%u fogged:%u stale:%u missing:%u cleared:%u "
-                     "source=server-map2-aggregate received:%u scalar:%d rgb:%d,%d,%d "
-                     "rgb-explicit:%u unit=Q5.11(sample/2048) "
+                     "source=server-map2-signed-base received:%u scalar:%d rgb:%d,%d,%d "
+                     "rgb-explicit:%u unit=signed-Q4.11(sample/2048) "
                      "keyframe:valid:%u generation:%" PRIu64 " start:%" PRIu64 " end:%" PRIu64
                      " next:%u scalar:%d rgb:%d,%d,%d rgb-explicit:%u "
                      "working:available:%u scalar:%u rgb:%u,%u,%u interpolated:%u borrowed:%u "

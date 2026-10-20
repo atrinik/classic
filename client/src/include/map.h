@@ -236,7 +236,9 @@ typedef struct map_cell_snapshot {
 } map_cell_snapshot_t;
 
 /** Version of the copyable, opt-in lighting diagnostic record. */
-#define MAP_LIGHTING_DIAGNOSTIC_VERSION UINT8_C(1)
+/* v2: the received sample is protocol 1085's signed Q4.11 base, before the
+ * client composes local and celestial light. */
+#define MAP_LIGHTING_DIAGNOSTIC_VERSION UINT8_C(2)
 
 /** Reasons a diagnostic light sample is zero, unavailable, or transformed. */
 typedef enum map_lighting_diagnostic_reason {

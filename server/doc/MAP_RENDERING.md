@@ -2233,17 +2233,18 @@ Activation is through the client console:
 Coordinates are the logical MAP2 wire-window coordinates, not absolute map
 coordinates or a map path. The no-argument form reports the player-centered
 wire tile. The optional grid is centered on that tile and bounded to radius
-`0..4`. Every report starts with `lightdiag v1` and is one copyable key/value
-line. `lightgrid v1` is a bounded status grid; its cells never contain raw
-fogged values.
+`0..4`. Every report starts with `lightdiag v2` and is one copyable key/value
+line. `lightgrid v2` is a bounded status grid; its cells never contain raw
+fogged values. Version 2 (protocol 1085) reports the received signed base;
+version 1 reported the pre-1085 unsigned aggregate.
 
 The single-tile record has these stages and fields:
 
 | Field | Meaning |
 | --- | --- |
 | `state` | `visible`, `remembered`, `fogged`, `stale`, `missing`, and `cleared` flags for the requested tile/depth. |
-| `source` / `received` | The current viewer-authorized server MAP2 aggregate and whether its scalar endpoint is present. No source position, emitter, component, or hidden object is included. |
-| `unit` / `scalar` / `rgb` | Unsigned wire words in Q5.11; a sample word represents `sample / 2048`. RGB values are the received aggregate channels, not an inferred source color. |
+| `source` / `received` | `server-map2-signed-base`: the current viewer-authorized MAP2 base radiance, before the client composes local and celestial light, and whether its scalar is present. No source position, emitter, component, or hidden object is included. |
+| `unit` / `scalar` / `rgb` | Signed wire words in Q4.11 (`signed-Q4.11`); a sample represents `sample / 2048` and may be negative. RGB values are the received base channels (achromatic in 1085), not an inferred source color. |
 | `keyframe` / `next` | The retired MAP2 timed endpoint, generation, interval, and next scalar/RGB words; protocol 1085 rejects that wire form, so these stay absent. |
 | `working` | The client value after temporal interpolation and the existing bounded nearest-known-ring fallback. On a visible primary-depth tile it also includes the presentation-only local-player field. `interpolated` and `borrowed` identify those transformations. |
 | `presentation` | Smooth mode reports tone-mapped sRGB illumination RGB and neutral brightness; discrete mode reports the existing scalar level lookup and neutral RGB. This is illumination presentation, not a texture/albedo pixel. |
