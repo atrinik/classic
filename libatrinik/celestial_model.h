@@ -116,7 +116,9 @@ typedef struct celestial_lunar_sample {
     uint16_t starlight_radiance[3];
 } celestial_lunar_sample;
 
-/** Human-readable name of a lunar phase. */
+/** Human-readable name of a lunar phase: a pointer to immutable static
+ * storage, valid for the program's lifetime and never freed by the caller;
+ * "unknown" for a value outside the enumeration. */
 const char *celestial_lunar_phase_name(celestial_lunar_phase phase);
 
 /**
@@ -169,7 +171,8 @@ typedef struct celestial_model {
 /**
  * Whether model inputs are within the ranges a server produces: phases inside
  * their periods, a valid lunar period, bounded strengths and normalized
- * colors. Decoders reject inputs that fail this.
+ * colors. Decoders reject inputs that fail this. A NULL inputs is reported
+ * as invalid (false), so the check is safe at an API boundary.
  */
 bool celestial_model_inputs_valid(const celestial_model_inputs_t *inputs);
 

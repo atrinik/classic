@@ -80,6 +80,11 @@ bool celestial_solver_segment_init(const celestial_solver_lattice_t *lattice,
                                    int dx, int dy, int dz) {
     if (dx < -4096 || dx > 4096 || dy < -4096 || dy > 4096 ||
         dz <= -CELESTIAL_SOLVER_LEVELS || dz >= CELESTIAL_SOLVER_LEVELS) {
+        /* Failed like any rejected cursor, not left as it was. */
+        if (cursor != NULL) {
+            memset(cursor, 0, sizeof(*cursor));
+            cursor->failed = true;
+        }
         return false;
     }
     bool stationary = dx == 0 && dy == 0 && dz == 0;
@@ -409,6 +414,12 @@ void celestial_solver_halo_ray(const celestial_solver_lattice_t *lattice,
 
 static uint16_t spill_coefficient(const celestial_solver_lattice_t *lattice, void *map,
                                   int width, int height, int x, int y, int dx, int dy) {
+    /* A neighbor is one step away; bounded coordinates keep x + dx in int. */
+    if (dx < -1 || dx > 1 || dy < -1 || dy > 1 || (dx == 0 && dy == 0) ||
+        x < -CELESTIAL_SOLVER_COORDINATE_MAX || x > CELESTIAL_SOLVER_COORDINATE_MAX ||
+        y < -CELESTIAL_SOLVER_COORDINATE_MAX || y > CELESTIAL_SOLVER_COORDINATE_MAX) {
+        return 0;
+    }
     celestial_solver_cell_t cell;
     if (!halo_cell(lattice, map, width, height, x + dx, y + dy, &cell)) {
         return 0;

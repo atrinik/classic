@@ -399,6 +399,20 @@ static int test_unresolved_cells_end_rays(void) {
     permissive_saw_unresolved = false;
     require(celestial_solver_solve(&lattice, &counts.map, &model, values, rgb));
     require(!permissive_saw_unresolved);
+    /* Spill offsets are one neighbor away and coordinates bounded: anything
+     * else gives 0 before any arithmetic. */
+    require(celestial_solver_spill(&lattice, &counts.map, 1, 1, INT_MAX, 0) == 0);
+    require(celestial_solver_spill(&lattice, &counts.map, INT_MAX, 1, 1, 0) == 0);
+    require(celestial_solver_spill(&lattice, &counts.map, 1, 1, 0, 0) == 0);
+    /* A rejected segment leaves its cursor failed, like any other. */
+    celestial_solver_cursor_t cursor;
+    memset(&cursor, 0x5a, sizeof(cursor));
+    celestial_solver_event_t event;
+    require(!celestial_solver_segment_init(&lattice, &cursor, &counts.map, 1, 1, 5000, 0, 0));
+    require(celestial_solver_next(&lattice, &cursor, &event) == -1);
+    require(!celestial_solver_segment_init(&lattice, &cursor, &counts.map, 1, 1, 0, 0,
+                                           CELESTIAL_SOLVER_LEVELS));
+    require(celestial_solver_next(&lattice, &cursor, &event) == -1);
     return 0;
 }
 

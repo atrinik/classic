@@ -155,9 +155,26 @@ typedef struct celestial_solver_ray {
     bool done, sky;
 } celestial_solver_ray_t;
 
+/**
+ * Start a cursor from (x, y) of origin along the direction (dx, dy, dz).
+ * @return False, leaving the cursor failed (celestial_solver_next() then
+ * returns -1), for a NULL cursor, max_events outside
+ * 1..CELESTIAL_SOLVER_MAX_EVENTS, a direction component outside
+ * -65536..65536, a zero direction, a coordinate outside
+ * ±CELESTIAL_SOLVER_COORDINATE_MAX, or an origin cell that does not resolve.
+ */
 bool celestial_solver_direction_init(const celestial_solver_lattice_t *lattice,
                                      celestial_solver_cursor_t *cursor, void *origin, int x,
                                      int y, int dx, int dy, int dz, unsigned max_events);
+/**
+ * Start a cursor that ends after the displacement (dx, dy, dz), which may be
+ * zero.
+ * @return False, leaving the cursor failed as
+ * celestial_solver_direction_init() does, for a horizontal displacement
+ * outside -4096..4096, a vertical one outside
+ * -(CELESTIAL_SOLVER_LEVELS - 1)..CELESTIAL_SOLVER_LEVELS - 1, or anything
+ * that function rejects.
+ */
 bool celestial_solver_segment_init(const celestial_solver_lattice_t *lattice,
                                    celestial_solver_cursor_t *cursor, void *origin, int x, int y,
                                    int dx, int dy, int dz);
@@ -183,10 +200,13 @@ void celestial_solver_halo_ray(const celestial_solver_lattice_t *lattice,
 /** Take one bounded crossing. */
 void celestial_solver_ray_step(const celestial_solver_lattice_t *lattice,
                                celestial_solver_ray_t *ray);
+/** The traced ray's value, as celestial_model_ray_value(); aperture is
+ * optional and may be NULL. */
 int32_t celestial_solver_ray_value(const celestial_solver_ray_t *ray, int32_t source,
                                    int32_t *aperture);
 /** Coefficient of diffuse spill into scratch cell (x, y) from its neighbor
- * (x + dx, y + dy). */
+ * (x + dx, y + dy): dx and dy are each -1..1, not both 0, and x, y within
+ * ±CELESTIAL_SOLVER_COORDINATE_MAX; anything else gives 0. */
 uint16_t celestial_solver_spill(const celestial_solver_lattice_t *lattice, void *map, int x,
                                 int y, int dx, int dy);
 /** Scratch grid size of a map, or 0 when its dimensions are invalid. */
