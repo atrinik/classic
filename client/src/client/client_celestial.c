@@ -51,6 +51,10 @@ static struct {
     /** Next row of a fragment solved for both hours to report: one row per
      * step, so reporting stays within the budget too. */
     int report_row;
+    /** A profile-less hour being cleared to zero, one row per step, and the
+     * next row to clear. */
+    bool zeroing;
+    int zero_row;
     /** A structure payload could not be decoded for lack of memory. */
     bool reconnect;
 } client_celestial;
@@ -63,6 +67,8 @@ static void client_celestial_job_free(void) {
     client_celestial.job = NULL;
     client_celestial.job_values = NULL;
     client_celestial.job_rgb = NULL;
+    client_celestial.zeroing = false;
+    client_celestial.zero_row = 0;
 }
 
 /** Drop a fragment's partial solve: its held current hour and the hour being
@@ -319,9 +325,10 @@ static bool client_celestial_solve_step(size_t i, bool *done) {
             return false;
         }
         if (!client_celestial_assigned(&client_celestial.slots, fragment->slot)) {
-            /* No profile: celestial light fails closed, as on the server. */
-            memset(client_celestial.job_values, 0, cells * sizeof(*client_celestial.job_values));
-            memset(client_celestial.job_rgb, 0, cells * sizeof(*client_celestial.job_rgb));
+            /* No profile: celestial light fails closed, as on the server,
+             * cleared a row per step like any other hour. */
+            client_celestial.zeroing = true;
+            client_celestial.zero_row = 0;
         } else {
             const celestial_model_t *model = next
                                                  ? &client_celestial.slots.next[fragment->slot]
@@ -335,6 +342,17 @@ static bool client_celestial_solve_step(size_t i, bool *done) {
             }
             return true;
         }
+    }
+    if (client_celestial.zeroing) {
+        size_t row = (size_t)client_celestial.zero_row * fragment->width;
+        memset(&client_celestial.job_values[row], 0,
+               fragment->width * sizeof(*client_celestial.job_values));
+        memset(&client_celestial.job_rgb[row], 0,
+               fragment->width * sizeof(*client_celestial.job_rgb));
+        if (++client_celestial.zero_row < fragment->height) {
+            return true;
+        }
+        client_celestial.zeroing = false;
     }
     if (client_celestial.job != NULL) {
         celestial_solver_status_t status = celestial_closure_solve_step(client_celestial.job);

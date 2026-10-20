@@ -444,6 +444,26 @@ static void test_invalid_grid_writes_nothing(void) {
     for (size_t i = 0; i < 4; i++) {
         TEST_CHECK(lit[i].scalar == 0);
     }
+    /* The work cap: up to CLIENT_LIGHTING_EMITTERS_MAX emitters compose,
+     * one more composes no emitter field at all (coarse levels apply). */
+    client_lighting_emitter_t *many =
+        calloc(CLIENT_LIGHTING_EMITTERS_MAX + 1, sizeof(*many));
+    TEST_CHECK(many != NULL);
+    for (size_t i = 0; many != NULL && i <= CLIENT_LIGHTING_EMITTERS_MAX; i++) {
+        many[i] = (client_lighting_emitter_t){.x = 0, .y = 0, .z = 0, .radius = 1,
+                                               .color = 0xffffff};
+    }
+    if (many != NULL) {
+        client_lighting_evaluate_stack(1, 0, 2, 2, NULL, many, CLIENT_LIGHTING_EMITTERS_MAX,
+                                       lit);
+        TEST_CHECK(lit[0].scalar > 0);
+        client_lighting_evaluate_stack(1, 0, 2, 2, NULL, many, CLIENT_LIGHTING_EMITTERS_MAX + 1,
+                                       lit);
+        for (size_t i = 0; i < 4; i++) {
+            TEST_CHECK(lit[i].scalar == 0 && lit[i].rgb[0] == 0);
+        }
+    }
+    free(many);
 }
 
 static void test_light_crosses_levels_like_the_server(void) {

@@ -344,6 +344,43 @@ static void client_lighting_accumulate(const client_lighting_grid_t *grid,
  * capped positive part takes the accumulated hue and the rest is neutral.
  * Channels stay signed; the caller clamps them only after composition.
  */
+/** round(numerator * multiplier / denominator), rounding half up, without
+ * overflowing; numerator must not exceed denominator (the server's
+ * light_muldiv_round(), so both resolve hue identically). */
+static uint64_t client_lighting_muldiv_round(uint64_t numerator, uint64_t multiplier,
+                                             uint64_t denominator) {
+    HARD_ASSERT(denominator != 0 && numerator <= denominator);
+    uint64_t quotient = 0, remainder = 0;
+    uint64_t term_quotient = numerator / denominator;
+    uint64_t term_remainder = numerator % denominator;
+    while (multiplier != 0) {
+        if (multiplier & 1) {
+            quotient += term_quotient;
+            if (term_remainder != 0 && remainder >= denominator - term_remainder) {
+                remainder -= denominator - term_remainder;
+                quotient++;
+            } else {
+                remainder += term_remainder;
+            }
+        }
+        multiplier >>= 1;
+        if (multiplier == 0) {
+            break;
+        }
+        term_quotient *= 2;
+        if (term_remainder != 0 && term_remainder >= denominator - term_remainder) {
+            term_remainder -= denominator - term_remainder;
+            term_quotient++;
+        } else {
+            term_remainder *= 2;
+        }
+    }
+    if (remainder >= denominator / 2 + denominator % 2) {
+        quotient++;
+    }
+    return quotient;
+}
+
 static void client_lighting_resolve(const client_lighting_accumulator_t *a,
                                     int32_t *scalar,
                                     int32_t rgb[3]) {
@@ -356,7 +393,11 @@ static void client_lighting_resolve(const client_lighting_accumulator_t *a,
     for (size_t channel = 0; channel < 3; channel++) {
         int64_t colored = 0;
         if (effective > 0) {
-            colored = (a->color[channel] * effective + a->weight / 2) / a->weight;
+            /* A channel's color sum never exceeds the weight it is
+             * normalized by, so the product is formed without overflow. */
+            colored = (int64_t)client_lighting_muldiv_round(
+                (uint64_t)MIN(MAX(a->color[channel], 0), a->weight), (uint64_t)effective,
+                (uint64_t)a->weight);
         }
         rgb[channel] = (int32_t)(a->scalar - effective + colored);
     }
@@ -370,8 +411,6 @@ void client_lighting_evaluate_stack(int levels,
                                     const client_lighting_emitter_t *emitters,
                                     size_t count,
                                     client_lighting_cell_t *cells) {
-    /* The bound keeps every grouped sum and weight within 64 bits. */
-    HARD_ASSERT(count <= CLIENT_LIGHTING_EMITTERS_MAX);
     /* A grid without cells, or one whose byte size cannot be represented,
      * has no output to clear. */
     if (width <= 0 || height <= 0 ||
@@ -380,7 +419,10 @@ void client_lighting_evaluate_stack(int levels,
     }
     size_t total = (size_t)width * height;
     memset(cells, 0, total * sizeof(*cells));
-    if (count == 0 || target < 0 || target >= levels) {
+    /* Work is bounded per evaluation: a stack sending more emitters than any
+     * real scene composes no emitter field and falls back to its coarse
+     * levels, so a hostile publication cannot stall the render thread. */
+    if (count == 0 || count > CLIENT_LIGHTING_EMITTERS_MAX || target < 0 || target >= levels) {
         return;
     }
     client_lighting_grid_t grid = {.levels = levels, .target = target, .width = width,

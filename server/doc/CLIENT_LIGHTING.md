@@ -180,7 +180,10 @@ ride on the layer record of the object they describe, within the unchanged
 complete-MAP2 and continuation limits. The client stores emitters in one packed
 per-cell array of 6-byte entries (layer, radius, flags, RGB), allocated only
 for emitting cells and bounded by the cell's sent layer records, so it scales
-with object storage rather than the lighting budget. The per-socket cache adds
+with object storage rather than the lighting budget. One emitter-field
+evaluation composes at most 2,048 emitters (`CLIENT_LIGHTING_EMITTERS_MAX`),
+far above any real scene: a stack sending more composes no emitter field and
+presents its coarse levels, so no publication can stall the render thread. The per-socket cache adds
 45 bytes per cell as stored: the 24 bytes of emitter state (see Server), the
 occluder word (8 bytes, 5 of them meaningful), the 7 per-sub-layer coarse
 levels with their count byte and the known-state byte, which the delta

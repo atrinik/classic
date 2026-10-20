@@ -5958,7 +5958,11 @@ static void map_client_lighting_rebuild(map_client_lighting_field_t *field) {
                 if (!live || cell->fow || cell->emitters == NULL) {
                     continue;
                 }
-                for (size_t i = 0; i < cell->emitters->count; i++) {
+                /* Past the evaluator's work cap the stack composes no emitter
+                 * field anyway, so gathering stops one emitter beyond it. */
+                for (size_t i = 0;
+                     i < cell->emitters->count && emitter_count <= CLIENT_LIGHTING_EMITTERS_MAX;
+                     i++) {
                     const map_cell_emitter_t *record = &cell->emitters->entries[i];
                     if (emitter_count == emitter_capacity) {
                         emitter_capacity = emitter_capacity == 0 ? 64 : emitter_capacity * 2;

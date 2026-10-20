@@ -69,10 +69,11 @@ static inline uint64_t client_lighting_occluder(uint16_t bits, uint16_t horizont
            (uint64_t)(vertical & MAP2_OCCLUDER_VERTICAL_MASK) << 32;
 }
 
-/** Most emitters one evaluation accepts: far above any MAP2 window's sent
- * layers (cells × layers × depths), small enough that grouped radii and
- * color weights stay within 64 bits. */
-#define CLIENT_LIGHTING_EMITTERS_MAX ((size_t)1 << 24)
+/** Most emitters one evaluation composes: well above any real scene, it
+ * bounds the work of one synchronous rebuild (and keeps every grouped sum
+ * within 64 bits). A stack sending more composes no emitter field and falls
+ * back to its coarse levels. */
+#define CLIENT_LIGHTING_EMITTERS_MAX ((size_t)2048)
 
 /**
  * Evaluate the local light of one level of a stack of levels, each a
@@ -86,8 +87,8 @@ static inline uint64_t client_lighting_occluder(uint16_t bits, uint16_t horizont
  * @param emitters Emitters with their level in z: count elements, mandatory
  * when count is positive (an unchecked precondition). An emitter outside
  * the stack (z outside 0..levels-1, or x, y outside the grid) is ignored.
- * @param count At most CLIENT_LIGHTING_EMITTERS_MAX (a HARD_ASSERT
- * precondition), which keeps every grouped sum within 64 bits.
+ * @param count Emitters given; above CLIENT_LIGHTING_EMITTERS_MAX none are
+ * evaluated and every cell is left zero (the coarse levels then apply).
  * @param cells Output of width * height cells of the target level,
  * mandatory for a positive grid (an unchecked precondition).
  */
