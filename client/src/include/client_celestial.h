@@ -64,7 +64,10 @@ typedef void (*client_celestial_cell_fn)(void *context, int depth, int x, int y,
  * closure names a slot its CELESTIAL omits, flags a reconnect
  * (client_celestial_take_reconnect()).
  * Every cell of the new closure is then solved by client_celestial_process()
- * and reported through cell; a newer publication supersedes the rest.
+ * and reported through cell; a newer publication supersedes the rest. A
+ * NULL cell tracks the publication only: nothing is solved or reported,
+ * and the closure counts as solved (pairing tests use it); the map always
+ * passes its store.
  * @return Whether a pair was published.
  */
 bool client_celestial_publish(client_celestial_cell_fn cell, void *context);

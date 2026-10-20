@@ -470,7 +470,10 @@ static void spill_table_allocate(spill_table *table) {
         table->unavailable = true;
         return;
     }
-    uint16_t *coefficients = calloc(bytes, 1);
+    /* Not zeroed: every entry relax_spill() reads (an in-bounds neighbor)
+     * is written by spill_table_fill_row() first, a row per step, so no
+     * step initializes the whole table. */
+    uint16_t *coefficients = malloc(bytes);
     if (coefficients == NULL) {
         if (charged) {
             ops->release(table->lattice->context, bytes);
