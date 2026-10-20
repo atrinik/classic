@@ -1507,6 +1507,11 @@ void remove_light_source_list(mapstruct *map) {
  * two-cell remainder at the edge joins its neighbor, so no block is narrower
  * than three cells unless the map is.
  */
+/* The block of a coordinate: aligned groups of three, with the remainder
+ * (one or two cells) merged into the last full group. The end looks six
+ * cells ahead, so the last full group's own cells already end at size: every
+ * coordinate sharing a cache entry gets the identical rectangle, whichever
+ * is queried first (light test: _edge_block_is_query_order_independent). */
 static void light_local_block(int coordinate, int size, int *start, int *end) {
     *start = coordinate - coordinate % 3;
     if (*start + 3 > size) {

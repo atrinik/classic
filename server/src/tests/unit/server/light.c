@@ -1735,6 +1735,28 @@ START_TEST(test_client_lighting_local_cache_survives_unrelated_frees) {
 }
 END_TEST
 
+START_TEST(test_client_lighting_local_edge_block_is_query_order_independent) {
+    /* On a 7-wide map the last full group [3,6) absorbs the remainder [6,7):
+     * a source in the remainder lights the shared edge block the same
+     * whichever of its coordinates is queried first. */
+    for (int first = 0; first < 2; first++) {
+        mapstruct *map = get_empty_map(7, 7);
+        add_colored_light(map, 6, 3, 13, LIGHT_COLOR_WHITE);
+        int a, b;
+        if (first == 0) {
+            a = light_local_level(map, 3, 3);
+            b = light_local_level(map, 6, 3);
+        } else {
+            b = light_local_level(map, 6, 3);
+            a = light_local_level(map, 3, 3);
+        }
+        ck_assert_int_gt(a, 0);
+        ck_assert_int_eq(a, b);
+        free_map(map, 1);
+    }
+}
+END_TEST
+
 START_TEST(test_client_lighting_local_failed_walk_retries_after_topology_shrinks) {
     /* A walk past the region bound fails closed and records no dependency
      * set; once the topology shrinks below the bound it walks again rather
@@ -2174,6 +2196,7 @@ static Suite *suite(void) {
     tcase_add_test(tc_core, test_client_lighting_local_level_pools_levels_of_other_dimensions);
     tcase_add_test(tc_core, test_client_lighting_local_cache_retires_one_way_links_to_freed_maps);
     tcase_add_test(tc_core, test_client_lighting_local_failed_walk_retries_after_topology_shrinks);
+    tcase_add_test(tc_core, test_client_lighting_local_edge_block_is_query_order_independent);
     tcase_add_test(tc_core, test_client_lighting_local_cache_ignores_unreachable_sources);
     tcase_add_test(tc_core, test_client_lighting_local_cache_survives_unrelated_frees);
     tcase_add_test(tc_core, test_client_lighting_local_level_fails_closed_on_unbounded_cycles);

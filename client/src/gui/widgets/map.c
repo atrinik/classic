@@ -1537,6 +1537,10 @@ static struct {
     uint16_t level_mask;
     uint64_t lighting_revision[MAP2_LEVELS];
     uint64_t emitter_revision[MAP2_LEVELS];
+    /** Each emitter field's validity and build revision at the start, so an
+     * abort restores the fields the update's changes had revoked. */
+    bool field_valid[MAP2_LEVELS];
+    uint64_t field_revision[MAP2_LEVELS];
     map_cell_store_t *original_levels[MAP2_LEVELS];
     map_cell_store_t *full_snapshot_levels[MAP2_LEVELS];
     map_anim_t *animations;
@@ -1702,6 +1706,10 @@ void map_state_transaction_begin(bool full_snapshot) {
     memcpy(map_state_transaction.emitter_revision,
            level_emitter_revision,
            sizeof(level_emitter_revision));
+    for (size_t level = 0; level < MAP2_LEVELS; level++) {
+        map_state_transaction.field_valid[level] = map_client_lighting_fields[level].valid;
+        map_state_transaction.field_revision[level] = map_client_lighting_fields[level].revision;
+    }
     map_state_transaction.ambient_clear = false;
     map_state_transaction.ambient_scroll_x = 0;
     map_state_transaction.ambient_scroll_y = 0;
@@ -1825,6 +1833,18 @@ void map_state_transaction_abort(void) {
     memcpy(level_emitter_revision,
            map_state_transaction.emitter_revision,
            sizeof(level_emitter_revision));
+    /* A field the update's changes revoked, but which was not rebuilt
+     * meanwhile and was built on the store now restored, describes the
+     * restored cells again: it is valid, so the abort does not leave its
+     * depth on coarse light until the per-frame rebuild budget reaches it. */
+    for (size_t level = 0; level < MAP2_LEVELS; level++) {
+        map_client_lighting_field_t *field = &map_client_lighting_fields[level];
+        if (!field->valid && map_state_transaction.field_valid[level] &&
+            field->revision == map_state_transaction.field_revision[level] &&
+            field->store == level_cells[level]) {
+            field->valid = true;
+        }
+    }
     MapData = map_state_transaction.map_data;
     map_state_transaction_restore_region_fow();
     cells = level_cells[current_level_index];
@@ -7204,6 +7224,16 @@ bool widget_map_client_lighting_state_test(void) {
     map_client_lighting_fields[above].valid = true;
     map_set_layer_emitter(8, 8, layer, -2, 0, 0);
     success = success && !map_client_lighting_fields[above].valid;
+    /* An aborted MAP2 update restores the fields its changes revoked, as it
+     * restores their cells and revisions. */
+    map_client_lighting_fields[above].valid = true;
+    map_client_lighting_fields[above].store = level_cells[above];
+    map_state_transaction_begin(false);
+    map_set_layer_emitter(8, 8, layer, 2, 0, UINT32_C(0xffffff));
+    success = success && !map_client_lighting_fields[above].valid;
+    map_state_transaction_abort();
+    success = success && map_client_lighting_fields[above].valid;
+    map_set_layer_emitter(8, 8, layer, -2, 0, 0);
     /* So does adding one beside it on another layer: the tile's summed
      * profile, perhaps its sign, changes. */
     int other_layer = GET_MAP_LAYER(LAYER_WALL, 0);
