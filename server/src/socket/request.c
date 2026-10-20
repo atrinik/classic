@@ -1706,6 +1706,25 @@ static uint8_t map2_neighbors_in_view(object *pl, int depth, int ax, int ay) {
     return mask;
 }
 
+/** The north, east, south, west, upper and lower neighbors of a cell that
+ * lie inside the MAP2 window and its depth range, whose maps the view itself
+ * keeps resident whatever other players do. */
+static uint8_t map2_neighbors_in_window(object *pl, int depth, int ax, int ay) {
+    static const int8_t offsets[6][3] = {
+        {0, -1, 0}, {1, 0, 0}, {0, 1, 0}, {-1, 0, 0}, {0, 0, 1}, {0, 0, -1},
+    };
+    socket_struct *cs = CONTR(pl)->cs;
+    uint8_t mask = 0;
+    for (size_t i = 0; i < arraysize(offsets); i++) {
+        int nx = ax + offsets[i][0], ny = ay + offsets[i][1], nz = depth + offsets[i][2];
+        if (nx >= 0 && ny >= 0 && nx < cs->mapx && ny < cs->mapy && nz >= -MAP2_MAX_DEPTH &&
+            nz <= MAP2_MAX_DEPTH) {
+            mask |= (uint8_t)(1U << i);
+        }
+    }
+    return mask;
+}
+
 /**
  * Send the coarse level of a remembered fog cell without disclosing any
  * object layer. The client retains it in fog and composes it there.
@@ -3133,7 +3152,7 @@ void draw_client_map2(object *pl) {
                 if (cell_celestial.sent) {
                     mp->celestial_structure =
                         celestial_closure_cell_value(&cell_celestial, m, nx, ny, pl, ax, ay,
-                                                     map2_neighbors_in_view(pl, depth, ax, ay));
+                                                     map2_neighbors_in_window(pl, depth, ax, ay));
                     map2_closure_maps[MAP2_DEPTH_INDEX(depth)][ax][ay] = m;
                     /* Only a cell with a closure record takes a profile slot:
                      * empty or fully filtered maps neither disclose theirs nor

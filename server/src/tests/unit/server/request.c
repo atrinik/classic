@@ -5140,10 +5140,10 @@ START_TEST(test_celestial_closure_fallback_resends_membership_changes) {
 END_TEST
 
 START_TEST(test_celestial_closure_seams_ignore_out_of_view_residency) {
-    /* A seam cell whose neighbor across the seam is outside the view: its
-     * continuity comes from this map's authored link and boundary alone, so
-     * the neighbor being resident (perhaps for another player) or not never
-     * changes the record. In view, the real two-sided seam decides. */
+    /* A seam cell whose neighbor across the seam is outside the MAP2 window:
+     * whether that map is resident (perhaps for another player) or not, and
+     * whatever its profile, the face fails closed. Inside the window the
+     * view keeps the neighbor resident, and the real seam decides. */
     mapstruct *old_map;
     object *pl;
     check_setup_env_pl(&old_map, &pl);
@@ -5160,25 +5160,26 @@ START_TEST(test_celestial_closure_seams_ignore_out_of_view_residency) {
     celestial_closure_accumulator_t sent;
     celestial_closure_begin(&sent);
     celestial_closure_accumulate(&sent, structure);
-    /* Every neighbor in view except the eastern one, across the seam. */
-    uint8_t in_view = 0x3fU & ~(1U << 1);
+    uint8_t all = 0x3fU, east_outside = 0x3fU & ~(1U << 1);
     uint32_t values[2];
     for (int resident = 0; resident < 2; resident++) {
         west->tile_map[TILED_EAST] = resident ? east : NULL;
         east->tile_map[TILED_WEST] = resident ? west : NULL;
-        values[resident] = celestial_closure_cell_value(&sent, west, 63, 32, pl, 16, 16, in_view);
-    }
-    ck_assert_uint_eq(values[0], values[1]);
-    ck_assert_uint_ne(values[0] & CELESTIAL_CLOSURE_CONTINUOUS_EAST, 0);
-    /* Authored as a discontinuous seam, it stays closed either way. */
-    west->celestial_boundary[TILED_EAST] = CELESTIAL_BOUNDARY_DISCONTINUOUS;
-    for (int resident = 0; resident < 2; resident++) {
-        west->tile_map[TILED_EAST] = resident ? east : NULL;
-        east->tile_map[TILED_WEST] = resident ? west : NULL;
-        values[resident] = celestial_closure_cell_value(&sent, west, 63, 32, pl, 16, 16, in_view);
+        values[resident] =
+            celestial_closure_cell_value(&sent, west, 63, 32, pl, 16, 16, east_outside);
     }
     ck_assert_uint_eq(values[0], values[1]);
     ck_assert_uint_eq(values[0] & CELESTIAL_CLOSURE_CONTINUOUS_EAST, 0);
+    /* Inside the window the resident neighbor's real seam is continuous. */
+    west->tile_map[TILED_EAST] = east;
+    east->tile_map[TILED_WEST] = west;
+    ck_assert_uint_ne(celestial_closure_cell_value(&sent, west, 63, 32, pl, 16, 16, all) &
+                          CELESTIAL_CLOSURE_CONTINUOUS_EAST,
+                      0);
+    /* A neighbor on the same map is continuous wherever it lies. */
+    ck_assert_uint_ne(celestial_closure_cell_value(&sent, west, 63, 32, pl, 16, 16, 0) &
+                          CELESTIAL_CLOSURE_CONTINUOUS_WEST,
+                      0);
     west->tile_map[TILED_EAST] = NULL;
     east->tile_map[TILED_WEST] = NULL;
 }

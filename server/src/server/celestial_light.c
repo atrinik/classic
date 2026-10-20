@@ -344,7 +344,7 @@ static uint16_t closure_static_down(mapstruct *map, int x, int y, const object *
 
 uint32_t celestial_closure_cell_value(const celestial_closure_accumulator_t *accumulator,
                                       mapstruct *map, int x, int y, const object *viewer, int ax,
-                                      int ay, uint8_t in_view) {
+                                      int ay, uint8_t in_window) {
     uint32_t value = CELESTIAL_CLOSURE_IN;
     bool static_aperture = false;
     uint16_t static_down =
@@ -386,21 +386,16 @@ uint32_t celestial_closure_cell_value(const celestial_closure_accumulator_t *acc
         {{0, 0, 1}, CELESTIAL_CLOSURE_CONTINUOUS_UP},
         {{0, 0, -1}, CELESTIAL_CLOSURE_CONTINUOUS_DOWN},
     };
-    static const int horizontal_tiles[4] = {TILED_NORTH, TILED_EAST, TILED_SOUTH, TILED_WEST};
     for (size_t i = 0; i < arraysize(neighbors); i++) {
         int edge_x = x + neighbors[i].normal[0], edge_y = y + neighbors[i].normal[1];
-        bool across_edge = edge_x < 0 || edge_y < 0 || edge_x >= MAP_WIDTH(map) ||
-                           edge_y >= MAP_HEIGHT(map);
-        if (i < 4 && across_edge && (in_view & (1U << i)) == 0) {
-            /* A neighbor across a seam but outside the view may be resident
-             * only because of other players' activity: the seam is judged
-             * from this map's own authored data alone (a link and a
-             * continuous boundary towards it), never from residency. */
-            int tile = horizontal_tiles[i];
-            if (map->celestial_schema == 1 && map->tile_path[tile] != NULL &&
-                map->celestial_boundary[tile] == CELESTIAL_BOUNDARY_CONTINUOUS) {
-                value |= neighbors[i].bit;
-            }
+        bool across_map = neighbors[i].normal[2] != 0 || edge_x < 0 || edge_y < 0 ||
+                          edge_x >= MAP_WIDTH(map) || edge_y >= MAP_HEIGHT(map);
+        if (across_map && (in_window & (1U << i)) == 0) {
+            /* Another map outside the view's window may be resident only
+             * because of other players' activity, and its profile is unknown
+             * without it: the face fails closed (no continuity, and upwards
+             * an opaque overhead without sky exit), never depending on
+             * residency nor opening a seam the server keeps closed. */
             continue;
         }
         spatial_face face = {.from = cell};

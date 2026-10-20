@@ -230,6 +230,10 @@ cells carry no light of any kind. Seam continuity is static authored data; the
 server autoloads the closure's maps with the same bounded autoload the MAP2
 view uses, so a missing map reflects a load failure, not another player's
 activity, and is reported as discontinuous on both the server and the client.
+A face towards another map outside the MAP2 window, or beyond its depth range,
+is recorded closed (no continuity, and upwards an opaque overhead without a sky
+exit): such a map may be resident only because of other players, and its
+profile is unknown without it, so no record depends on its residency.
 
 ## Client solver and conformance
 

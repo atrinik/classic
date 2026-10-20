@@ -166,13 +166,14 @@ extern void celestial_closure_accumulate(celestial_closure_accumulator_t *accumu
 /** The cell's closure value (toolkit/celestial_closure.h): its faces from the
  * accumulated objects, and its sky cover, sky exit and continuity from the
  * map's authored structure and links. ax and ay are the cell's MAP2 window
- * position, which decides what a direction-drawn object shows. in_view is
- * map2_neighbors_in_view()'s mask: a horizontal seam towards a neighbor
- * outside the view is judged from this map's authored data alone, so no
- * record depends on another map's residency. */
+ * position, which decides what a direction-drawn object shows. in_window
+ * marks the north, east, south, west, upper and lower neighbors inside the
+ * MAP2 window (and its depth range), whose maps the view keeps resident: a
+ * face towards another map outside it fails closed, so no record depends on
+ * another map's residency. */
 extern uint32_t celestial_closure_cell_value(const celestial_closure_accumulator_t *accumulator,
                                              mapstruct *map, int x, int y, const object *viewer,
-                                             int ax, int ay, uint8_t in_view);
+                                             int ax, int ay, uint8_t in_window);
 
 /** Whether MAP2 shows a FLAG_DRAW_DIRECTION object at window position ax,
  * ay to the viewer; true for every other object. */
