@@ -2209,7 +2209,7 @@ void draw_client_map2(object *pl) {
                      * emitter or occluder is sent for it. */
                     uint8_t remembered_light[NUM_SUB_LAYERS];
                     if (remembered) {
-                        int8_t level = light_local_level(m, nx, ny);
+                        int8_t level = light_local_level_viewer(m, nx, ny, pl);
                         for (sub_layer = 0; sub_layer < NUM_SUB_LAYERS; sub_layer++) {
                             remembered_light[sub_layer] =
                                 map_protocol_local_light_encode(level, (special_vision & 1) != 0) |
@@ -3135,7 +3135,7 @@ void draw_client_map2(object *pl) {
                 uint8_t local_light[NUM_SUB_LAYERS];
                 uint64_t occluder = 0;
                 {
-                    int8_t level = light_local_level(m, nx, ny);
+                    int8_t level = light_local_level_viewer(m, nx, ny, pl);
                     for (sub_layer = 0; sub_layer < NUM_SUB_LAYERS; sub_layer++) {
                         local_light[sub_layer] =
                             map_protocol_local_light_encode(level, (special_vision & 1) != 0) |

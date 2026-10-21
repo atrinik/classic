@@ -4041,6 +4041,78 @@ START_TEST(test_client_lighting_cache_fields_add_no_padding) {
 }
 END_TEST
 
+/** The coarse level MAP2 last sent for the cell at (dx, dy) from the viewer. */
+static int request_sent_local_level(player *pl, int dx, int dy) {
+    MapCell *cell =
+        map_client_cache_cell(&pl->cs->lastmap, 0, pl->cs->mapx_2 + dx, pl->cs->mapy_2 + dy, false);
+    ck_assert_ptr_nonnull(cell);
+    ck_assert_uint_ne(cell->client_light_known & 1U, 0);
+    int8_t level;
+    bool vision_floor;
+    ck_assert(map_protocol_local_light_decode(cell->local_light[0], &level, &vision_floor));
+    return level;
+}
+
+START_TEST(test_client_lighting_coarse_level_leaves_out_own_light) {
+    mapstruct *map;
+    object *op;
+    check_setup_env_pl(&map, &op);
+    /* A carried torch: the viewer's glow, in the block 12..14. */
+    object_remove(op, 0);
+    op->glow_radius = 3;
+    op->x = 13;
+    op->y = 12;
+    op = object_insert_map(op, map, NULL, 0);
+    ck_assert_ptr_nonnull(op);
+    player *pl = CONTR(op);
+    pl->update_los = 1;
+    ck_assert_int_gt(light_local_level(map, 13, 12), 0);
+    /* Shown content on the row, so its cells are sent. */
+    for (int x = 11; x <= 16; x++) {
+        object *content = arch_get("letter");
+        content->x = x;
+        content->y = 12;
+        ck_assert_ptr_nonnull(object_insert_map(content, map, NULL, INS_NO_MERGE));
+    }
+
+    socket_buffer_clear(pl->cs);
+    draw_client_map(op);
+    ck_assert_uint_gt(validate_queued_map_payloads(pl->cs), 0);
+    /* The client traces the torch itself; the block shared with it gets no
+     * floor from it. */
+    for (int dx = -1; dx <= 1; dx++) {
+        ck_assert_int_eq(request_sent_local_level(pl, dx, 0), 0);
+    }
+    MapCell *own = map_client_cache_cell(&pl->cs->lastmap, 0, pl->cs->mapx_2, pl->cs->mapy_2,
+                                         false);
+    ck_assert_ptr_nonnull(own);
+    ck_assert_uint_ne(own->emitter_layers, 0);
+
+    /* One step inside the block leaves nothing lit behind. */
+    request_move_player(&op, map, 14, 12);
+    pticks++;
+    socket_buffer_clear(pl->cs);
+    draw_client_map(op);
+    for (int dx = -2; dx <= 2; dx++) {
+        ck_assert_int_eq(request_sent_local_level(pl, dx, 0), 0);
+    }
+
+    /* Another light in the block is sent at once, without the viewer moving. */
+    object *lamp = arch_get("letter");
+    lamp->glow_radius = 3;
+    lamp->light_color = UINT32_C(0xffffff);
+    lamp->x = 12;
+    lamp->y = 12;
+    ck_assert_ptr_nonnull(object_insert_map(lamp, map, NULL, INS_NO_MERGE));
+    pticks++;
+    socket_buffer_clear(pl->cs);
+    draw_client_map(op);
+    ck_assert_uint_gt(validate_queued_map_payloads(pl->cs), 0);
+    ck_assert_int_eq(request_sent_local_level(pl, -2, 0), light_local_level(map, 12, 12));
+    ck_assert_int_gt(request_sent_local_level(pl, 0, 0), 0);
+}
+END_TEST
+
 START_TEST(test_client_lighting_remembered_tiles_keep_coarse_light) {
     mapstruct *map;
     object *op;
@@ -5534,6 +5606,7 @@ static Suite *suite(void) {
     tcase_add_test(tc_core, test_client_lighting_fields_follow_sent_objects_only);
     tcase_add_test(tc_core, test_client_lighting_cache_fields_add_no_padding);
     tcase_add_test(tc_core, test_client_lighting_remembered_tiles_keep_coarse_light);
+    tcase_add_test(tc_core, test_client_lighting_coarse_level_leaves_out_own_light);
     tcase_add_test(tc_core, test_remembered_light_records_split_at_tile_boundaries);
     return s;
 }
