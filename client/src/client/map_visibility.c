@@ -132,6 +132,58 @@ void map_visibility_apply_memory_floor(uint16_t *radiance, uint16_t rgb[3]) {
     }
 }
 
+uint16_t map_visibility_remembered_progress(uint32_t elapsed) {
+    if (elapsed >= MAP_VISIBILITY_FADE_DURATION_MS) {
+        return MAP_VISIBILITY_FIELD_UNIT;
+    }
+    return (uint16_t)((elapsed * MAP_VISIBILITY_FIELD_UNIT + MAP_VISIBILITY_FADE_DURATION_MS / 2U) /
+                      MAP_VISIBILITY_FADE_DURATION_MS);
+}
+
+/** Move one sample by a Q0.8 weight toward a target, rounding to nearest. */
+static uint16_t map_visibility_mix(uint16_t from, uint16_t to, uint16_t weight) {
+    int32_t delta = (int32_t)to - (int32_t)from;
+    int32_t scaled = delta * (int32_t)weight;
+    int32_t step = (scaled + (scaled < 0 ? -128 : 128)) / 256;
+    return (uint16_t)((int32_t)from + step);
+}
+
+void map_visibility_apply_remembered(uint16_t *radiance, uint16_t rgb[3], uint16_t progress) {
+    HARD_ASSERT(radiance != NULL);
+    HARD_ASSERT(rgb != NULL);
+
+    map_visibility_apply_memory_floor(radiance, rgb);
+    progress = MIN(progress, MAP_VISIBILITY_FIELD_UNIT);
+    if (progress == 0) {
+        return;
+    }
+
+    uint16_t dim_scalar = map_visibility_scale_radiance(*radiance, MAP_VISIBILITY_MEMORY_SCALE);
+    uint16_t dim_rgb[3];
+    for (size_t channel = 0; channel < 3; channel++) {
+        dim_rgb[channel] = map_visibility_scale_radiance(rgb[channel], MAP_VISIBILITY_MEMORY_SCALE);
+    }
+    /* The cap keeps channel/scalar ratios, so a capped warm room stays warm
+     * until desaturation. */
+    if (dim_scalar > MAP_VISIBILITY_MEMORY_CAP_RADIANCE) {
+        for (size_t channel = 0; channel < 3; channel++) {
+            uint32_t scaled = (uint32_t)dim_rgb[channel] * MAP_VISIBILITY_MEMORY_CAP_RADIANCE;
+            dim_rgb[channel] = (uint16_t)MIN(UINT16_MAX, (scaled + dim_scalar / 2U) / dim_scalar);
+        }
+        dim_scalar = MAP_VISIBILITY_MEMORY_CAP_RADIANCE;
+    }
+    for (size_t channel = 0; channel < 3; channel++) {
+        dim_rgb[channel] =
+            map_visibility_mix(dim_rgb[channel], dim_scalar, MAP_VISIBILITY_MEMORY_DESATURATION);
+    }
+    map_visibility_apply_memory_floor(&dim_scalar, dim_rgb);
+
+    *radiance = map_visibility_mix(*radiance, dim_scalar, progress);
+    for (size_t channel = 0; channel < 3; channel++) {
+        rgb[channel] = map_visibility_mix(rgb[channel], dim_rgb[channel], progress);
+    }
+}
+
 void map_visibility_fade_init(map_visibility_fade_t *fade) {
     HARD_ASSERT(fade != NULL);
     memset(fade, 0, sizeof(*fade));

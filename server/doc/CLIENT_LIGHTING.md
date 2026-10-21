@@ -535,7 +535,10 @@ below the floor of raw 40 (Q5.11 64), `lift = 40 - S` is added neutrally (raw `S
 raw `-100` lifts that channel to raw `-20`, which then clamps to 0), and only
 then the window attenuation runs, so dark remembered
 geometry keeps rendering at raw `(40, 40, 40)` rather than black. The lift is
-raw 40 encoded, Q5.11 64, because `S` is Q5.11. They never compose the
+raw 40 encoded, Q5.11 64, because `S` is Q5.11. The presented sample is then
+dimmed, capped and partly desaturated, fading in over 250 ms when the tile
+leaves sight (MAP_RENDERING.md, remembered light), so remembered light never
+reads as currently seen. They never compose the
 remembered emitters of the
 objects shown in fog, which may since have changed, and their faces are closed
 by the server's face bits, so emitter rays from visible cells stop at their

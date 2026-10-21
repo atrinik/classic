@@ -26,6 +26,8 @@
 #include <toolkit/mempool.h>
 #include <tod.h>
 #include <commands.h>
+#include <door.h>
+#include <object_methods.h>
 #include <exit.h>
 #include <exploration.h>
 #include <account.h>
@@ -4050,6 +4052,68 @@ START_TEST(test_client_lighting_remembered_tiles_keep_coarse_light) {
 }
 END_TEST
 
+START_TEST(test_closing_door_turns_lit_corridor_into_remembered_fog) {
+    mapstruct *map;
+    object *op;
+    check_setup_env_pl(&map, &op);
+    request_move_player(&op, map, 12, 12);
+    player *pl = CONTR(op);
+    int ax = pl->cs->mapx_2 + 2, ay = pl->cs->mapy_2;
+
+    object *door = arch_get("door_wood1");
+    ck_assert_ptr_nonnull(door);
+    ck_assert(QUERY_FLAG(door, FLAG_BLOCKSVIEW));
+    door->x = op->x + 1;
+    door->y = op->y;
+    door = object_insert_map(door, map, NULL, 0);
+    ck_assert_ptr_nonnull(door);
+
+    /* A lit corridor tile behind the door. */
+    object *lamp = arch_get("letter");
+    lamp->glow_radius = 13;
+    lamp->light_color = UINT32_C(0xffffff);
+    lamp->x = op->x + 2;
+    lamp->y = op->y;
+    ck_assert_ptr_nonnull(object_insert_map(lamp, map, NULL, INS_NO_MERGE));
+
+    /* Opening the door shows the corridor with its object and emitter. */
+    op->behavior |= BEHAVIOR_OPEN_DOORS;
+    ck_assert(door_try_open(op, map, door->x, door->y, false));
+    ck_assert(!QUERY_FLAG(door, FLAG_BLOCKSVIEW));
+    pticks++;
+    socket_buffer_clear(pl->cs);
+    draw_client_map(op);
+    MapCell *cell = map_client_cache_cell(&pl->cs->lastmap, 0, ax, ay, false);
+    ck_assert_ptr_nonnull(cell);
+    ck_assert_uint_eq(cell->cleared, 0);
+    ck_assert_uint_ne(cell->emitter_layers, 0);
+
+    /* The door closes on its own timer. Nothing but the door's process step
+     * invalidates sight: no manual update_los. */
+    uint64_t epoch = los_geometry_epoch();
+    door->last_sp = 0;
+    object_process(door);
+    ck_assert(QUERY_FLAG(door, FLAG_BLOCKSVIEW));
+    ck_assert_uint_gt(los_geometry_epoch(), epoch);
+
+    /* The next MAP2 soft-clears the corridor tile: only its remembered light
+     * record remains, with no object or emitter. */
+    pticks++;
+    socket_buffer_clear(pl->cs);
+    draw_client_map(op);
+    ck_assert_uint_gt(validate_queued_map_payloads(pl->cs), 0);
+    cell = map_client_cache_cell(&pl->cs->lastmap, 0, ax, ay, false);
+    ck_assert_ptr_nonnull(cell);
+    ck_assert_uint_eq(cell->cleared, 1);
+    ck_assert_uint_ne(cell->client_light_known & 8U, 0);
+    ck_assert_uint_eq(cell->emitter_layers, 0);
+    ck_assert_uint_eq(cell->client_light_known & 2U, 0);
+    for (size_t layer = 0; layer < NUM_REAL_LAYERS; layer++) {
+        ck_assert_int_eq(cell->faces[layer], 0);
+    }
+}
+END_TEST
+
 START_TEST(test_remembered_light_records_split_at_tile_boundaries) {
     mapstruct *old_map;
     object *op;
@@ -5435,6 +5499,7 @@ static Suite *suite(void) {
     tcase_add_test(tc_core, test_client_lighting_fields_follow_sent_objects_only);
     tcase_add_test(tc_core, test_client_lighting_cache_fields_add_no_padding);
     tcase_add_test(tc_core, test_client_lighting_remembered_tiles_keep_coarse_light);
+    tcase_add_test(tc_core, test_closing_door_turns_lit_corridor_into_remembered_fog);
     tcase_add_test(tc_core, test_remembered_light_records_split_at_tile_boundaries);
     return s;
 }

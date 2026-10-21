@@ -190,6 +190,47 @@ int main(void) {
     CHECK(remembered_scalar == MAP_VISIBILITY_MEMORY_FLOOR_RADIANCE);
     CHECK(remembered_rgb[0] == 1000 && remembered_rgb[1] == 2000 && remembered_rgb[2] == 3000);
 
+    CHECK(MAP_VISIBILITY_MEMORY_CAP_RADIANCE == (MAP_VISIBILITY_MEMORY_CAP_RAW * 8U + 2U) / 5U);
+    CHECK(map_visibility_remembered_progress(0) == 0);
+    CHECK(map_visibility_remembered_progress(MAP_VISIBILITY_FADE_DURATION_MS / 2U) == 128);
+    CHECK(map_visibility_remembered_progress(MAP_VISIBILITY_FADE_DURATION_MS) == 256);
+    CHECK(map_visibility_remembered_progress(UINT32_MAX) == 256);
+    /* Remembered daylight keeps its hue order but is capped, scaled and half
+     * desaturated: clearly darker than any live sample. */
+    remembered_scalar = 2048;
+    remembered_rgb[0] = 2048;
+    remembered_rgb[1] = 1024;
+    remembered_rgb[2] = 512;
+    map_visibility_apply_remembered(&remembered_scalar, remembered_rgb, 256);
+    CHECK(remembered_scalar == MAP_VISIBILITY_MEMORY_CAP_RADIANCE);
+    CHECK(remembered_rgb[0] == 192 && remembered_rgb[1] == 144 && remembered_rgb[2] == 120);
+    /* A dim remembered sample scales but stays at or above the memory floor. */
+    remembered_scalar = 200;
+    remembered_rgb[0] = remembered_rgb[1] = remembered_rgb[2] = 200;
+    map_visibility_apply_remembered(&remembered_scalar, remembered_rgb, 256);
+    CHECK(remembered_scalar == 70 && remembered_rgb[0] == 70);
+    /* The contract's colored floor vector: lifted, then dimmed toward neutral. */
+    remembered_scalar = 32;
+    remembered_rgb[0] = 32;
+    remembered_rgb[1] = 0;
+    remembered_rgb[2] = 0;
+    map_visibility_apply_remembered(&remembered_scalar, remembered_rgb, 256);
+    CHECK(remembered_scalar == MAP_VISIBILITY_MEMORY_FLOOR_RADIANCE);
+    CHECK(remembered_rgb[0] == 64 && remembered_rgb[1] == 58 && remembered_rgb[2] == 58);
+    remembered_scalar = 0;
+    remembered_rgb[0] = remembered_rgb[1] = remembered_rgb[2] = 0;
+    map_visibility_apply_remembered(&remembered_scalar, remembered_rgb, 256);
+    CHECK(remembered_scalar == MAP_VISIBILITY_MEMORY_FLOOR_RADIANCE);
+    CHECK(remembered_rgb[0] == MAP_VISIBILITY_MEMORY_FLOOR_RADIANCE &&
+          remembered_rgb[2] == MAP_VISIBILITY_MEMORY_FLOOR_RADIANCE);
+    /* A cell that just left sight starts from its live light and fades. */
+    remembered_scalar = 2048;
+    remembered_rgb[0] = remembered_rgb[1] = remembered_rgb[2] = 2048;
+    map_visibility_apply_remembered(&remembered_scalar, remembered_rgb, 0);
+    CHECK(remembered_scalar == 2048 && remembered_rgb[1] == 2048);
+    map_visibility_apply_remembered(&remembered_scalar, remembered_rgb, 128);
+    CHECK(remembered_scalar == 1120 && remembered_rgb[1] == 1120);
+
     map_visibility_fade_t fade;
     map_visibility_fade_init(&fade);
     map_visibility_fade_authorize(&fade, 255, 1000);
