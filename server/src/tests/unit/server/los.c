@@ -417,15 +417,56 @@ START_TEST(test_linked_stack_fresh_camera_work_stays_bounded) {
         los_player_cell_camera(pl, map, 15, 15);
         ck_assert_uint_le(los_action_camera_cells_for_test() - cells, 25);
         ck_assert_uint_eq(los_action_camera_flood_cells_for_test(), floods);
-        /* A covered column tests the player's own stack at most once. */
+        /* The sealed test reads loaded links and resolves nothing. */
         cells = los_action_camera_cells_for_test();
         los_player_cell_camera(pl, map, 14, 12);
         ck_assert_uint_le(los_action_camera_cells_for_test() - cells,
-                          25 + (tops[i] == CELESTIAL_SKY_SEALED ? 1 : 2));
+                          25 + (tops[i] == CELESTIAL_SKY_SEALED ? 0 : 1));
         if (tops[i] == CELESTIAL_SKY_SEALED) {
             /* A sealed stack never needs the connected-component search. */
             ck_assert_uint_eq(los_action_camera_flood_cells_for_test(), floods);
         }
+    }
+}
+END_TEST
+
+/* A sealed stack beside another stack across an east seam: the neighbour's
+ * upper story is cut away only when its own stack is sealed too. */
+START_TEST(test_sealed_cutaway_is_scoped_to_sealed_columns) {
+    static const uint8_t east_tops[] = {CELESTIAL_SKY_OPEN, CELESTIAL_SKY_SEALED};
+    for (size_t i = 0; i < arraysize(east_tops); i++) {
+        mapstruct *map;
+        object *pl;
+        mapstruct *upper = enclosed_fixture(&map, &pl, CELESTIAL_SKY_SEALED);
+        object_remove(pl, 0);
+        pl->x = 22;
+        pl = object_insert_map(pl, map, NULL, 0);
+        ck_assert_ptr_nonnull(pl);
+        mapstruct *east = get_empty_map(24, 24);
+        east->level_min = 0;
+        east->level_max = 1;
+        mapstruct *east_upper = add_level(east, 1, 1);
+        east->celestial_sky_above = CELESTIAL_SKY_LINKED;
+        east_upper->celestial_sky_above = east_tops[i];
+        map->tile_map[TILED_EAST] = east;
+        east->tile_map[TILED_WEST] = map;
+        upper->tile_map[TILED_EAST] = east_upper;
+        east_upper->tile_map[TILED_WEST] = upper;
+        /* A roofed building across the seam hides a creature below it. */
+        place(east_upper, "roof_thatch", 1, 12);
+        place(upper, "water_still", 23, 12);
+        if (east_tops[i] == CELESTIAL_SKY_OPEN) {
+            ck_assert_int_eq(los_player_cell_camera(pl, east_upper, 1, 12), LOS_CAMERA_BOUNDARY);
+            ck_assert_int_eq(los_player_cell_camera(pl, east, 1, 12),
+                             LOS_CAMERA_WALL_BOUNDARY);
+        } else {
+            ck_assert_int_eq(los_player_cell_camera(pl, east_upper, 1, 12), LOS_CAMERA_HIDDEN);
+            ck_assert_int_eq(los_player_cell_camera(pl, east, 1, 12), LOS_CAMERA_VISIBLE);
+        }
+        /* The player's own sealed column is cut either way. */
+        ck_assert_int_eq(los_player_cell_camera(pl, upper, 23, 12), LOS_CAMERA_HIDDEN);
+        ck_assert_int_eq(los_player_cell_camera(pl, map, 23, 12), LOS_CAMERA_VISIBLE);
+        assert_cached_masks_match_default(pl);
     }
 }
 END_TEST
@@ -711,6 +752,7 @@ static Suite *suite(void) {
     tcase_add_test(tc, test_sealed_stack_cuts_away_disconnected_upper_islands);
     tcase_add_test(tc, test_open_or_unresolved_stack_keeps_connected_cutaway);
     tcase_add_test(tc, test_linked_stack_fresh_camera_work_stays_bounded);
+    tcase_add_test(tc, test_sealed_cutaway_is_scoped_to_sealed_columns);
     tcase_add_test(tc, test_zero_volume_proofs_skip_empty_rays_and_respect_current_slabs);
     tcase_add_test(tc, test_zero_volume_proof_matches_supercover_in_varied_blocked_scenes);
     return s;
