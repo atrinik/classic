@@ -399,9 +399,6 @@ static void map_cell_store_set_light_state(map_cell_store_t *store,
 static void
 map_cell_store_set_fow(map_cell_store_t *store, size_t index, bool fow, bool structural_fow);
 static void map_mark_stretch_dirty(int x, int y);
-static int
-map_cell_floor_height(int x, int y, const map_cell_t *cell, uint8_t sub_layer, bool base_level);
-static int map_cell_stretch_height(int x, int y, int w, int h, int sub_layer, int my_height);
 static int map_level_support_height(int x, int y, int depth);
 static void map_clear_expired_visibility_layer(map_cell_t *cell, int sub_layer, int object_layer);
 
@@ -1117,51 +1114,6 @@ bool widget_map_transaction_abort_test(void) {
               map_level_support_height(MAP_STARTX, MAP_STARTY, 1) == 37 &&
               map_cell_retained_bytes == initial_retained_bytes;
     map_set_structural_support_height(0, 0, 0);
-
-    /* A covered wall boundary carries only its wall layer: it stands, is lit
-     * and is joined by stretched neighbors at its base support height. */
-    {
-        int cache_width = map_width * MAP_FOW_SIZE;
-        int cache_height = map_height * MAP_FOW_SIZE;
-        map_set_structural_support_height(0, 0, 50);
-        map_cell_t *boundary = map_cell_store_slot(cells, middle_index, true);
-        /* Support alone projects linked structure; it is no ground. */
-        success =
-            success && map_cell_floor_height(MAP_STARTX, MAP_STARTY, boundary, 0, true) == 0 &&
-            map_cell_stretch_height(MAP_STARTX, MAP_STARTY, cache_width, cache_height, 0, 50) == 0;
-        map_cell_layer_record(boundary, GET_MAP_LAYER(LAYER_WALL, 0), true)->face = 3;
-        success =
-            success && map_cell_floor_height(MAP_STARTX, MAP_STARTY, boundary, 0, true) == 50 &&
-            map_cell_floor_height(MAP_STARTX, MAP_STARTY, boundary, 0, false) == 0 &&
-            map_cell_stretch_height(MAP_STARTX, MAP_STARTY, cache_width, cache_height, 0, 50) == 50;
-        map_cell_layer_record_t *floor =
-            map_cell_layer_record(boundary, GET_MAP_LAYER(LAYER_FLOOR, 1), true);
-        floor->face = 4;
-        floor->height = 12;
-        /* Any received floor is the cell's own geometry. */
-        success = success &&
-                  map_cell_floor_height(MAP_STARTX, MAP_STARTY, boundary, 1, true) == 12 &&
-                  map_cell_floor_height(MAP_STARTX, MAP_STARTY, boundary, 0, true) == 0;
-        floor->face = 0;
-        floor->height = 0;
-
-        /* Hard-clearing the standing wall restretches the floor beside it. */
-        map_cell_t *neighbor = map_cell_store_slot(cells, middle_index + 1, true);
-        map_cell_layer_record(neighbor, GET_MAP_LAYER(LAYER_FLOOR, 0), true)->face = 5;
-        neighbor->stretch_dirty = 0;
-        map_clear_cell(0, 0, true);
-        success = success && neighbor->stretch_dirty != 0;
-        for (int dy = -1; dy <= 1; dy++) {
-            for (int dx = -1; dx <= 1; dx++) {
-                map_cell_store_clear_slot(
-                    cells,
-                    (size_t)((ptrdiff_t)middle_index + dy * cache_width + dx));
-            }
-        }
-        map_set_structural_support_height(0, 0, 0);
-        map_cell_store_set_fow(cells, middle_index, false, false);
-        success = success && map_cell_retained_bytes == initial_retained_bytes;
-    }
 
     map_mark_stretch_dirty(1, 1);
     adjust_tile_stretch();
@@ -2622,45 +2574,6 @@ void init_map_data(int xl, int yl, int px, int py) {
     }
 }
 
-/**
- * Floor elevation a cell's objects and light stand on.
- *
- * A covered wall boundary sends only its wall layer, so its floor is never
- * drawn, yet its wall stands on that floor. A base-level wall cell without any
- * floor record uses the structural support height the server sends for every
- * base cell. At zero, the wall would sink below the raised ground in front of
- * it, which then paints over it, and its light quads would fold under that
- * ground.
- */
-static int
-map_cell_floor_height(int x, int y, const map_cell_t *cell, uint8_t sub_layer, bool base_level) {
-    const map_cell_layer_record_t *floor =
-        map_cell_layer_record_read(cell, GET_MAP_LAYER(LAYER_FLOOR, sub_layer));
-    if (floor->face != 0 || !base_level) {
-        return floor->height;
-    }
-    bool wall = false;
-    for (uint8_t other = 0; other < NUM_SUB_LAYERS; other++) {
-        if (map_cell_layer_record_read(cell, GET_MAP_LAYER(LAYER_FLOOR, other))->face != 0) {
-            return floor->height;
-        }
-        wall |= map_cell_layer_record_read(cell, GET_MAP_LAYER(LAYER_WALL, other))->face != 0;
-    }
-    /* Support alone, as for a never-seen cell under linked structure,
-     * projects that structure but is no ground to stand on. */
-    if (!wall) {
-        return floor->height;
-    }
-
-    map_cell_store_t *base_cells = level_cells[MAP2_DEPTH_INDEX(0)];
-    int cache_width = map_width * MAP_FOW_SIZE;
-    int cache_height = map_height * MAP_FOW_SIZE;
-    if (base_cells == NULL || x < 0 || x >= cache_width || y < 0 || y >= cache_height) {
-        return floor->height;
-    }
-    return base_cells->headers[map_cache_physical_index(x, y)].support_height;
-}
-
 #define MAX_STRETCH 8
 #define MAX_STRETCH_DIAG 12
 
@@ -2685,11 +2598,7 @@ static int map_cell_stretch_height(int x, int y, int w, int h, int sub_layer, in
         }
     }
 
-    return map_cell_floor_height(x,
-                                 y,
-                                 cell,
-                                 (uint8_t)sub_layer,
-                                 current_level_index == MAP2_DEPTH_INDEX(0));
+    return map_cell_layer_record_read(cell, GET_MAP_LAYER(LAYER_FLOOR, sub_layer))->height;
 }
 
 /**
@@ -2872,28 +2781,6 @@ static void map_mark_stretch_dirty(int x, int y) {
                 map_state_transaction_record_physical(current_level_index, neighbor_x, neighbor_y);
                 MAP_CELL_GET_MUTABLE(neighbor_x, neighbor_y)->stretch_dirty = 1;
             }
-        }
-    }
-}
-
-/** Mark the stored cells around a cell for restretching, allocating none. */
-static void map_mark_stored_stretch_dirty(int x, int y) {
-    int cache_width = map_width * MAP_FOW_SIZE;
-    int cache_height = map_height * MAP_FOW_SIZE;
-    int cache_x = x + map_width * (MAP_FOW_SIZE / 2);
-    int cache_y = y + map_height * (MAP_FOW_SIZE / 2);
-
-    for (int neighbor_x = cache_x - 1; neighbor_x <= cache_x + 1; neighbor_x++) {
-        for (int neighbor_y = cache_y - 1; neighbor_y <= cache_y + 1; neighbor_y++) {
-            if (neighbor_x < 0 || neighbor_x >= cache_width || neighbor_y < 0 ||
-                neighbor_y >= cache_height ||
-                map_cell_store_slot(cells,
-                                    map_cache_physical_index(neighbor_x, neighbor_y),
-                                    false) == NULL) {
-                continue;
-            }
-            map_state_transaction_record_physical(current_level_index, neighbor_x, neighbor_y);
-            MAP_CELL_GET_MUTABLE(neighbor_x, neighbor_y)->stretch_dirty = 1;
         }
     }
 }
@@ -3385,14 +3272,6 @@ void map_set_data(int x,
         image_request_face(face);
     }
 
-    /* A base-level wall decides whether a floorless cell stands on its
-     * support height (map_cell_floor_height()); judge the face kept. */
-    if (object_layer == LAYER_WALL && current_level_index == MAP2_DEPTH_INDEX(0) &&
-        (old_presentation.face != 0) != (layer_record->face != 0)) {
-        map_mark_stretch_dirty(x, y);
-        lighting_geometry_changed = true;
-    }
-
     if (face != 0 && map_visibility_transient_layer(object_layer) &&
         (old_presentation.presentation_token == 0 || !old_presentation.visibility.authorized ||
          !map_presentation_payload_equal(&old_presentation, layer_record) ||
@@ -3685,16 +3564,10 @@ void map_clear_cell(int x, int y, bool hard) {
 
     if (hard) {
         bool had_floor_geometry = false;
-        bool had_wall_geometry = false;
         for (int sub_layer = 0; sub_layer < NUM_SUB_LAYERS; sub_layer++) {
             had_floor_geometry |=
                 map_cell_layer_record_read(cell, GET_MAP_LAYER(LAYER_FLOOR, sub_layer))->face != 0;
-            had_wall_geometry |=
-                map_cell_layer_record_read(cell, GET_MAP_LAYER(LAYER_WALL, sub_layer))->face != 0;
         }
-        /* A floorless wall stood its neighbors' stretch on its support height. */
-        had_floor_geometry |= had_wall_geometry && current_level_index == MAP2_DEPTH_INDEX(0) &&
-                              cells->headers[index].support_height != 0;
 
         map_cell_store_clear_slot(cells, index);
         map_cell_store_set_support_height(cells, index, 0);
@@ -3732,9 +3605,6 @@ void map_set_structural_support_height(int x, int y, int16_t height) {
     if (!map_cell_store_set_support_height(cells, index, height)) {
         return;
     }
-    /* A floorless base cell stands at this height, so its neighbors'
-     * stretched floors join to it. Only stored cells can hold a floor. */
-    map_mark_stored_stretch_dirty(x, y);
     level_lighting_revision[current_level_index]++;
 }
 
@@ -4937,16 +4807,10 @@ static void draw_map_object(SDL_Surface *surface, map_render_data_t *data) {
     /* When rendering on the map surface, avoid rendering the object
      * when it's too high up and either in the FoW or the map has the
      * "height difference" feature enabled. */
-    if (data->world_surface && ((data->cell->fow && !remembered) || MapData.height_diff)) {
-        int top_floor_height = get_top_floor_height(data->cell, data->sub_layer);
-        if (top_floor_height == 0) {
-            /* A floorless wall stands on its support height. */
-            top_floor_height = map_cell_floor_height(
-                data->x, data->y, data->cell, data->sub_layer, data->depth == 0);
-        }
-        if (abs(top_floor_height - data->player_height_offset) > HEIGHT_MAX_RENDER) {
-            return;
-        }
+    if (data->world_surface && ((data->cell->fow && !remembered) || MapData.height_diff) &&
+        abs(get_top_floor_height(data->cell, data->sub_layer) - data->player_height_offset) >
+            HEIGHT_MAX_RENDER) {
+        return;
     }
 
     int bitmap_h = source->h;
@@ -5029,14 +4893,11 @@ static void draw_map_object(SDL_Surface *surface, map_render_data_t *data) {
             BIT_SET(effects.flags, SPRITE_FLAG_SMOOTH_DARK_SURFACE);
         } else {
             BIT_SET(effects.flags, SPRITE_FLAG_SMOOTH_DARK);
-            /* Sample the light row where this cell's lighting vertex lies. */
-            effects.smooth_dark_y = data->ypos + MAP_TILE_POS_YOFF -
-                                    map_cell_floor_height(data->x,
-                                                          data->y,
-                                                          data->cell,
-                                                          data->sub_layer,
-                                                          data->depth == 0) +
-                                    data->player_height_offset;
+            effects.smooth_dark_y =
+                data->ypos + MAP_TILE_POS_YOFF -
+                map_cell_layer_record_read(data->cell, GET_MAP_LAYER(LAYER_FLOOR, data->sub_layer))
+                    ->height +
+                data->player_height_offset;
         }
     } else if (!data->lightmap_pending) {
         BIT_SET(effects.flags, SPRITE_FLAG_DARK);
@@ -5101,8 +4962,8 @@ static void draw_map_object(SDL_Surface *surface, map_render_data_t *data) {
         data->layer == LAYER_ITEM2) {
         yl -= get_top_floor_height(data->cell, data->sub_layer);
     } else {
-        yl -=
-            map_cell_floor_height(data->x, data->y, data->cell, data->sub_layer, data->depth == 0);
+        yl -= map_cell_layer_record_read(data->cell, GET_MAP_LAYER(LAYER_FLOOR, data->sub_layer))
+                  ->height;
     }
 
     yl += data->player_height_offset;
@@ -5731,7 +5592,9 @@ map_dirty_lighting_fow_segment(size_t level, int depth, int x0, int x1, int y0, 
         for (int y = y0; y < y1; y++) {
             map_cell_t *cell = map_cache_cell(level_cells_current, x, y);
             uint8_t sub_layer = map_lighting_sub_layer(cell);
-            int floor_height = MAX(0, map_cell_floor_height(x, y, cell, sub_layer, depth == 0));
+            int floor_height = MAX(
+                0,
+                map_cell_layer_record_read(cell, GET_MAP_LAYER(LAYER_FLOOR, sub_layer))->height);
             int support_height = depth > 0 ? map_level_support_height(x, y, depth) : 0;
             int screen_x = (x - mid_x) * MAP_TILE_YOFF - (y - mid_y) * MAP_TILE_YOFF;
             int screen_y = (x - mid_x) * MAP_TILE_XOFF + (y - mid_y) * MAP_TILE_XOFF -
@@ -8069,7 +7932,8 @@ static lighting_vertex_t
 map_lighting_vertex(SDL_Surface *surface, const map_render_data_t *data, int x, int y) {
     map_cell_t *cell = MAP_CELL_GET(x, y);
     uint8_t sub_layer = map_lighting_sub_layer(cell);
-    int height = MAX(0, map_cell_floor_height(x, y, cell, sub_layer, data->depth == 0));
+    int height =
+        MAX(0, map_cell_layer_record_read(cell, GET_MAP_LAYER(LAYER_FLOOR, sub_layer))->height);
 
     lighting_vertex_t vertex = {
         .x = surface->w / 2 + (x - data->midx) * MAP_TILE_YOFF - (y - data->midy) * MAP_TILE_YOFF,

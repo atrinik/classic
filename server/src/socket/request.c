@@ -985,6 +985,25 @@ static bool map_layer_is_remembered_geometry(int layer) {
     return layer == LAYER_FLOOR || layer == LAYER_FMASK || layer == LAYER_WALL;
 }
 
+/**
+ * Whether one layer of a space is sent at its camera visibility. A covered
+ * wall boundary stands on its own floor: the floor and floor mask under a
+ * boundary wall are sent with it so the client places and lights the wall at
+ * its real elevation. A covered cell without a wall still sends nothing, so
+ * the floor plan under a roof stays undisclosed.
+ */
+static bool map_space_layer_visible(MapSpace *msp, map_level_visibility visibility, int layer) {
+    if (visibility == MAP_LEVEL_WALL_BOUNDARY && (layer == LAYER_FLOOR || layer == LAYER_FMASK)) {
+        for (int sub_layer = 0; sub_layer < NUM_SUB_LAYERS; sub_layer++) {
+            if (GET_MAP_SPACE_LAYER(msp, LAYER_WALL, sub_layer) != NULL) {
+                return true;
+            }
+        }
+        return false;
+    }
+    return map_level_layer_visible(visibility, layer);
+}
+
 static bool map_space_has_client_content(MapSpace *msp, map_level_visibility visibility) {
     for (int layer = LAYER_FLOOR; layer <= NUM_LAYERS; layer++) {
         if (!map_level_layer_visible(visibility, layer)) {
@@ -2383,7 +2402,7 @@ void draw_client_map2(object *pl) {
                     for (sub_layer = 0; sub_layer < NUM_SUB_LAYERS; sub_layer++) {
                         tmp = GET_MAP_SPACE_LAYER(msp, layer, sub_layer);
 
-                        if (!map_level_layer_visible(level_visibility, layer)) {
+                        if (!map_space_layer_visible(msp, level_visibility, layer)) {
                             tmp = NULL;
                         }
 
