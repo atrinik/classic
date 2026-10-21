@@ -26,6 +26,7 @@
 #define LIGHT_H
 
 #include <decls.h>
+#include <light_local_view.h>
 
 #include <stdint.h>
 #include <toolkit/celestial_model.h>
@@ -57,6 +58,11 @@ extern void light_radiance_from_raw(const MapSpace *space,
 /** Signed, source-anonymous coarse local light level of one cell (protocol 1085). */
 extern int8_t light_local_level(mapstruct *map, int x, int y);
 
+/** The coarse level of one cell as sent to a viewer: like light_local_level(),
+ * but without the viewer's own light, which the client traces exactly. */
+extern int8_t light_local_level_viewer(mapstruct *map, int x, int y, const object *viewer,
+                                       light_local_view_cache_t *cache);
+
 /** Free a map's coarse light cache, with the map. */
 /** Note a change of the links between maps or of a map's residency, the
  * topology coarse local light walks. */
@@ -67,6 +73,8 @@ extern void light_local_forget(mapstruct *map);
 /** Coarse-light topology walks performed so far. */
 extern uint64_t light_local_walks_for_test(void);
 extern uint64_t light_local_rehashes_for_test(void);
+/** Viewer coarse-light walks performed so far. */
+extern uint64_t light_local_view_walks_for_test(void);
 /** Set the coarse walk's region bound, returning the previous one. */
 extern size_t light_local_regions_max_exchange_for_test(size_t max);
 #endif

@@ -34,6 +34,7 @@
 #include <attack.h>
 #include <metrics.h>
 #include <server_clock.h>
+#include <light_local_view.h>
 
 /** Level color structure. */
 typedef struct _level_color {
@@ -372,6 +373,9 @@ struct pl_player {
     int los_view_width, los_view_height, los_view_half_x, los_view_half_y;
     bool los_view_tls, los_view_blind, los_view_xrays, los_view_valid;
     bool map2_serializing;
+
+    /** Coarse local levels sent to this viewer, without its own light. */
+    light_local_view_cache_t light_local_view;
 
     /** If true, update line of sight with update_los(). */
     uint32_t update_los : 1;

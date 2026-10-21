@@ -70,6 +70,13 @@ uint64_t light_local_walks_for_test(void) {
     return light_local_walks;
 }
 
+/** Viewer levels walked and pooled again by light_local_level_viewer(). */
+static uint64_t light_local_view_walks;
+
+uint64_t light_local_view_walks_for_test(void) {
+    return light_local_view_walks;
+}
+
 /** Cached levels revalidated by rehashing their dependency maps. */
 static uint64_t light_local_rehashes;
 
@@ -1530,7 +1537,7 @@ static void light_local_block(int coordinate, int size, int *start, int *end) {
  * only the maximum, which the level already discloses.
  */
 static void light_local_block_sources(mapstruct *map, int bx, int ex, int by, int ey,
-                                      int *positive, int *negative) {
+                                      const object *exclude, int *positive, int *negative) {
     *positive = 0;
     *negative = 0;
     for (int cy = by; cy < ey; cy++) {
@@ -1539,6 +1546,12 @@ static void light_local_block_sources(mapstruct *map, int bx, int ex, int by, in
             int64_t residual = space->light_source;
             for (const object *op = GET_MAP_OB(map, cx, cy); op != NULL; op = op->above) {
                 if (op->glow_radius == 0) {
+                    continue;
+                }
+                /* An excluded object leaves the counter too, not only the
+                 * pooled masks. */
+                if (op == exclude) {
+                    residual -= op->glow_radius;
                     continue;
                 }
                 int mask = get_real_light_source_value(op->glow_radius);
@@ -1779,7 +1792,15 @@ static uint64_t light_local_deps_hash(mapstruct *const *deps, size_t count) {
 static bool light_local_walk(mapstruct *map, int bx, int ex, int by, int ey,
                              const light_local_region **regions, size_t *count);
 static int8_t light_local_level_pool(const light_local_region *regions, size_t count, int bx,
-                                     int ex, int by, int ey);
+                                     int ex, int by, int ey, const object *exclude);
+
+/** Cache index of the block starting at (bx, by); every cell of a block
+ * shares it. */
+static size_t light_local_block_index(const mapstruct *map, int bx, int by) {
+    size_t blocks_x = (size_t)MAX(1, MAP_WIDTH(map) / 3);
+    size_t blocks_y = (size_t)MAX(1, MAP_HEIGHT(map) / 3);
+    return MIN((size_t)by / 3, blocks_y - 1) * blocks_x + MIN((size_t)bx / 3, blocks_x - 1);
+}
 
 int8_t light_local_level(mapstruct *map, int x, int y) {
     HARD_ASSERT(map != NULL && map->spaces != NULL);
@@ -1806,8 +1827,7 @@ int8_t light_local_level(mapstruct *map, int x, int y) {
         map->light_local_cache =
             xcalloc(map->light_local_cache_blocks, sizeof(*map->light_local_cache));
     }
-    size_t index = MIN((size_t)by / 3, blocks_y - 1) * blocks_x +
-                   MIN((size_t)bx / 3, blocks_x - 1);
+    size_t index = light_local_block_index(map, bx, by);
     HARD_ASSERT(index < map->light_local_cache_blocks);
     light_local_cache_entry *entry = &map->light_local_cache[index];
     uint64_t geometry = light_local_topology;
@@ -1850,7 +1870,7 @@ int8_t light_local_level(mapstruct *map, int x, int y) {
 #endif
     bool walked = light_local_walk(map, bx, ex, by, ey, &regions, &count);
     if (walked) {
-        level = light_local_level_pool(regions, count, bx, ex, by, ey);
+        level = light_local_level_pool(regions, count, bx, ex, by, ey, NULL);
         /* Into the map's shared set: a superset of this block's maps is a
          * conservative signature, and a set that grows sends the other
          * blocks back to one walk each until it settles. */
@@ -1878,7 +1898,8 @@ int8_t light_local_level(mapstruct *map, int x, int y) {
  * bucket, so only the horizontal gap counts.
  */
 static void light_local_pool_region(mapstruct *source, int ox, int oy, int bx, int ex, int by,
-                                    int ey, int32_t *positive, int32_t *negative) {
+                                    int ey, const object *exclude, int32_t *positive,
+                                    int32_t *negative) {
     /* A map narrower than a block would pin a source to fewer than nine
      * cells: it contributes nothing (fail closed). */
     if (MAP_WIDTH(source) < 3 || MAP_HEIGHT(source) < 3) {
@@ -1897,7 +1918,8 @@ static void light_local_pool_region(mapstruct *source, int ox, int oy, int bx, i
             int gap_y = MAX(0, MAX(sy + oy - (ey - 1), by - (sey - 1 + oy)));
             int distance_squared = gap_x * gap_x + gap_y * gap_y;
             int strongest[2];
-            light_local_block_sources(source, sx, sex, sy, sey, &strongest[0], &strongest[1]);
+            light_local_block_sources(source, sx, sex, sy, sey, exclude, &strongest[0],
+                                      &strongest[1]);
             for (int sign = 0; sign < 2; sign++) {
                 int mask = strongest[sign];
                 if (mask == 0) {
@@ -2037,13 +2059,86 @@ static void light_local_reach_stamp(mapstruct *map, int x, int y) {
 }
 
 static int8_t light_local_level_pool(const light_local_region *regions, size_t count, int bx,
-                                     int ex, int by, int ey) {
+                                     int ex, int by, int ey, const object *exclude) {
     int32_t positive = 0, negative = 0;
     for (size_t i = 0; i < count; i++) {
         light_local_pool_region(regions[i].map, regions[i].ox, regions[i].oy, bx, ex, by, ey,
-                                &positive, &negative);
+                                exclude, &positive, &negative);
     }
     return light_local_level_from_extrema(positive, negative);
+}
+
+int8_t light_local_level_viewer(mapstruct *map, int x, int y, const object *viewer,
+                                light_local_view_cache_t *cache) {
+    int8_t shared = light_local_level(map, x, y);
+    /* The client traces the viewer's own emitter exactly, so the viewer's
+     * level leaves it out: pooled into the block, it would hold the whole
+     * block at the peak and move only when the viewer crosses a block edge,
+     * trailing a moving viewer. Every other source, including another
+     * player's light that is not disclosed as an emitter, stays pooled, and
+     * the viewer learns nothing that unequipping its own light would not
+     * show. */
+    if (viewer == NULL || viewer->map == NULL || viewer->glow_radius == 0 || shared == 0 ||
+        MAP_WIDTH(map) < 3 || MAP_HEIGHT(map) < 3) {
+        return shared;
+    }
+    int mask = get_real_light_source_value(viewer->glow_radius);
+    int32_t peak = mask == 0 ? 0 : light_mask_value(abs(mask), 0);
+    int8_t own = light_local_level_from_extrema(mask > 0 ? peak : 0, mask < 0 ? -peak : 0);
+    /* Leaving out one source lowers its own sign's extremum only, so the
+     * level changes only when the viewer's light, at its strongest, has the
+     * level's sign and reaches its magnitude. */
+    if (own == 0 || (own > 0) != (shared > 0) || abs(shared) > abs(own)) {
+        return shared;
+    }
+    int bx, by, ex, ey;
+    light_local_block(x, MAP_WIDTH(map), &bx, &ex);
+    light_local_block(y, MAP_HEIGHT(map), &by, &ey);
+    if (viewer->map == map) {
+        /* Out of the viewer's reach on its own map: it is not pooled here. */
+        int vbx, vby, vex, vey;
+        light_local_block(viewer->x, MAP_WIDTH(map), &vbx, &vex);
+        light_local_block(viewer->y, MAP_HEIGHT(map), &vby, &vey);
+        int gap_x = MAX(0, MAX(vbx - (ex - 1), bx - (vex - 1)));
+        int gap_y = MAX(0, MAX(vby - (ey - 1), by - (vey - 1)));
+        int radius = light_profile_radius(abs(mask));
+        if (gap_x * gap_x + gap_y * gap_y > radius * radius) {
+            return shared;
+        }
+    }
+    /* The level without the viewer depends only on the other sources and the
+     * topology, which the shared entry's stamps track; the viewer's own moves
+     * stamp it too, which only costs a walk. A map freed and another
+     * allocated at its address changes the topology first. */
+    size_t index = light_local_block_index(map, bx, by);
+    uint64_t key = (uint64_t)(uintptr_t)map * UINT64_C(0x9e3779b97f4a7c15) ^
+                   (uint64_t)index * UINT64_C(0xbf58476d1ce4e5b9);
+    light_local_view_entry_t *entry = &cache->entries[(key >> 32) % LIGHT_LOCAL_VIEW_CACHE_SIZE];
+    if (entry->map == map && entry->block == index && entry->viewer == viewer->count &&
+        entry->geometry_epoch == light_local_topology &&
+        entry->validated == map->light_local_reach_generation &&
+        entry->validated_all == light_local_generation_all) {
+        return entry->level;
+    }
+    const light_local_region *regions;
+    size_t count;
+    int8_t level = 0;
+#ifdef ATRINIK_TESTING
+    light_local_view_walks++;
+#endif
+    if (light_local_walk(map, bx, ex, by, ey, &regions, &count)) {
+        level = light_local_level_pool(regions, count, bx, ex, by, ey, viewer);
+    }
+    *entry = (light_local_view_entry_t){
+        .map = map,
+        .block = index,
+        .viewer = viewer->count,
+        .geometry_epoch = light_local_topology,
+        .validated = map->light_local_reach_generation,
+        .validated_all = light_local_generation_all,
+        .level = level,
+    };
+    return level;
 }
 
 int8_t light_local_level_from_extrema(int32_t positive, int32_t negative) {
