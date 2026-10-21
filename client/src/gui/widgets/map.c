@@ -3251,17 +3251,10 @@ void map_set_data(int x,
     int object_layer = (layer % NUM_LAYERS) + 1;
     const map_cell_layer_record_t *old_layer = map_cell_layer_record_read(cell, layer);
     map_cell_layer_record_t old_presentation = *old_layer;
-    /* A base-level wall decides whether a floorless cell stands on its
-     * support height (map_cell_floor_height()). */
-    bool standing_wall_changed = object_layer == LAYER_WALL &&
-                                 current_level_index == MAP2_DEPTH_INDEX(0) &&
-                                 (old_layer->face != 0) != (face != 0);
     bool stretch_geometry_changed =
-        (object_layer == LAYER_FLOOR && (old_layer->face != face || old_layer->height != height)) ||
-        standing_wall_changed;
+        object_layer == LAYER_FLOOR && (old_layer->face != face || old_layer->height != height);
     bool lighting_geometry_changed =
-        (object_layer == LAYER_FLOOR && (old_layer->face != face || old_layer->height != height)) ||
-        standing_wall_changed;
+        object_layer == LAYER_FLOOR && (old_layer->face != face || old_layer->height != height);
     bool render_height_changed = (object_layer == LAYER_FLOOR || object_layer == LAYER_EFFECT) &&
                                  old_layer->height != height;
     map_cell_layer_record_t *layer_record = map_cell_layer_record(cell, layer, true);
@@ -3390,6 +3383,14 @@ void map_set_data(int x,
         }
     } else {
         image_request_face(face);
+    }
+
+    /* A base-level wall decides whether a floorless cell stands on its
+     * support height (map_cell_floor_height()); judge the face kept. */
+    if (object_layer == LAYER_WALL && current_level_index == MAP2_DEPTH_INDEX(0) &&
+        (old_presentation.face != 0) != (layer_record->face != 0)) {
+        map_mark_stretch_dirty(x, y);
+        lighting_geometry_changed = true;
     }
 
     if (face != 0 && map_visibility_transient_layer(object_layer) &&
@@ -4936,10 +4937,16 @@ static void draw_map_object(SDL_Surface *surface, map_render_data_t *data) {
     /* When rendering on the map surface, avoid rendering the object
      * when it's too high up and either in the FoW or the map has the
      * "height difference" feature enabled. */
-    if (data->world_surface && ((data->cell->fow && !remembered) || MapData.height_diff) &&
-        abs(get_top_floor_height(data->cell, data->sub_layer) - data->player_height_offset) >
-            HEIGHT_MAX_RENDER) {
-        return;
+    if (data->world_surface && ((data->cell->fow && !remembered) || MapData.height_diff)) {
+        int top_floor_height = get_top_floor_height(data->cell, data->sub_layer);
+        if (top_floor_height == 0) {
+            /* A floorless wall stands on its support height. */
+            top_floor_height = map_cell_floor_height(
+                data->x, data->y, data->cell, data->sub_layer, data->depth == 0);
+        }
+        if (abs(top_floor_height - data->player_height_offset) > HEIGHT_MAX_RENDER) {
+            return;
+        }
     }
 
     int bitmap_h = source->h;
