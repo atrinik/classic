@@ -65,10 +65,9 @@ on the GPU. The server sends:
    unequipping its own light would not show. Each block keeps, per sign, its
    strongest contribution with that contribution's source and the strongest of
    any other source, so the viewer's level is read from the shared block entry
-   without another walk. When the viewer's own tile also holds light of the
-   opposite sign, the client groups the two into one emitter, so that tile's
-   viewer keeps the shared level: a level without the viewer would reverse the
-   grouped value.
+   without another walk. The level never depends on where in a block the
+   viewer stands, so moving a light through a block cannot locate another
+   source in it.
 4. **Occluders of sent cells**: geometry bits plus quantized transmission of
    each cardinal face and the downward face, derived only from objects MAP2
    sends, and face bits from static seam structure between authorized cells
@@ -408,8 +407,12 @@ The GPU light pass gains an emitter stage before the existing tone/LUT stages:
    coarse level does not group: it pools each source alone (Server), so where
    co-located sources of opposite sign cancel, such as `+3` and `-1` grouping
    to `+2`, the coarse floor can present the block at its strongest single
-   source's level rather than the grouped one. Like the bleed below, that is
-   presentation only and the price of resisting co-located probing. The
+   source's level rather than the grouped one. The same holds where the
+   viewer's own light shares a tile with a source of the opposite sign: the
+   viewer's level leaves its own light out, so a `+5` viewer over `-4`
+   darkness, grouped by the client to `+1`, is floored at the darkness's
+   level. Like the bleed below, that is presentation only and the price of
+   resisting co-located probing. The
    occluders are, per depth, an R16 grid of geometry and face bits (bits 8–13
    must reach the ray walk), a second R16 grid of the four horizontal face
    attenuation nibbles, and an R8 vertical-attenuation grid. The CPU reference

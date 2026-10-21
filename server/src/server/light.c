@@ -1918,26 +1918,6 @@ int8_t light_local_level(mapstruct *map, int x, int y) {
     return entry != NULL ? entry->level : 0;
 }
 
-/** Whether the viewer's tile also holds light of the other sign than its own:
- * the client groups co-located emitters into one, so the viewer's light is
- * then not traced alone. */
-static bool light_local_viewer_opposed(const object *viewer) {
-    if (viewer->x < 0 || viewer->y < 0 || viewer->x >= MAP_WIDTH(viewer->map) ||
-        viewer->y >= MAP_HEIGHT(viewer->map)) {
-        return true;
-    }
-    int64_t residual = GET_MAP_SPACE_PTR(viewer->map, viewer->x, viewer->y)->light_source;
-    for (const object *op = GET_MAP_OB(viewer->map, viewer->x, viewer->y); op != NULL;
-         op = op->above) {
-        if (op != viewer && op->glow_radius != 0 &&
-            (op->glow_radius > 0) != (viewer->glow_radius > 0)) {
-            return true;
-        }
-        residual -= op->glow_radius;
-    }
-    return residual != 0 && (residual > 0) != (viewer->glow_radius > 0);
-}
-
 int8_t light_local_level_viewer(mapstruct *map, int x, int y, const object *viewer) {
     const light_local_cache_entry *entry = light_local_entry(map, x, y);
     if (entry == NULL) {
@@ -1950,13 +1930,11 @@ int8_t light_local_level_viewer(mapstruct *map, int x, int y, const object *view
      * player's light that is not disclosed as an emitter, stays pooled, and
      * the viewer learns nothing that unequipping its own light would not
      * show. The runner-up is the strongest other source, wherever the
-     * viewer's light reached the block from, so no walk is repeated. Light of
-     * the other sign on the viewer's tile keeps the shared level: the client
-     * groups it with the viewer's emitter, and a level without the viewer
-     * would then reverse that grouped value. */
-    if (viewer == NULL || viewer->map == NULL || viewer->glow_radius == 0 ||
-        (entry->positive.source != viewer && entry->negative.source != viewer) ||
-        light_local_viewer_opposed(viewer)) {
+     * viewer's light reached the block from, so no walk is repeated. The
+     * level never depends on where the viewer stands, so moving a light
+     * through a block cannot locate another source in it. */
+    if (viewer == NULL || viewer->glow_radius == 0 ||
+        (entry->positive.source != viewer && entry->negative.source != viewer)) {
         return entry->level;
     }
     int32_t positive = entry->positive.source == viewer ? entry->positive.second

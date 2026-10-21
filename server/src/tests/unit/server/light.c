@@ -1580,14 +1580,25 @@ START_TEST(test_client_lighting_local_level_viewer_runner_up) {
 END_TEST
 
 START_TEST(test_client_lighting_local_level_viewer_opposed_tile) {
-    /* The client groups co-located emitters: a +5 viewer with -4 darkness on
-     * its tile is weak light, which a level without the viewer (darkness)
-     * would reverse. Such a tile keeps the shared level. */
+    /* Darkness on the viewer's tile is pooled like any other source, alone:
+     * the level is the one it has without the viewer, wherever in the block
+     * the viewer stands, so a moving light cannot locate it. */
+    mapstruct *alone = get_empty_map(18, 9);
+    add_colored_light(alone, 7, 4, -4, LIGHT_COLOR_WHITE);
+    int expected = light_local_level(alone, 7, 4);
+    ck_assert_int_lt(expected, 0);
+
     mapstruct *map = get_empty_map(18, 9);
-    object *viewer = add_colored_light(map, 7, 4, 5, LIGHT_COLOR_WHITE);
     add_colored_light(map, 7, 4, -4, LIGHT_COLOR_WHITE);
+    object *viewer = add_colored_light(map, 7, 4, 5, LIGHT_COLOR_WHITE);
     ck_assert_int_gt(light_local_level(map, 7, 4), 0);
-    ck_assert_int_eq(light_local_level_viewer(map, 7, 4, viewer), light_local_level(map, 7, 4));
+    for (int x = 6; x <= 8; x++) {
+        object_remove(viewer, 0);
+        viewer->x = x;
+        viewer = object_insert_map(viewer, map, NULL, 0);
+        ck_assert_ptr_nonnull(viewer);
+        ck_assert_int_eq(light_local_level_viewer(map, 7, 4, viewer), expected);
+    }
 }
 END_TEST
 
