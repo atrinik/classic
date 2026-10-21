@@ -2076,6 +2076,10 @@ frozen constants are:
 | --- | ---: |
 | Normal daylight raw radiance | 1280 |
 | Remembered-geometry neutral floor (`M`) | 40 raw (3.125% of daylight) |
+| Remembered-light scale (`K`) | 90/256 (about 35%) |
+| Remembered-light cap (`R`) | 120 raw (Q5.11 192) |
+| Remembered-light desaturation (`D`) | 128/256 toward neutral |
+| Live-to-remembered fade | 250 ms |
 | Player-field neutral center (`P`) | 80 raw (6.25% of daylight) |
 | Inner radius squared | 16 (radius 4) |
 | Outer radius squared | 64 (radius 8) |
@@ -2119,8 +2123,27 @@ C_display   = max((0, 0, 0), C + (memory_lift, memory_lift, memory_lift))
 Thus zero-radiance remembered geometry is `(40,40,40)`, a low colored local
 sample keeps its color while receiving only the missing neutral floor, and a
 negative or zero endpoint cannot produce a negative display value. The RGB
-component clamp is display-only and does not alter the cached sample. At or
-above raw 40 the interior server sample is unchanged. Current visible geometry does not get
+component clamp is display-only and does not alter the cached sample.
+
+Remembered light keeps its relative level but must never look currently seen:
+a closed door or a wall that hides a lit corridor visibly darkens it. After the
+memory lift, the fully remembered display sample is:
+
+```text
+S_dim = round_half_up(S_display * K)
+C_dim = round_half_up(C_display * K)          per channel
+if S_dim > R: C_dim = round_half_up(C_dim * R / S_dim); S_dim = R
+C_dim = C_dim + round_half_away(D * (S_dim - C_dim) / 256)   per channel
+then apply the memory lift to (S_dim, C_dim) again
+```
+
+Daylight `(1280,1280,1280)` raw therefore remembers as `(120,120,120)` raw, a
+dim sample of raw 125 as raw 44, and dark geometry stays at `(40,40,40)`. A
+cell that a soft clear takes out of current authorization moves from its
+lifted live sample to this dimmed sample linearly over the 250 ms fade
+(Q0.8 progress, round half away from zero). A cell already remembered, or
+first received as remembered, shows the dimmed sample at once; re-clearing a
+remembered cell does not restart its fade. Current visible geometry does not get
 the memory lift; it receives the authoritative sample plus the player-field
 contribution. Q5.11 encoding remains the existing checked round-half-up
 `raw * 8 / 5` operation at the wire boundary; this contract adds no protocol
@@ -2390,7 +2413,8 @@ describe interior samples before window attenuation:
 | --- | --- | --- | ---: |
 | never-seen cell | empty; no output | none | 0 |
 | remembered, zero server radiance | `(40,40,40)` | none | 255 for static geometry |
-| remembered, raw server `(20,0,0)` | `(40,20,20)` after neutral lift | none | 255 |
+| remembered, raw server `(20,0,0)` | `(40,20,20)` after neutral lift; Q5.11 `(64,58,58)` once dimmed | none | 255 |
+| remembered, Q5.11 daylight `(2048,2048,1024,512)` | Q5.11 `(192,192,144,120)` once dimmed; `1120` scalar at 125 ms | none | 255 |
 | current visible, neutral raw 1280, center | `(1280,1280,1280)` | `80` each channel before tone mapping | 255 |
 | current visible, neutral raw 1280, `d2=25` | `(1280,1280,1280)` | `65` each channel | 255 |
 | fade-in at 125 ms | unchanged light | unchanged | 128 |

@@ -19,6 +19,14 @@
 #define MAP_VISIBILITY_MEMORY_FLOOR_RADIANCE UINT16_C(64)
 #define MAP_VISIBILITY_PLAYER_RADIANCE UINT16_C(80)
 #define MAP_VISIBILITY_FADE_DURATION_MS UINT32_C(250)
+/* Remembered-world presentation: light out of sight keeps its relative level
+ * but scales by 90/256 (about 35%), caps at 120 raw (Q5.11 192, about a
+ * torch-lit tile on the display curve) and moves half way to neutral, so a
+ * remembered room still reads as lit but never as currently seen. */
+#define MAP_VISIBILITY_MEMORY_SCALE UINT16_C(90)
+#define MAP_VISIBILITY_MEMORY_CAP_RAW UINT16_C(120)
+#define MAP_VISIBILITY_MEMORY_CAP_RADIANCE UINT16_C(192)
+#define MAP_VISIBILITY_MEMORY_DESATURATION UINT16_C(128)
 #define MAP_VISIBILITY_INTERACTION_CUTOFF UINT8_C(192)
 
 /** One presentation-only alpha transition for a live MAP2 record. */
@@ -68,6 +76,19 @@ uint16_t map_visibility_memory_floor(uint16_t radiance);
 
 /** Apply the remembered-world floor and its neutral RGB lift in place. */
 void map_visibility_apply_memory_floor(uint16_t *radiance, uint16_t rgb[3]);
+
+/**
+ * Return the Q0.8 progress of a cell's live-to-remembered dimming, `elapsed`
+ * milliseconds after it left sight.
+ */
+uint16_t map_visibility_remembered_progress(uint32_t elapsed);
+
+/**
+ * Present one remembered light sample: apply the memory floor, then move it by
+ * `progress` (Q0.8) toward the dimmed, capped and desaturated remembered look.
+ * The result never falls below the memory floor.
+ */
+void map_visibility_apply_remembered(uint16_t *radiance, uint16_t rgb[3], uint16_t progress);
 
 /** Initialize a presentation transition. */
 void map_visibility_fade_init(map_visibility_fade_t *fade);

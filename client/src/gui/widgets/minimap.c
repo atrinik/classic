@@ -146,6 +146,14 @@ void minimap_redraw_request(void) {
     minimap_redraw_flag = 1;
 }
 
+void minimap_dynamic_redraw_request(void) {
+    widgetdata *widget = cur_widget[MINIMAP_ID];
+    if (widget == NULL || widget->subwidget == NULL || !minimap_is_dynamic(widget->subwidget)) {
+        return;
+    }
+    minimap_redraw_request();
+}
+
 void minimap_redraw_force(void) {
     minimap_redraw_flag = 1;
 
