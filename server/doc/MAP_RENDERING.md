@@ -1872,8 +1872,12 @@ display the complete profile digest used for continuous-link validation.
 - Upper-level visibility is camera-top-down. A solid floor, gameplay-opaque
   cell, or hidden wall-layer roof limits enclosed storeys below to their
   structural boundary without removing a middle-storey exterior wall. A
-  covered storey sends only that exterior wall, not its hidden floor/floor mask;
-  lower structure must not cut holes in a roof above. Downward visibility is
+  covered storey sends only that exterior wall and, once that wall has passed
+  every per-viewer filter (invisibility, `EXIT`, direction, plugin visibility),
+  the floor/floor mask of its own cell, so the client places and lights the
+  wall at its real elevation. Covered cells without a shown wall send nothing,
+  keeping the floor plan under the cover undisclosed, and a covered wall's cell
+  is never an `EXIT` candidate. Lower structure must not cut holes in a roof above. Downward visibility is
   blocked by the player's current solid floor/opaque boundary.
 - Derive building cutaways from the stack, not authored flags. When the player
   is beneath an upper solid surface/roof, flood-fill that connected overhead
