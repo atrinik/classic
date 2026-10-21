@@ -6075,6 +6075,8 @@ static void map_remembered_fade_update(void) {
         map_remembered_fade_active = false;
     }
     map_redraw_request(MAP_REDRAW_REASON_LIGHTING);
+    /* A dynamic minimap retains its own target: fade it with the map. */
+    minimap_redraw_request();
 }
 
 /** Relight levels whose emitter field flickers; flicker needs no server traffic. */
@@ -6110,9 +6112,13 @@ static void map_flicker_lighting_update(void) {
  * remembered-light fade is in progress.
  */
 static void map_flicker_carry_forward(void) {
-    if (map_flicker_carry ||
-        (map_remembered_fade_active && LastTick != map_remembered_fade_started)) {
+    if (map_flicker_carry) {
         map_redraw_request(MAP_REDRAW_REASON_LIGHTING);
+    } else if (map_remembered_fade_active) {
+        /* Carried from the fade's first frame on. The next frame's fade update
+         * runs before it decides whether to reuse retained lighting, so it
+         * relights once the tick has moved and never on an unmoved clock. */
+        map_redraw_request(MAP_REDRAW_REASON_ANIMATION);
     }
 }
 
@@ -7375,6 +7381,21 @@ bool widget_map_client_lighting_state_test(void) {
      * has passed, then once more to present the final dimmed look. */
     const uint32_t fade_tick = LastTick;
     success = success && map_remembered_fade_active;
+    /* Its first frame carries the next one forward without relighting the
+     * unmoved clock; that frame relights once the tick moves. */
+    bool saved_flicker_carry = map_flicker_carry;
+    map_flicker_carry = false;
+    map_redraw_consume();
+    minimap_redraw_flag = 0;
+    map_flicker_carry_forward();
+    map_remembered_fade_update();
+    success =
+        success && map_animation_redraw_due() && !map_redraw_due() && minimap_redraw_flag == 0;
+    map_flicker_carry = saved_flicker_carry;
+    LastTick = fade_tick + 1;
+    map_redraw_consume();
+    map_remembered_fade_update();
+    success = success && map_redraw_due() && minimap_redraw_flag != 0;
     LastTick = fade_tick + MAP_VISIBILITY_FADE_DURATION_MS - 1;
     map_redraw_consume();
     map_remembered_fade_update();
