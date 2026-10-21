@@ -253,6 +253,25 @@ static void camera_destroy(los_camera_view *view) {
     free(view->proof);
 }
 
+/** Whether the player's own column ends in a sealed top. Rock, not sky, lies
+ * above such an enclosed stack, so the camera cuts away every resolved story
+ * above the player instead of only the surfaces connected to its centre.
+ * An unresolved link or an over-tall stack is not proven enclosed. */
+static bool camera_sealed_stack(object *pl, los_camera_view *view) {
+    socket_struct *cs = CONTR(pl)->cs;
+    const mapstruct *top = pl->map;
+    for (int depth = 1; top->celestial_sky_above == CELESTIAL_SKY_LINKED; depth++) {
+        spatial_cell cell;
+        if (depth > LOS_OVERHEAD_LEVELS ||
+            !(view != NULL ? view_cell(view, cs->mapx_2, cs->mapy_2, depth, &cell)
+                           : spatial_resolve(pl->map, pl->x, pl->y, depth, &cell))) {
+            return false;
+        }
+        top = cell.map;
+    }
+    return top->celestial_sky_above == CELESTIAL_SKY_SEALED;
+}
+
 /** Classify connected camera cutaways before casting any player sight rays. */
 static void camera_build(object *pl, los_camera_view *view, bool cache_cells) {
     socket_struct *cs = CONTR(pl)->cs;
@@ -268,6 +287,7 @@ static void camera_build(object *pl, los_camera_view *view, bool cache_cells) {
         view->columns = xcalloc((size_t)cs->mapx * cs->mapy, sizeof(*view->columns));
     }
 
+    bool sealed = camera_sealed_stack(pl, view);
     for (int depth = 1; depth <= LOS_OVERHEAD_LEVELS; depth++) {
         spatial_cell center;
         bool cut_center = view_cell(view, cs->mapx_2, cs->mapy_2, depth, &center) &&
@@ -283,6 +303,7 @@ static void camera_build(object *pl, los_camera_view *view, bool cache_cells) {
                     if (blockers[ax][ay]) {
                         view->cover[ax][ay] |= UINT16_C(1) << (depth - 1);
                     }
+                    view->cutaway[depth - 1][ax][ay] = sealed;
                 } else {
                     spatial_cell previous;
                     if (view_cell(view, ax, ay, depth - 1, &previous) &&
@@ -294,7 +315,7 @@ static void camera_build(object *pl, los_camera_view *view, bool cache_cells) {
                 }
             }
         }
-        if (!cut_center) {
+        if (sealed || !cut_center) {
             continue;
         }
         bool (*cutaway)[MAP_CLIENT_Y] = view->cutaway[depth - 1];
@@ -591,7 +612,10 @@ static bool camera_action_cell(object *pl, int ax, int ay, int depth, spatial_ce
  * Most columns need no flood. The exceptional connected-component search is
  * bounded by the viewport, with each cell visited by the flood at most once per level. */
 static bool camera_action_cutaway(object *pl, int ax, int ay, int depth,
-                                  const spatial_cell *target) {
+                                  const spatial_cell *target, bool sealed) {
+    if (sealed) {
+        return true;
+    }
     bool surface = camera_surface(target->map, target->x, target->y);
     bool wall = camera_wall(target->map, target->x, target->y);
     if (!surface && !wall) {
@@ -645,9 +669,10 @@ los_camera_visibility los_player_cell_camera(object *pl, mapstruct *map, int x, 
         return LOS_CAMERA_VISIBLE;
     }
     int ax = dx + CONTR(pl)->cs->mapx_2, ay = dy + CONTR(pl)->cs->mapy_2;
+    bool sealed = camera_sealed_stack(pl, NULL);
     spatial_cell target;
     if (!camera_action_cell(pl, ax, ay, dz, &target) ||
-        (dz > 0 && camera_action_cutaway(pl, ax, ay, dz, &target))) {
+        (dz > 0 && camera_action_cutaway(pl, ax, ay, dz, &target, sealed))) {
         return LOS_CAMERA_HIDDEN;
     }
     for (int z = 0; dz < 0 && z > dz; z--) {
@@ -663,7 +688,7 @@ los_camera_visibility los_player_cell_camera(object *pl, mapstruct *map, int x, 
         spatial_cell cell;
         if (camera_action_cell(pl, ax, ay, z, &cell)) {
             if (camera_surface(cell.map, cell.x, cell.y) &&
-                !camera_action_cutaway(pl, ax, ay, z, &cell)) {
+                !camera_action_cutaway(pl, ax, ay, z, &cell, sealed)) {
                 return LOS_CAMERA_WALL_BOUNDARY;
             }
         } else {

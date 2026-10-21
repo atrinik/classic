@@ -2756,6 +2756,103 @@ START_TEST(test_zero_lit_roof_is_serialized_and_xray_vision_remains_authorized) 
 }
 END_TEST
 
+static size_t map_cache_depth_faces(socket_struct *cs, int depth) {
+    size_t count = 0;
+    for (int x = 0; x < cs->mapx; x++) {
+        for (int y = 0; y < cs->mapy; y++) {
+            MapCell *cell = map_client_cache_cell(&cs->lastmap, depth, x, y, false);
+            for (size_t layer = 0; cell != NULL && layer < NUM_REAL_LAYERS; layer++) {
+                count += cell->faces[layer] != 0;
+            }
+        }
+    }
+    return count;
+}
+
+START_TEST(test_sealed_stack_sends_no_upper_story_through_floor_gaps) {
+    static const uint8_t tops[] = {CELESTIAL_SKY_SEALED, CELESTIAL_SKY_OPEN};
+    for (size_t i = 0; i < arraysize(tops); i++) {
+        mapstruct *base;
+        object *pl;
+        check_setup_env_pl(&base, &pl);
+        request_move_player(&pl, base, 12, 12);
+
+        /* A dungeon story below another: no floor above the player, but
+         * floor patches and a wall nearby on the story above. */
+        mapstruct *upper = get_empty_map(24, 24);
+        base->tile_map[TILED_UP] = upper;
+        upper->tile_map[TILED_DOWN] = base;
+        base->coords[2] = 0;
+        upper->coords[2] = 1;
+        base->level_min = upper->level_min = 0;
+        base->level_max = upper->level_max = 1;
+        base->celestial_sky_above = CELESTIAL_SKY_LINKED;
+        upper->celestial_sky_above = tops[i];
+        static const char *const archs[] = {"water_still", "water_still", "wall_wood_1"};
+        static const int xs[] = {14, 15, 13}, ys[] = {12, 15, 14};
+        for (size_t n = 0; n < arraysize(archs); n++) {
+            object *op = arch_get(archs[n]);
+            ck_assert_ptr_nonnull(op);
+            op->x = xs[n];
+            op->y = ys[n];
+            ck_assert_ptr_nonnull(object_insert_map(op, upper, NULL, 0));
+        }
+
+        socket_struct *cs = CONTR(pl)->cs;
+        update_los(pl);
+        map_client_cache_clear(&cs->lastmap);
+        socket_buffer_clear(cs);
+        CONTR(pl)->map_update_cmd = MAP_UPDATE_CMD_SAME;
+        draw_client_map2(pl);
+
+        if (tops[i] == CELESTIAL_SKY_SEALED) {
+            ck_assert_uint_eq(map_cache_depth_faces(cs, 1), 0);
+        } else {
+            /* Under open sky the unconnected upper structure stays visible. */
+            ck_assert_uint_ne(map_cache_depth_faces(cs, 1), 0);
+        }
+        /* The player's own story is drawn either way. */
+        ck_assert_uint_ne(map_cache_depth_faces(cs, 0), 0);
+    }
+}
+END_TEST
+
+/* Underground City II lies below the sealed Underground City, which has no
+ * floor above this cell: none of that level may show through the gap. */
+START_TEST(test_underground_city_ii_hides_level_above) {
+    mapstruct *map = ready_map_name(
+        "/shattered_islands/strakewood_island/underground_city/underground_city_3_4_-1", NULL, 0);
+    ck_assert_ptr_nonnull(map);
+    ck_assert_int_eq(map->celestial_sky_above, CELESTIAL_SKY_LINKED);
+
+    object *pl = player_get_dummy(NULL, NULL);
+    ck_assert_ptr_nonnull(pl);
+    object_remove(pl, 0);
+    pl->x = 9;
+    pl->y = 5;
+    pl = object_insert_map(pl, map, NULL, 0);
+    ck_assert_ptr_nonnull(pl);
+
+    socket_struct *cs = CONTR(pl)->cs;
+    for (size_t update = 0; update < 4 && map->tile_map[TILED_UP] == NULL; update++) {
+        socket_buffer_clear(cs);
+        draw_client_map(pl);
+    }
+    mapstruct *upper = map->tile_map[TILED_UP];
+    ck_assert_ptr_nonnull(upper);
+    ck_assert_int_eq(upper->celestial_sky_above, CELESTIAL_SKY_SEALED);
+    ck_assert_ptr_null(GET_MAP_OB(upper, 9, 5));
+
+    update_los(pl);
+    map_client_cache_clear(&cs->lastmap);
+    socket_buffer_clear(cs);
+    CONTR(pl)->map_update_cmd = MAP_UPDATE_CMD_SAME;
+    draw_client_map2(pl);
+    ck_assert_uint_eq(map_cache_depth_faces(cs, 1), 0);
+    ck_assert_uint_ne(map_cache_depth_faces(cs, 0), 0);
+}
+END_TEST
+
 START_TEST(test_retained_fow_reentry_resends_zero_light_state) {
     mapstruct *base;
     object *pl;
@@ -5415,6 +5512,8 @@ static Suite *suite(void) {
     tcase_add_test(tc_core, test_view_loads_upper_level_for_linked_sky_light);
     tcase_add_test(tc_core, test_local_player_remains_visible_without_disclosing_dark_actors);
     tcase_add_test(tc_core, test_zero_lit_roof_is_serialized_and_xray_vision_remains_authorized);
+    tcase_add_test(tc_core, test_sealed_stack_sends_no_upper_story_through_floor_gaps);
+    tcase_add_test(tc_core, test_underground_city_ii_hides_level_above);
     tcase_add_test(tc_core, test_retained_fow_reentry_resends_zero_light_state);
     tcase_add_test(tc_core, test_map_exit_semantic_not_disclosed_by_boundary_geometry);
     tcase_add_test(tc_core, test_greyton_roof_only_cover_hides_city_portal_face);

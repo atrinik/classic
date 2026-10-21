@@ -353,6 +353,76 @@ START_TEST(test_focused_camera_matches_connected_cutaways_and_full_stack) {
 }
 END_TEST
 
+/* A two-story stack: the player below, `top_sky` on the story above. */
+static mapstruct *enclosed_fixture(mapstruct **map, object **pl, uint8_t top_sky) {
+    fixture(map, pl);
+    socket_struct *cs = CONTR(*pl)->cs;
+    cs->mapx = cs->mapy = 9;
+    cs->mapx_2 = cs->mapy_2 = 4;
+    (*map)->level_min = 0;
+    (*map)->level_max = 1;
+    mapstruct *upper = add_level(*map, 1, 1);
+    (*map)->celestial_sky_above = CELESTIAL_SKY_LINKED;
+    upper->celestial_sky_above = top_sky;
+    return upper;
+}
+
+START_TEST(test_sealed_stack_cuts_away_upper_story_under_floor_gap) {
+    mapstruct *map;
+    object *pl;
+    mapstruct *upper = enclosed_fixture(&map, &pl, CELESTIAL_SKY_SEALED);
+    /* Nothing is above the player; a floor and a wall stand on the story above. */
+    place(upper, "water_still", 14, 12);
+    place(upper, "wall_wood_1", 13, 14);
+    ck_assert_int_eq(los_player_cell_camera(pl, upper, 14, 12), LOS_CAMERA_HIDDEN);
+    ck_assert_int_eq(los_player_cell_camera(pl, upper, 13, 14), LOS_CAMERA_HIDDEN);
+    ck_assert_int_eq(los_player_cell_camera(pl, upper, 12, 12), LOS_CAMERA_HIDDEN);
+    /* The cut-away story no longer covers the player's own level. */
+    ck_assert_int_eq(los_player_cell_camera(pl, map, 14, 12), LOS_CAMERA_VISIBLE);
+    assert_cached_masks_match_default(pl);
+    socket_struct *cs = CONTR(pl)->cs;
+    for (int ax = 0; ax < cs->mapx; ax++) {
+        for (int ay = 0; ay < cs->mapy; ay++) {
+            ck_assert_int_eq(CONTR(pl)->camera_visibility[MAP2_DEPTH_INDEX(1)][ax][ay],
+                             LOS_CAMERA_HIDDEN);
+        }
+    }
+}
+END_TEST
+
+START_TEST(test_sealed_stack_cuts_away_disconnected_upper_islands) {
+    mapstruct *map;
+    object *pl;
+    mapstruct *upper = enclosed_fixture(&map, &pl, CELESTIAL_SKY_SEALED);
+    place(upper, "water_still", 12, 12);
+    place(upper, "water_still", 15, 15); /* not connected to the centre */
+    ck_assert_int_eq(los_player_cell_camera(pl, upper, 15, 15), LOS_CAMERA_HIDDEN);
+    ck_assert_int_eq(los_player_cell_camera(pl, map, 15, 15), LOS_CAMERA_VISIBLE);
+    assert_cached_masks_match_default(pl);
+    ck_assert_int_eq(CONTR(pl)->camera_visibility[MAP2_DEPTH_INDEX(1)][7][7],
+                     LOS_CAMERA_HIDDEN);
+}
+END_TEST
+
+START_TEST(test_open_or_unresolved_stack_keeps_connected_cutaway) {
+    static const uint8_t tops[] = {CELESTIAL_SKY_OPEN, CELESTIAL_SKY_UNSET,
+                                   CELESTIAL_SKY_LINKED /* link never resolves */};
+    for (size_t i = 0; i < arraysize(tops); i++) {
+        mapstruct *map;
+        object *pl;
+        mapstruct *upper = enclosed_fixture(&map, &pl, tops[i]);
+        place(upper, "water_still", 12, 12);
+        place(upper, "water_still", 15, 15);
+        place(upper, "roof_thatch", 14, 12);
+        /* Only the component connected above the player is cut away. */
+        ck_assert_int_eq(los_player_cell_camera(pl, upper, 12, 12), LOS_CAMERA_HIDDEN);
+        ck_assert_int_eq(los_player_cell_camera(pl, upper, 15, 15), LOS_CAMERA_VISIBLE);
+        ck_assert_int_eq(los_player_cell_camera(pl, map, 15, 15), LOS_CAMERA_WALL_BOUNDARY);
+        assert_cached_masks_match_default(pl);
+    }
+}
+END_TEST
+
 START_TEST(test_cached_and_default_whole_masks_match_across_mixed_topology) {
     mapstruct *map;
     object *pl;
@@ -611,6 +681,9 @@ static Suite *suite(void) {
     tcase_add_test(tc, test_scoped_cell_cache_matches_default_across_seams_and_invalid_stacks);
     tcase_add_test(tc, test_focused_camera_matches_connected_cutaways_and_full_stack);
     tcase_add_test(tc, test_cached_and_default_whole_masks_match_across_mixed_topology);
+    tcase_add_test(tc, test_sealed_stack_cuts_away_upper_story_under_floor_gap);
+    tcase_add_test(tc, test_sealed_stack_cuts_away_disconnected_upper_islands);
+    tcase_add_test(tc, test_open_or_unresolved_stack_keeps_connected_cutaway);
     tcase_add_test(tc, test_zero_volume_proofs_skip_empty_rays_and_respect_current_slabs);
     tcase_add_test(tc, test_zero_volume_proof_matches_supercover_in_varied_blocked_scenes);
     return s;
