@@ -4613,6 +4613,22 @@ START_TEST(test_covered_wall_boundary_sends_its_floor) {
         }
     }
     fprintf(stderr, "covered wall-less boundary cells checked: %zu\n", covered);
+
+    /* Only a wall this viewer is shown authorizes its floor: an invisible
+     * wall withdraws both, so the floor is no oracle for hidden structure. */
+    object *wall = GET_MAP_SPACE_LAYER(GET_MAP_SPACE_PTR(map, 10, 16), LAYER_WALL, 0);
+    ck_assert_ptr_nonnull(wall);
+    ck_assert(!QUERY_FLAG(pl, FLAG_SEE_INVISIBLE));
+    SET_FLAG(wall, FLAG_IS_INVISIBLE);
+    CONTR(pl)->update_los = 1;
+    socket_buffer_clear(cs);
+    draw_client_map(pl);
+    ck_assert_uint_gt(validate_queued_map_payloads(cs), 0);
+    int ax = 10 - pl->x + cs->mapx_2, ay = 16 - pl->y + cs->mapy_2;
+    MapCell *hidden = map_client_cache_cell(&cs->lastmap, 0, ax, ay, false);
+    ck_assert(hidden == NULL ||
+              (hidden->faces[LAYER_WALL - 1] == 0 && hidden->faces[LAYER_FLOOR - 1] == 0));
+    CLEAR_FLAG(wall, FLAG_IS_INVISIBLE);
 }
 END_TEST
 
