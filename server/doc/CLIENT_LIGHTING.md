@@ -55,7 +55,19 @@ on the GPU. The server sends:
    fixed 3×3 block before they propagate. Light and darkness from hidden
    sources bleed through walls without identifying the source tile, count or
    hue. A remembered tile keeps receiving its levels while the per-socket
-   cache is valid, like all its light levels.
+   cache is valid, like all its light levels. The levels sent to a viewer
+   leave out the viewer's own light (its player object's glow, such as a
+   carried torch): the client always receives that as an emitter and traces
+   it exactly, while pooled into the block it would hold the whole block at
+   its peak and move only when the viewer crosses a block edge, trailing a
+   moving viewer by up to two tiles. Every other source stays pooled,
+   including other players' light, and the viewer learns nothing that
+   unequipping its own light would not show. Each block keeps, per sign, its
+   strongest contribution with that contribution's source and the strongest of
+   any other source, so the viewer's level is read from the shared block entry
+   without another walk. The level never depends on where in a block the
+   viewer stands, so moving a light through a block cannot locate another
+   source in it.
 4. **Occluders of sent cells**: geometry bits plus quantized transmission of
    each cardinal face and the downward face, derived only from objects MAP2
    sends, and face bits from static seam structure between authorized cells
@@ -395,8 +407,12 @@ The GPU light pass gains an emitter stage before the existing tone/LUT stages:
    coarse level does not group: it pools each source alone (Server), so where
    co-located sources of opposite sign cancel, such as `+3` and `-1` grouping
    to `+2`, the coarse floor can present the block at its strongest single
-   source's level rather than the grouped one. Like the bleed below, that is
-   presentation only and the price of resisting co-located probing. The
+   source's level rather than the grouped one. The same holds where the
+   viewer's own light shares a tile with a source of the opposite sign: the
+   viewer's level leaves its own light out, so a `+5` viewer over `-4`
+   darkness, grouped by the client to `+1`, is floored at the darkness's
+   level. Like the bleed below, that is presentation only and the price of
+   resisting co-located probing. The
    occluders are, per depth, an R16 grid of geometry and face bits (bits 8–13
    must reach the ray walk), a second R16 grid of the four horizontal face
    attenuation nibbles, and an R8 vertical-attenuation grid. The CPU reference
@@ -420,7 +436,9 @@ The GPU light pass gains an emitter stage before the existing tone/LUT stages:
    lower surface is never lit through an opaque floor. Source-side virtual
    cover still applies.
 3. Combine the client emitter sum `E` with the coarse block level `C` (raw
-   step 160), which is a bleed hint for the whole block:
+   step 160), which is a bleed hint for the whole block. `C` excludes the
+   viewer's own light, which `E` always carries exactly, so the viewer's light
+   pool follows it tile by tile:
    - `C > 0`: `L = max(E, 160C)`; `C < 0`: `L = min(E, 160C)`; `C = 0`: `L = E`;
    - except that an emitter field of the opposite sign at least as strong as
      the floor keeps its value (`C < 0` and `E ≥ -160C`, or `C > 0` and
@@ -655,7 +673,9 @@ celestial follow-up's removal of celestial light from the base radiance
   a failed parse leaving map state unchanged.
 - Server: coarse level equals the block's signed quantized peak for fixtures
   with a hidden source behind a wall; a source moved through every position of
-  its block leaves every block's level unchanged; remembered tiles keep
+  its block leaves every block's level unchanged; the level sent to a viewer
+  leaves out its own light (zero around a lone torch-bearer, unchanged for
+  other viewers, and another source in its block still counts); remembered tiles keep
   receiving their light levels as hidden light changes and never receive
   objects, emitters or occluders; the producer emits one level per record (counts 1..7 and their reuse rule
   are decoder tests); per-face
