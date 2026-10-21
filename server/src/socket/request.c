@@ -2378,12 +2378,33 @@ void draw_client_map2(object *pl) {
                 }
                 bool light_state_discarded = tile_fow && (!mp->fow_known || mp->fow == 0);
 
+                /* A covered wall boundary stands on its own floor: its floor
+                 * and floor mask are sent so the client places and lights the
+                 * wall at its real elevation, but only under a wall this
+                 * viewer is shown. The wall layer goes first so every filter
+                 * below (invisibility, EXIT, direction, plugin visibility)
+                 * has decided it; a covered cell without a shown wall keeps
+                 * its floor plan undisclosed. */
+                bool boundary_wall_shown = false;
+                bool boundary_order = level_visibility == MAP_LEVEL_WALL_BOUNDARY;
+
                 /* Go through the visible layers. */
-                for (layer = LAYER_FLOOR; layer <= NUM_LAYERS; layer++) {
+                for (int layer_index = 0; layer_index < NUM_LAYERS; layer_index++) {
+                    layer = LAYER_FLOOR + layer_index;
+                    if (boundary_order) {
+                        /* WALL, then FLOOR..ITEM2, then the layers above it. */
+                        layer = layer_index == 0           ? LAYER_WALL
+                                : layer_index < LAYER_WALL ? LAYER_FLOOR + layer_index - 1
+                                                           : LAYER_FLOOR + layer_index;
+                    }
                     for (sub_layer = 0; sub_layer < NUM_SUB_LAYERS; sub_layer++) {
                         tmp = GET_MAP_SPACE_LAYER(msp, layer, sub_layer);
 
-                        if (!map_level_layer_visible(level_visibility, layer)) {
+                        if (boundary_order && (layer == LAYER_FLOOR || layer == LAYER_FMASK)) {
+                            if (!boundary_wall_shown) {
+                                tmp = NULL;
+                            }
+                        } else if (!map_level_layer_visible(level_visibility, layer)) {
                             tmp = NULL;
                         }
 
@@ -2711,6 +2732,11 @@ void draw_client_map2(object *pl) {
                                 }
 
                                 continue;
+                            }
+
+                            /* Every filter has passed: this wall is shown. */
+                            if (layer == LAYER_WALL) {
+                                boundary_wall_shown = true;
                             }
 
                             /* Defer destination eligibility until plugin
