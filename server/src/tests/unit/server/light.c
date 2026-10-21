@@ -1515,6 +1515,104 @@ START_TEST(test_client_lighting_local_level_pools_and_quantizes) {
 }
 END_TEST
 
+START_TEST(test_client_lighting_local_level_leaves_out_viewer) {
+    mapstruct *map = get_empty_map(18, 9);
+    /* A carried torch: the client traces it exactly, so its own coarse level
+     * would only hold the block at the peak behind a moving viewer. */
+    object *viewer = add_colored_light(map, 7, 4, 3, LIGHT_COLOR_WHITE);
+    ck_assert_int_gt(light_local_level(map, 7, 4), 0);
+    for (int y = 0; y < MAP_HEIGHT(map); y++) {
+        for (int x = 0; x < MAP_WIDTH(map); x++) {
+            ck_assert_int_eq(light_local_level_viewer(map, x, y, viewer), 0);
+        }
+    }
+    /* Anyone else still gets the torch's level. */
+    object *other = add_colored_light(map, 16, 4, 0, LIGHT_COLOR_WHITE);
+    ck_assert_int_eq(light_local_level_viewer(map, 7, 4, other), light_local_level(map, 7, 4));
+    ck_assert_int_gt(light_local_level_viewer(map, 7, 4, other), 0);
+
+    /* The level follows the viewer's moves at once: it never trails. */
+    object_remove(viewer, 0);
+    viewer->x = 8;
+    viewer = object_insert_map(viewer, map, NULL, 0);
+    ck_assert_ptr_nonnull(viewer);
+    ck_assert_int_eq(light_local_level_viewer(map, 6, 4, viewer), 0);
+    ck_assert_int_eq(light_local_level_viewer(map, 8, 4, viewer), 0);
+}
+END_TEST
+
+START_TEST(test_client_lighting_local_level_viewer_keeps_other_sources) {
+    mapstruct *map = get_empty_map(18, 9);
+    object *viewer = add_colored_light(map, 7, 4, 3, LIGHT_COLOR_WHITE);
+    /* A torch beside the viewer, on its tile and in its block, still counts:
+     * the viewer may not see it as an emitter, but its light is disclosed. */
+    object *hidden = add_colored_light(map, 7, 4, 3, LIGHT_COLOR_WHITE);
+    int level = light_local_level(map, 7, 4);
+    ck_assert_int_gt(level, 0);
+    ck_assert_int_eq(light_local_level_viewer(map, 7, 4, viewer), level);
+    ck_assert_int_eq(light_local_level_viewer(map, 6, 4, viewer), level);
+    /* The viewer's level reads the shared entry: no walk of its own. */
+    uint64_t walks = light_local_walks_for_test();
+    ck_assert_int_eq(light_local_level_viewer(map, 8, 4, viewer), level);
+    ck_assert_uint_eq(light_local_walks_for_test(), walks);
+
+    /* Removing it is seen at once, without the viewer moving. */
+    object_remove(hidden, 0);
+    object_destroy(hidden);
+    ck_assert_int_eq(light_local_level_viewer(map, 7, 4, viewer), 0);
+}
+END_TEST
+
+START_TEST(test_client_lighting_local_level_viewer_runner_up) {
+    /* The strongest other source, from any block in reach, is what the
+     * viewer's block shows without the viewer. */
+    mapstruct *alone = get_empty_map(18, 9);
+    add_colored_light(alone, 10, 4, 13, LIGHT_COLOR_WHITE);
+    int expected = light_local_level(alone, 7, 4);
+    ck_assert_int_gt(expected, 0);
+
+    mapstruct *map = get_empty_map(18, 9);
+    object *viewer = add_colored_light(map, 7, 4, 13, LIGHT_COLOR_WHITE);
+    add_colored_light(map, 10, 4, 13, LIGHT_COLOR_WHITE);
+    ck_assert_int_gt(light_local_level(map, 7, 4), expected);
+    ck_assert_int_eq(light_local_level_viewer(map, 7, 4, viewer), expected);
+}
+END_TEST
+
+START_TEST(test_client_lighting_local_level_viewer_opposed_tile) {
+    /* Darkness on the viewer's tile is pooled like any other source, alone:
+     * the level is the one it has without the viewer, wherever in the block
+     * the viewer stands, so a moving light cannot locate it. */
+    mapstruct *alone = get_empty_map(18, 9);
+    add_colored_light(alone, 7, 4, -4, LIGHT_COLOR_WHITE);
+    int expected = light_local_level(alone, 7, 4);
+    ck_assert_int_lt(expected, 0);
+
+    mapstruct *map = get_empty_map(18, 9);
+    add_colored_light(map, 7, 4, -4, LIGHT_COLOR_WHITE);
+    object *viewer = add_colored_light(map, 7, 4, 5, LIGHT_COLOR_WHITE);
+    ck_assert_int_gt(light_local_level(map, 7, 4), 0);
+    for (int x = 6; x <= 8; x++) {
+        object_remove(viewer, 0);
+        viewer->x = x;
+        viewer = object_insert_map(viewer, map, NULL, 0);
+        ck_assert_ptr_nonnull(viewer);
+        ck_assert_int_eq(light_local_level_viewer(map, 7, 4, viewer), expected);
+    }
+}
+END_TEST
+
+START_TEST(test_client_lighting_local_level_viewer_darkness) {
+    mapstruct *map = get_empty_map(18, 9);
+    object *viewer = add_colored_light(map, 7, 4, -3, LIGHT_COLOR_WHITE);
+    ck_assert_int_lt(light_local_level(map, 7, 4), 0);
+    ck_assert_int_eq(light_local_level_viewer(map, 7, 4, viewer), 0);
+    /* A light source's level is never lifted by leaving out darkness. */
+    add_colored_light(map, 16, 4, 3, LIGHT_COLOR_WHITE);
+    ck_assert_int_eq(light_local_level_viewer(map, 16, 4, viewer), light_local_level(map, 16, 4));
+}
+END_TEST
+
 START_TEST(test_client_lighting_local_level_hides_translation_within_block) {
     int levels[9];
     for (int position = 0; position < 9; position++) {
@@ -2180,6 +2278,11 @@ static Suite *suite(void) {
     tcase_add_test(tc_core, test_successful_map_save_preserves_light_and_future_gameplay_rebuilds);
     tcase_add_test(tc_core, test_failed_map_save_preserves_live_objects_state_and_light);
     tcase_add_test(tc_core, test_client_lighting_local_level_pools_and_quantizes);
+    tcase_add_test(tc_core, test_client_lighting_local_level_leaves_out_viewer);
+    tcase_add_test(tc_core, test_client_lighting_local_level_viewer_keeps_other_sources);
+    tcase_add_test(tc_core, test_client_lighting_local_level_viewer_runner_up);
+    tcase_add_test(tc_core, test_client_lighting_local_level_viewer_opposed_tile);
+    tcase_add_test(tc_core, test_client_lighting_local_level_viewer_darkness);
     tcase_add_test(tc_core, test_client_lighting_local_level_hides_translation_within_block);
     tcase_add_test(tc_core, test_client_lighting_local_level_keeps_darkness_sign);
     tcase_add_test(tc_core, test_client_lighting_withholds_other_players_emitters);
