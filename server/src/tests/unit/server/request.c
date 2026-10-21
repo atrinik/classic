@@ -4611,6 +4611,91 @@ static bool closure_site_matches(mapstruct *map, int x, int y, closure_site site
     return false;
 }
 
+/* A covered wall boundary stands on its own floor: the Inn in the Mountains'
+ * ground-floor front wall, covered by two storeys and a roof, is sent with
+ * its z50 floor, and no covered cell without a wall discloses its floor. */
+START_TEST(test_covered_wall_boundary_sends_its_floor) {
+    mapstruct *old_map;
+    object *pl;
+    check_setup_env_pl(&old_map, &pl);
+    mapstruct *map = ready_map_name("/shattered_islands/world_7_64", NULL, MAP_NO_DYNAMIC);
+    ck_assert_ptr_nonnull(map);
+    for (mapstruct *upper = map; upper->tile_path[TILED_UP] != NULL;) {
+        upper = get_map_from_tiled(upper, TILED_UP);
+        ck_assert_ptr_nonnull(upper);
+    }
+    request_move_player(&pl, map, 17, 19);
+    socket_struct *cs = CONTR(pl)->cs;
+    socket_buffer_clear(cs);
+    draw_client_map(pl);
+    ck_assert_uint_gt(validate_queued_map_payloads(cs), 0);
+
+    for (int x = 6; x <= 23; x++) {
+        int ax = x - pl->x + cs->mapx_2, ay = 16 - pl->y + cs->mapy_2;
+        ck_assert_int_eq(CONTR(pl)->camera_visibility[MAP2_DEPTH_INDEX(0)][ax][ay],
+                         LOS_CAMERA_WALL_BOUNDARY);
+        object *floor = GET_MAP_SPACE_LAYER(GET_MAP_SPACE_PTR(map, x, 16), LAYER_FLOOR, 0);
+        ck_assert_ptr_nonnull(floor);
+        ck_assert_int_eq(floor->z, 50);
+        MapCell *cell = map_client_cache_cell(&cs->lastmap, 0, ax, ay, false);
+        ck_assert_ptr_nonnull(cell);
+        ck_assert_msg(cell->faces[LAYER_FLOOR - 1] != 0, "no floor sent at %d,16", x);
+        ck_assert_msg(cell->faces[LAYER_WALL - 1] != 0, "no wall sent at %d,16", x);
+    }
+
+    size_t covered = 0;
+    for (int depth = 0; depth <= MAP2_MAX_DEPTH; depth++) {
+        for (int ax = 0; ax < cs->mapx; ax++) {
+            for (int ay = 0; ay < cs->mapy; ay++) {
+                if (CONTR(pl)->camera_visibility[MAP2_DEPTH_INDEX(depth)][ax][ay] !=
+                    LOS_CAMERA_WALL_BOUNDARY) {
+                    continue;
+                }
+                spatial_cell resolved;
+                if (!spatial_resolve(pl->map,
+                                     pl->x + ax - cs->mapx_2,
+                                     pl->y + ay - cs->mapy_2,
+                                     depth,
+                                     &resolved)) {
+                    continue;
+                }
+                MapSpace *space = GET_MAP_SPACE_PTR(resolved.map, resolved.x, resolved.y);
+                bool wall = false;
+                for (int sub_layer = 0; sub_layer < NUM_SUB_LAYERS; sub_layer++) {
+                    wall |= GET_MAP_SPACE_LAYER(space, LAYER_WALL, sub_layer) != NULL;
+                }
+                MapCell *cell = map_client_cache_cell(&cs->lastmap, depth, ax, ay, false);
+                if (wall || cell == NULL) {
+                    continue;
+                }
+                covered++;
+                for (int sub_layer = 0; sub_layer < NUM_SUB_LAYERS; sub_layer++) {
+                    ck_assert_int_eq(cell->faces[NUM_LAYERS * sub_layer + LAYER_FLOOR - 1], 0);
+                    ck_assert_int_eq(cell->faces[NUM_LAYERS * sub_layer + LAYER_FMASK - 1], 0);
+                }
+            }
+        }
+    }
+    fprintf(stderr, "covered wall-less boundary cells checked: %zu\n", covered);
+
+    /* Only a wall this viewer is shown authorizes its floor: an invisible
+     * wall withdraws both, so the floor is no oracle for hidden structure. */
+    object *wall = GET_MAP_SPACE_LAYER(GET_MAP_SPACE_PTR(map, 10, 16), LAYER_WALL, 0);
+    ck_assert_ptr_nonnull(wall);
+    ck_assert(!QUERY_FLAG(pl, FLAG_SEE_INVISIBLE));
+    SET_FLAG(wall, FLAG_IS_INVISIBLE);
+    CONTR(pl)->update_los = 1;
+    socket_buffer_clear(cs);
+    draw_client_map(pl);
+    ck_assert_uint_gt(validate_queued_map_payloads(cs), 0);
+    int ax = 10 - pl->x + cs->mapx_2, ay = 16 - pl->y + cs->mapy_2;
+    MapCell *hidden = map_client_cache_cell(&cs->lastmap, 0, ax, ay, false);
+    ck_assert(hidden == NULL ||
+              (hidden->faces[LAYER_WALL - 1] == 0 && hidden->faces[LAYER_FLOOR - 1] == 0));
+    CLEAR_FLAG(wall, FLAG_IS_INVISIBLE);
+}
+END_TEST
+
 START_TEST(test_celestial_closure_matches_server_solver_in_brynknot) {
     static const char *const paths[] = {
         "/shattered_islands/world_0_67", "/shattered_islands/world_1_67",
@@ -5471,6 +5556,7 @@ static Suite *suite(void) {
     suite_add_tcase(s, tc_closure);
     tcase_add_test(tc_closure, test_celestial_closure_matches_server_solver_and_gameplay);
     tcase_add_test(tc_closure, test_celestial_closure_matches_server_solver_under_roofs);
+    tcase_add_test(tc_closure, test_covered_wall_boundary_sends_its_floor);
     tcase_add_test(tc_closure, test_celestial_closure_matches_server_solver_in_brynknot);
     tcase_add_test(tc_closure, test_celestial_closure_discloses_only_sent_structure);
     tcase_add_test(tc_closure, test_celestial_closure_omits_plugin_controlled_static_faces);
