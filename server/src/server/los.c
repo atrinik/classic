@@ -612,10 +612,15 @@ static bool camera_action_cell(object *pl, int ax, int ay, int depth, spatial_ce
  * Only surfaces connected by cardinal steps propagate; a wall can also belong
  * to the one-cell diagonal perimeter. No wall perimeter becomes a flood seed.
  * Most columns need no flood. The exceptional connected-component search is
- * bounded by the viewport, with each cell visited by the flood at most once per level. */
+ * bounded by the viewport, with each cell visited by the flood at most once per level.
+ * A sealed stack cuts every resolved upper cell away; `sealed` caches that
+ * test (-1 until first needed) so an open column never pays for it. */
 static bool camera_action_cutaway(object *pl, int ax, int ay, int depth,
-                                  const spatial_cell *target, bool sealed) {
-    if (sealed) {
+                                  const spatial_cell *target, int *sealed) {
+    if (*sealed < 0) {
+        *sealed = camera_sealed_stack(pl, NULL);
+    }
+    if (*sealed) {
         return true;
     }
     bool surface = camera_surface(target->map, target->x, target->y);
@@ -671,10 +676,10 @@ los_camera_visibility los_player_cell_camera(object *pl, mapstruct *map, int x, 
         return LOS_CAMERA_VISIBLE;
     }
     int ax = dx + CONTR(pl)->cs->mapx_2, ay = dy + CONTR(pl)->cs->mapy_2;
-    bool sealed = camera_sealed_stack(pl, NULL);
+    int sealed = -1;
     spatial_cell target;
     if (!camera_action_cell(pl, ax, ay, dz, &target) ||
-        (dz > 0 && camera_action_cutaway(pl, ax, ay, dz, &target, sealed))) {
+        (dz > 0 && camera_action_cutaway(pl, ax, ay, dz, &target, &sealed))) {
         return LOS_CAMERA_HIDDEN;
     }
     for (int z = 0; dz < 0 && z > dz; z--) {
@@ -690,7 +695,7 @@ los_camera_visibility los_player_cell_camera(object *pl, mapstruct *map, int x, 
         spatial_cell cell;
         if (camera_action_cell(pl, ax, ay, z, &cell)) {
             if (camera_surface(cell.map, cell.x, cell.y) &&
-                !camera_action_cutaway(pl, ax, ay, z, &cell, sealed)) {
+                !camera_action_cutaway(pl, ax, ay, z, &cell, &sealed)) {
                 return LOS_CAMERA_WALL_BOUNDARY;
             }
         } else {

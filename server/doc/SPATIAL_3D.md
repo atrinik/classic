@@ -109,6 +109,9 @@ possible overhead story, without a full viewport build or its column allocation.
 Only relevant covered cells (and a positive-depth target itself) need a fresh
 cutaway membership test. That test lazily searches the current cardinally
 connected surface component and its nonrecursive diagonal wall perimeter.
+The first such test in a query also resolves the player's own column, at most
+once and at most twelve stories, to find a sealed stack top; a sealed stack
+answers every later test without a flood.
 Open same-story columns require at most 25 default cell resolutions (31 for
 a downward query); bounded topology-resolver scratch remains unchanged. A pathological
 connected cutaway can still visit the viewport once per relevant overhead

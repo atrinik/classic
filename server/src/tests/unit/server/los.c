@@ -404,6 +404,32 @@ START_TEST(test_sealed_stack_cuts_away_disconnected_upper_islands) {
 }
 END_TEST
 
+START_TEST(test_linked_stack_fresh_camera_work_stays_bounded) {
+    static const uint8_t tops[] = {CELESTIAL_SKY_SEALED, CELESTIAL_SKY_OPEN};
+    for (size_t i = 0; i < arraysize(tops); i++) {
+        mapstruct *map;
+        object *pl;
+        mapstruct *upper = enclosed_fixture(&map, &pl, tops[i]);
+        place(upper, "water_still", 14, 12);
+        /* An open same-story column needs no stack test or flood. */
+        uint64_t cells = los_action_camera_cells_for_test();
+        uint64_t floods = los_action_camera_flood_cells_for_test();
+        los_player_cell_camera(pl, map, 15, 15);
+        ck_assert_uint_le(los_action_camera_cells_for_test() - cells, 25);
+        ck_assert_uint_eq(los_action_camera_flood_cells_for_test(), floods);
+        /* A covered column tests the player's own stack at most once. */
+        cells = los_action_camera_cells_for_test();
+        los_player_cell_camera(pl, map, 14, 12);
+        ck_assert_uint_le(los_action_camera_cells_for_test() - cells,
+                          25 + (tops[i] == CELESTIAL_SKY_SEALED ? 1 : 2));
+        if (tops[i] == CELESTIAL_SKY_SEALED) {
+            /* A sealed stack never needs the connected-component search. */
+            ck_assert_uint_eq(los_action_camera_flood_cells_for_test(), floods);
+        }
+    }
+}
+END_TEST
+
 START_TEST(test_open_or_unresolved_stack_keeps_connected_cutaway) {
     static const uint8_t tops[] = {CELESTIAL_SKY_OPEN, CELESTIAL_SKY_UNSET,
                                    CELESTIAL_SKY_LINKED /* link never resolves */};
@@ -684,6 +710,7 @@ static Suite *suite(void) {
     tcase_add_test(tc, test_sealed_stack_cuts_away_upper_story_under_floor_gap);
     tcase_add_test(tc, test_sealed_stack_cuts_away_disconnected_upper_islands);
     tcase_add_test(tc, test_open_or_unresolved_stack_keeps_connected_cutaway);
+    tcase_add_test(tc, test_linked_stack_fresh_camera_work_stays_bounded);
     tcase_add_test(tc, test_zero_volume_proofs_skip_empty_rays_and_respect_current_slabs);
     tcase_add_test(tc, test_zero_volume_proof_matches_supercover_in_varied_blocked_scenes);
     return s;
