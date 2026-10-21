@@ -257,6 +257,8 @@ static void camera_destroy(los_camera_view *view) {
  * above such an enclosed stack, so the camera cuts away every resolved story
  * above the player instead of only the surfaces connected to its centre.
  * An unresolved link or an over-tall stack is not proven enclosed. */
+static bool camera_action_cell(object *pl, int ax, int ay, int depth, spatial_cell *cell);
+
 static bool camera_sealed_stack(object *pl, los_camera_view *view) {
     socket_struct *cs = CONTR(pl)->cs;
     const mapstruct *top = pl->map;
@@ -264,7 +266,7 @@ static bool camera_sealed_stack(object *pl, los_camera_view *view) {
         spatial_cell cell;
         if (depth > LOS_OVERHEAD_LEVELS ||
             !(view != NULL ? view_cell(view, cs->mapx_2, cs->mapy_2, depth, &cell)
-                           : spatial_resolve(pl->map, pl->x, pl->y, depth, &cell))) {
+                           : camera_action_cell(pl, cs->mapx_2, cs->mapy_2, depth, &cell))) {
             return false;
         }
         top = cell.map;
