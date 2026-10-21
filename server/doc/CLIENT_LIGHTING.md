@@ -62,7 +62,13 @@ on the GPU. The server sends:
    its peak and move only when the viewer crosses a block edge, trailing a
    moving viewer by up to two tiles. Every other source stays pooled,
    including other players' light, and the viewer learns nothing that
-   unequipping its own light would not show.
+   unequipping its own light would not show. Each block keeps, per sign, its
+   strongest contribution with that contribution's source and the strongest of
+   any other source, so the viewer's level is read from the shared block entry
+   without another walk. When the viewer's own tile also holds light of the
+   opposite sign, the client groups the two into one emitter, so that tile's
+   viewer keeps the shared level: a level without the viewer would reverse the
+   grouped value.
 4. **Occluders of sent cells**: geometry bits plus quantized transmission of
    each cardinal face and the downward face, derived only from objects MAP2
    sends, and face bits from static seam structure between authorized cells
