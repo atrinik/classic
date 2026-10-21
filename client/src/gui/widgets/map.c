@@ -1125,6 +1125,10 @@ bool widget_map_transaction_abort_test(void) {
         int cache_height = map_height * MAP_FOW_SIZE;
         map_set_structural_support_height(0, 0, 50);
         map_cell_t *boundary = map_cell_store_slot(cells, middle_index, true);
+        /* Support alone projects linked structure; it is no ground. */
+        success =
+            success && map_cell_floor_height(MAP_STARTX, MAP_STARTY, boundary, 0, true) == 0 &&
+            map_cell_stretch_height(MAP_STARTX, MAP_STARTY, cache_width, cache_height, 0, 50) == 0;
         map_cell_layer_record(boundary, GET_MAP_LAYER(LAYER_WALL, 0), true)->face = 3;
         success =
             success && map_cell_floor_height(MAP_STARTX, MAP_STARTY, boundary, 0, true) == 50 &&
@@ -1138,8 +1142,24 @@ bool widget_map_transaction_abort_test(void) {
         success = success &&
                   map_cell_floor_height(MAP_STARTX, MAP_STARTY, boundary, 1, true) == 12 &&
                   map_cell_floor_height(MAP_STARTX, MAP_STARTY, boundary, 0, true) == 0;
-        map_cell_store_clear_slot(cells, middle_index);
+        floor->face = 0;
+        floor->height = 0;
+
+        /* Hard-clearing the standing wall restretches the floor beside it. */
+        map_cell_t *neighbor = map_cell_store_slot(cells, middle_index + 1, true);
+        map_cell_layer_record(neighbor, GET_MAP_LAYER(LAYER_FLOOR, 0), true)->face = 5;
+        neighbor->stretch_dirty = 0;
+        map_clear_cell(0, 0, true);
+        success = success && neighbor->stretch_dirty != 0;
+        for (int dy = -1; dy <= 1; dy++) {
+            for (int dx = -1; dx <= 1; dx++) {
+                map_cell_store_clear_slot(
+                    cells,
+                    (size_t)((ptrdiff_t)middle_index + dy * cache_width + dx));
+            }
+        }
         map_set_structural_support_height(0, 0, 0);
+        map_cell_store_set_fow(cells, middle_index, false, false);
         success = success && map_cell_retained_bytes == initial_retained_bytes;
     }
 
@@ -2606,7 +2626,7 @@ void init_map_data(int xl, int yl, int px, int py) {
  * Floor elevation a cell's objects and light stand on.
  *
  * A covered wall boundary sends only its wall layer, so its floor is never
- * drawn, yet its wall stands on that floor. A base-level cell without any
+ * drawn, yet its wall stands on that floor. A base-level wall cell without any
  * floor record uses the structural support height the server sends for every
  * base cell. At zero, the wall would sink below the raised ground in front of
  * it, which then paints over it, and its light quads would fold under that
@@ -2619,10 +2639,17 @@ map_cell_floor_height(int x, int y, const map_cell_t *cell, uint8_t sub_layer, b
     if (floor->face != 0 || !base_level) {
         return floor->height;
     }
+    bool wall = false;
     for (uint8_t other = 0; other < NUM_SUB_LAYERS; other++) {
         if (map_cell_layer_record_read(cell, GET_MAP_LAYER(LAYER_FLOOR, other))->face != 0) {
             return floor->height;
         }
+        wall |= map_cell_layer_record_read(cell, GET_MAP_LAYER(LAYER_WALL, other))->face != 0;
+    }
+    /* Support alone, as for a never-seen cell under linked structure,
+     * projects that structure but is no ground to stand on. */
+    if (!wall) {
+        return floor->height;
     }
 
     map_cell_store_t *base_cells = level_cells[MAP2_DEPTH_INDEX(0)];
@@ -3224,10 +3251,17 @@ void map_set_data(int x,
     int object_layer = (layer % NUM_LAYERS) + 1;
     const map_cell_layer_record_t *old_layer = map_cell_layer_record_read(cell, layer);
     map_cell_layer_record_t old_presentation = *old_layer;
+    /* A base-level wall decides whether a floorless cell stands on its
+     * support height (map_cell_floor_height()). */
+    bool standing_wall_changed = object_layer == LAYER_WALL &&
+                                 current_level_index == MAP2_DEPTH_INDEX(0) &&
+                                 (old_layer->face != 0) != (face != 0);
     bool stretch_geometry_changed =
-        object_layer == LAYER_FLOOR && (old_layer->face != face || old_layer->height != height);
+        (object_layer == LAYER_FLOOR && (old_layer->face != face || old_layer->height != height)) ||
+        standing_wall_changed;
     bool lighting_geometry_changed =
-        object_layer == LAYER_FLOOR && (old_layer->face != face || old_layer->height != height);
+        (object_layer == LAYER_FLOOR && (old_layer->face != face || old_layer->height != height)) ||
+        standing_wall_changed;
     bool render_height_changed = (object_layer == LAYER_FLOOR || object_layer == LAYER_EFFECT) &&
                                  old_layer->height != height;
     map_cell_layer_record_t *layer_record = map_cell_layer_record(cell, layer, true);
@@ -3650,10 +3684,16 @@ void map_clear_cell(int x, int y, bool hard) {
 
     if (hard) {
         bool had_floor_geometry = false;
+        bool had_wall_geometry = false;
         for (int sub_layer = 0; sub_layer < NUM_SUB_LAYERS; sub_layer++) {
             had_floor_geometry |=
                 map_cell_layer_record_read(cell, GET_MAP_LAYER(LAYER_FLOOR, sub_layer))->face != 0;
+            had_wall_geometry |=
+                map_cell_layer_record_read(cell, GET_MAP_LAYER(LAYER_WALL, sub_layer))->face != 0;
         }
+        /* A floorless wall stood its neighbors' stretch on its support height. */
+        had_floor_geometry |= had_wall_geometry && current_level_index == MAP2_DEPTH_INDEX(0) &&
+                              cells->headers[index].support_height != 0;
 
         map_cell_store_clear_slot(cells, index);
         map_cell_store_set_support_height(cells, index, 0);
