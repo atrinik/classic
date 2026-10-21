@@ -173,10 +173,15 @@ typedef struct map_cell {
     uint8_t fow;
     uint8_t structural_fow;
     uint8_t stretch_dirty;
+    /** Whether remembered_tick times a live-to-remembered light fade. */
+    uint8_t remembered_fade;
     int16_t stretch_top_height;
     int16_t stretch_upper_height;
     int16_t level_support_height;
     int16_t render_max_height;
+    /** Presentation-only LastTick at which a soft clear took this live cell
+     * out of sight, for the remembered-light fade. */
+    uint32_t remembered_tick;
 } map_cell_t;
 
 /** Provenance retained independently of compact light records. */
@@ -245,6 +250,29 @@ static uint64_t level_lighting_revision[MAP2_LEVELS];
  * matching a field built from other cells. */
 static uint64_t level_emitter_revision[MAP2_LEVELS];
 static uint64_t level_emitter_clock;
+
+/* Live-to-remembered light fades run from one shared start window: while any
+ * may still be in progress, a frame at a new tick relights the map. The
+ * publication that started a fade redraws it at progress zero, so an unmoved
+ * clock never relights (and retained frames stay reusable). */
+static bool map_remembered_fade_active;
+static uint32_t map_remembered_fade_started;
+static uint32_t map_remembered_fade_presented;
+
+static void map_remembered_fade_begin(void) {
+    map_remembered_fade_active = true;
+    map_remembered_fade_started = LastTick;
+    map_remembered_fade_presented = LastTick;
+}
+
+/** Progress of a remembered cell toward its dimmed look: full unless a soft
+ * clear took it out of sight within the fade duration. */
+static uint16_t map_cell_remembered_progress(const map_cell_t *cell) {
+    if (cell == NULL || !cell->remembered_fade) {
+        return MAP_VISIBILITY_FIELD_UNIT;
+    }
+    return map_visibility_remembered_progress(LastTick - cell->remembered_tick);
+}
 
 static void map_emitter_revision_bump(size_t level) {
     level_emitter_revision[level] = ++level_emitter_clock;
@@ -791,6 +819,8 @@ static map_cell_t *map_cell_clone(const map_cell_t *source) {
     clone->stretch_upper_height = source->stretch_upper_height;
     clone->level_support_height = source->level_support_height;
     clone->render_max_height = source->render_max_height;
+    clone->remembered_fade = source->remembered_fade;
+    clone->remembered_tick = source->remembered_tick;
 
     for (const map_cell_layer_record_t *record = source->layers; record != NULL;
          record = record->next) {
@@ -3587,13 +3617,20 @@ void map_clear_cell(int x, int y, bool hard) {
         return;
     }
 
+    bool left_sight = cells->headers[index].fow == 0;
     map_clear_live_cell(cell);
     /* A remembered tile keeps its base radiance: its coarse level keeps
-     * arriving and composes onto it in fog. */
+     * arriving and composes onto it in fog, presented dimmed. A tile that
+     * was live until now fades into that look instead of snapping. */
+    if (left_sight) {
+        cell->remembered_fade = 1;
+        cell->remembered_tick = LastTick;
+        map_remembered_fade_begin();
+    }
     map_cell_store_set_fow(cells, index, true, false);
     map_cell_store_trim_slot(cells, index);
 
-    if (had_known_light) {
+    if (had_known_light || left_sight) {
         level_lighting_revision[current_level_index]++;
     }
 }
@@ -4263,6 +4300,11 @@ void map_animate(void) {
                 bool cell_changed = map_animate_visibility(cell);
 
                 if (cell->fow) {
+                    /* A finished fade must not return when the tick wraps. */
+                    if (cell->remembered_fade &&
+                        LastTick - cell->remembered_tick >= MAP_VISIBILITY_FADE_DURATION_MS) {
+                        cell->remembered_fade = 0;
+                    }
                     map_cell_store_trim_slot(cells, physical_index);
                     if (cell_changed) {
                         map_cell_presentation_changed(physical_index);
@@ -4733,11 +4775,12 @@ static uint16_t map_remembered_discrete_radiance(int x,
                                                  uint16_t composed) {
     const map_cell_light_record_t *light = map_cell_light_record_read(cell, sub_layer);
     uint16_t radiance = composed;
+    uint16_t rgb[3] = {composed, composed, composed};
     if (!light->known) {
-        uint16_t rgb[3];
         map_lighting_radiance(x, y, cell, sub_layer, &radiance, rgb);
     }
-    return map_visibility_memory_floor(radiance);
+    map_visibility_apply_remembered(&radiance, rgb, map_cell_remembered_progress(cell));
+    return radiance;
 }
 
 static void draw_map_object(SDL_Surface *surface, map_render_data_t *data) {
@@ -6021,8 +6064,28 @@ static bool map_flicker_level(size_t level) {
            (map_level_mask & (UINT16_C(1) << level));
 }
 
+/** Relight while a live-to-remembered fade is in progress, then once more at
+ * its end so the final dimmed look is presented. */
+static void map_remembered_fade_update(void) {
+    if (!map_remembered_fade_active || LastTick == map_remembered_fade_presented) {
+        return;
+    }
+    map_remembered_fade_presented = LastTick;
+    if (LastTick - map_remembered_fade_started >= MAP_VISIBILITY_FADE_DURATION_MS) {
+        map_remembered_fade_active = false;
+    }
+    /* A retained smooth frame rebuilds its light grid, so the fade stays on
+     * the animation path; discrete darkness lives in the compiled commands. */
+    map_redraw_request(map_lighting_is_smooth() ? MAP_REDRAW_REASON_ANIMATION
+                                                : MAP_REDRAW_REASON_LIGHTING);
+    /* A dynamic minimap retains its own target: fade it with the map. A
+     * region map shows no remembered light. */
+    minimap_dynamic_redraw_request();
+}
+
 /** Relight levels whose emitter field flickers; flicker needs no server traffic. */
 static void map_flicker_lighting_update(void) {
+    map_remembered_fade_update();
     bool flickering = false;
     for (size_t level = 0; level < MAP2_LEVELS && !flickering; level++) {
         flickering = map_flicker_level(level);
@@ -6049,11 +6112,17 @@ static void map_flicker_lighting_update(void) {
 /**
  * A redraw requested while drawing is consumed with that frame, so a static
  * scene would only advance flicker on the 125 ms animation tick: after a
- * presented frame, request the next one while a shown level flickers.
+ * presented frame, request the next one while a shown level flickers or a
+ * remembered-light fade is in progress.
  */
 static void map_flicker_carry_forward(void) {
     if (map_flicker_carry) {
         map_redraw_request(MAP_REDRAW_REASON_LIGHTING);
+    } else if (map_remembered_fade_active) {
+        /* Carried from the fade's first frame on. The next frame's fade update
+         * runs before it decides whether to reuse retained lighting, so it
+         * relights once the tick has moved and never on an unmoved clock. */
+        map_redraw_request(MAP_REDRAW_REASON_ANIMATION);
     }
 }
 
@@ -6521,6 +6590,13 @@ bool map_lighting_diagnostic_get(int depth,
         }
     }
 
+    /* As map_lighting_vertex(): remembered geometry shows dimmed light. */
+    if (diagnostic->working_available && diagnostic->remembered) {
+        map_visibility_apply_remembered(&diagnostic->working_scalar,
+                                        diagnostic->working_rgb,
+                                        map_cell_remembered_progress(cell));
+    }
+
     if (diagnostic->working_available && smooth_lighting) {
         map_visibility_apply_window_fade(x,
                                          y,
@@ -6930,6 +7006,8 @@ bool widget_map_temporal_lighting_test(void) {
     map_cell_light_record_t *historical = map_cell_light_record(remembered, 0, true);
     historical->radiance = UINT16_MAX;
     historical->known = 1;
+    /* The tile is live until this soft clear takes it out of sight. */
+    map_cell_store_set_fow(cells, map_cache_physical_index(MAP_STARTX, MAP_STARTY), false, false);
     map_clear_cell(0, 0, false);
     /* A remembered tile keeps its base radiance in fog. */
     success = success && historical->radiance == UINT16_MAX && historical->known;
@@ -6950,6 +7028,34 @@ bool widget_map_temporal_lighting_test(void) {
                   MAP_VISIBILITY_MEMORY_FLOOR_RADIANCE &&
               historical->radiance == UINT16_MAX;
     light->known = 1;
+
+    /* Those checks ran at the soft clear's own tick, so the cell still showed
+     * its live light. The remembered look is reached over the fade: half way,
+     * then a capped, scaled daylight sample. */
+    const uint32_t saved_tick = LastTick;
+    uint32_t stamped = remembered->remembered_tick;
+    success = success && remembered->remembered_fade && stamped == saved_tick &&
+              map_remembered_fade_active;
+    historical->known = 1;
+    historical->radiance = 2048;
+    LastTick = stamped + MAP_VISIBILITY_FADE_DURATION_MS / 2U;
+    uint16_t dimmed = map_remembered_discrete_radiance(MAP_STARTX, MAP_STARTY, remembered, 0, 2048);
+    success = success && dimmed == 1120;
+    LastTick = stamped + MAP_VISIBILITY_FADE_DURATION_MS;
+    dimmed = map_remembered_discrete_radiance(MAP_STARTX, MAP_STARTY, remembered, 0, 2048);
+    success = success && dimmed == MAP_VISIBILITY_MEMORY_CAP_RADIANCE;
+    /* Clearing an already remembered cell does not restart its fade. */
+    map_clear_cell(0, 0, false);
+    success = success && remembered->remembered_tick == stamped;
+    /* A cell that never left sight in this cache shows the dimmed look. */
+    remembered->remembered_fade = 0;
+    LastTick = stamped;
+    dimmed = map_remembered_discrete_radiance(MAP_STARTX, MAP_STARTY, remembered, 0, 2048);
+    success = success && dimmed == MAP_VISIBILITY_MEMORY_CAP_RADIANCE;
+    LastTick = saved_tick;
+    map_remembered_fade_active = false;
+    historical->known = 0;
+    historical->radiance = UINT16_MAX;
 
     uint64_t revision = level_lighting_revision[current_level_index];
     map_temporal_lighting_bucket = UINT64_MAX;
@@ -6972,6 +7078,13 @@ bool widget_map_temporal_lighting_test(void) {
     MapData.light_keyframe_flags = saved_flags;
     MapData.light_keyframe_valid = saved_valid;
     return success;
+}
+
+/** Whether a fade update relit the map on the path its lighting mode needs:
+ * smooth frames stay animation-only, discrete darkness needs a full redraw. */
+static bool map_remembered_fade_relit(void) {
+    return map_lighting_is_smooth() ? map_animation_redraw_due() && !map_redraw_due()
+                                    : map_redraw_due();
 }
 
 /** Verify protocol 1085 emitter, coarse local light and occluder state. */
@@ -7274,6 +7387,36 @@ bool widget_map_client_lighting_state_test(void) {
               stored[0] == 500 && stored[3] == 600;
     map_clear_cell(10, 8, true);
     success = success && !map_celestial_field(celestial_depth, 10, 8, false, stored);
+    /* The soft clears above took live cells out of sight, which started a
+     * live-to-remembered fade: it relights every frame until its duration
+     * has passed, then once more to present the final dimmed look. */
+    const uint32_t fade_tick = LastTick;
+    success = success && map_remembered_fade_active;
+    /* Its first frame carries the next one forward without relighting the
+     * unmoved clock; that frame relights once the tick moves. */
+    bool saved_flicker_carry = map_flicker_carry;
+    map_flicker_carry = false;
+    map_redraw_consume();
+    map_flicker_carry_forward();
+    map_remembered_fade_update();
+    success = success && map_animation_redraw_due() && !map_redraw_due();
+    map_flicker_carry = saved_flicker_carry;
+    LastTick = fade_tick + 1;
+    map_redraw_consume();
+    map_remembered_fade_update();
+    success = success && map_remembered_fade_relit();
+    LastTick = fade_tick + MAP_VISIBILITY_FADE_DURATION_MS - 1;
+    map_redraw_consume();
+    map_remembered_fade_update();
+    success = success && map_remembered_fade_relit() && map_remembered_fade_active;
+    LastTick = fade_tick + MAP_VISIBILITY_FADE_DURATION_MS;
+    map_redraw_consume();
+    map_remembered_fade_update();
+    success = success && map_remembered_fade_relit() && !map_remembered_fade_active;
+    map_redraw_consume();
+    map_remembered_fade_update();
+    success = success && !map_redraw_due() && !map_animation_redraw_due();
+    LastTick = fade_tick;
     /* A frame drawn while a shown level flickers requests the next one,
      * although the draw consumed the request its own update raised. */
     map_client_lighting_field_t *flicker_field = &map_client_lighting_fields[current_level_index];
@@ -7944,7 +8087,7 @@ map_lighting_vertex(SDL_Surface *surface, const map_render_data_t *data, int x, 
     uint16_t rgb[3];
     map_lighting_radiance(x, y, cell, sub_layer, &vertex.scalar, rgb);
     if (cell->fow && map_cell_has_remembered_geometry(cell)) {
-        map_visibility_apply_memory_floor(&vertex.scalar, rgb);
+        map_visibility_apply_remembered(&vertex.scalar, rgb, map_cell_remembered_progress(cell));
     } else if (data->primary_level && data->depth == 0 && !cell->fow) {
         uint16_t weight = map_visibility_field_weight(x - data->midx, y - data->midy);
         vertex.scalar = map_visibility_add_player_radiance(vertex.scalar, weight);
