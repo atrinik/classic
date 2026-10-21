@@ -6074,9 +6074,13 @@ static void map_remembered_fade_update(void) {
     if (LastTick - map_remembered_fade_started >= MAP_VISIBILITY_FADE_DURATION_MS) {
         map_remembered_fade_active = false;
     }
-    map_redraw_request(MAP_REDRAW_REASON_LIGHTING);
-    /* A dynamic minimap retains its own target: fade it with the map. */
-    minimap_redraw_request();
+    /* A retained smooth frame rebuilds its light grid, so the fade stays on
+     * the animation path; discrete darkness lives in the compiled commands. */
+    map_redraw_request(map_lighting_is_smooth() ? MAP_REDRAW_REASON_ANIMATION
+                                                : MAP_REDRAW_REASON_LIGHTING);
+    /* A dynamic minimap retains its own target: fade it with the map. A
+     * region map shows no remembered light. */
+    minimap_dynamic_redraw_request();
 }
 
 /** Relight levels whose emitter field flickers; flicker needs no server traffic. */
@@ -7076,6 +7080,13 @@ bool widget_map_temporal_lighting_test(void) {
     return success;
 }
 
+/** Whether a fade update relit the map on the path its lighting mode needs:
+ * smooth frames stay animation-only, discrete darkness needs a full redraw. */
+static bool map_remembered_fade_relit(void) {
+    return map_lighting_is_smooth() ? map_animation_redraw_due() && !map_redraw_due()
+                                    : map_redraw_due();
+}
+
 /** Verify protocol 1085 emitter, coarse local light and occluder state. */
 bool widget_map_client_lighting_state_test(void) {
     for (size_t level = 0; level < arraysize(level_cells); level++) {
@@ -7386,27 +7397,25 @@ bool widget_map_client_lighting_state_test(void) {
     bool saved_flicker_carry = map_flicker_carry;
     map_flicker_carry = false;
     map_redraw_consume();
-    minimap_redraw_flag = 0;
     map_flicker_carry_forward();
     map_remembered_fade_update();
-    success =
-        success && map_animation_redraw_due() && !map_redraw_due() && minimap_redraw_flag == 0;
+    success = success && map_animation_redraw_due() && !map_redraw_due();
     map_flicker_carry = saved_flicker_carry;
     LastTick = fade_tick + 1;
     map_redraw_consume();
     map_remembered_fade_update();
-    success = success && map_redraw_due() && minimap_redraw_flag != 0;
+    success = success && map_remembered_fade_relit();
     LastTick = fade_tick + MAP_VISIBILITY_FADE_DURATION_MS - 1;
     map_redraw_consume();
     map_remembered_fade_update();
-    success = success && map_redraw_due() && map_remembered_fade_active;
+    success = success && map_remembered_fade_relit() && map_remembered_fade_active;
     LastTick = fade_tick + MAP_VISIBILITY_FADE_DURATION_MS;
     map_redraw_consume();
     map_remembered_fade_update();
-    success = success && map_redraw_due() && !map_remembered_fade_active;
+    success = success && map_remembered_fade_relit() && !map_remembered_fade_active;
     map_redraw_consume();
     map_remembered_fade_update();
-    success = success && !map_redraw_due();
+    success = success && !map_redraw_due() && !map_animation_redraw_due();
     LastTick = fade_tick;
     /* A frame drawn while a shown level flickers requests the next one,
      * although the draw consumed the request its own update raised. */

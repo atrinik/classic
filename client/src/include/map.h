@@ -744,6 +744,8 @@ extern bool minimap_redraw_due(void);
 extern void minimap_redraw_force(void);
 /** Request a minimap redraw at its normal throttle. */
 extern void minimap_redraw_request(void);
+/** As minimap_redraw_request(), only when the minimap shows the dynamic world view. */
+extern void minimap_dynamic_redraw_request(void);
 /** Hide any retained minimap from a superseded map/session generation. */
 extern void minimap_invalidate_map_generation(void);
 
