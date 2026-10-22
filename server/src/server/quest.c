@@ -475,6 +475,10 @@ static void quest_object_handle(object *op, object *quest, object *quest_pl) {
             quest_check_item(op, quest, quest_pl, item);
             break;
 
+        case QUEST_TYPE_SPECIAL:
+            /* Scripts handle special quests, through the trigger event above. */
+            break;
+
         default:
             LOG(BUG, "Quest '%s' has unknown sub type: %d", quest->name, quest->sub_type);
             break;
