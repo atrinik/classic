@@ -253,6 +253,25 @@ static void camera_destroy(los_camera_view *view) {
     free(view->proof);
 }
 
+/** Whether the loaded vertical chain through `map` ends in a sealed top. Rock,
+ * not sky, lies above such an enclosed stack. A link that is not loaded or an
+ * over-tall chain is not proven enclosed. This reads loaded links only and
+ * performs no resolution.
+ *
+ * When the player stands in an enclosed stack, the camera cuts away every
+ * story above any column that is itself enclosed, instead of only the surfaces
+ * connected to the player's centre. Columns of open neighbouring stacks keep
+ * their cover and get no cutaway at all. */
+static bool camera_stack_sealed(const mapstruct *map) {
+    for (int level = 0; map != NULL && level < SPATIAL_STACK_LEVELS; level++) {
+        if (map->celestial_sky_above != CELESTIAL_SKY_LINKED) {
+            return map->celestial_sky_above == CELESTIAL_SKY_SEALED;
+        }
+        map = map->tile_map[TILED_UP];
+    }
+    return false;
+}
+
 /** Classify connected camera cutaways before casting any player sight rays. */
 static void camera_build(object *pl, los_camera_view *view, bool cache_cells) {
     socket_struct *cs = CONTR(pl)->cs;
@@ -268,6 +287,14 @@ static void camera_build(object *pl, los_camera_view *view, bool cache_cells) {
         view->columns = xcalloc((size_t)cs->mapx * cs->mapy, sizeof(*view->columns));
     }
 
+    /* Resolve (and so load) the player's own column before reading its links. */
+    for (int depth = 1; depth <= LOS_OVERHEAD_LEVELS; depth++) {
+        spatial_cell center;
+        if (!view_cell(view, cs->mapx_2, cs->mapy_2, depth, &center)) {
+            break;
+        }
+    }
+    bool sealed = camera_stack_sealed(pl->map);
     for (int depth = 1; depth <= LOS_OVERHEAD_LEVELS; depth++) {
         spatial_cell center;
         bool cut_center = view_cell(view, cs->mapx_2, cs->mapy_2, depth, &center) &&
@@ -294,7 +321,7 @@ static void camera_build(object *pl, los_camera_view *view, bool cache_cells) {
                 }
             }
         }
-        if (!cut_center) {
+        if (sealed || !cut_center) {
             continue;
         }
         bool (*cutaway)[MAP_CLIENT_Y] = view->cutaway[depth - 1];
@@ -336,6 +363,16 @@ static void camera_build(object *pl, los_camera_view *view, bool cache_cells) {
         for (int ax = 0; ax < cs->mapx; ax++) {
             for (int ay = 0; ay < cs->mapy; ay++) {
                 cutaway[ax][ay] |= boundary[ax][ay];
+            }
+        }
+    }
+    /* Every column's stack is resolved now, so its loaded links are final. */
+    for (int depth = 1; sealed && depth <= LOS_OVERHEAD_LEVELS; depth++) {
+        for (int ax = 0; ax < cs->mapx; ax++) {
+            for (int ay = 0; ay < cs->mapy; ay++) {
+                spatial_cell cell;
+                view->cutaway[depth - 1][ax][ay] = view_cell(view, ax, ay, depth, &cell) &&
+                                                   camera_stack_sealed(cell.map);
             }
         }
     }
@@ -589,9 +626,13 @@ static bool camera_action_cell(object *pl, int ax, int ay, int depth, spatial_ce
  * Only surfaces connected by cardinal steps propagate; a wall can also belong
  * to the one-cell diagonal perimeter. No wall perimeter becomes a flood seed.
  * Most columns need no flood. The exceptional connected-component search is
- * bounded by the viewport, with each cell visited by the flood at most once per level. */
+ * bounded by the viewport, with each cell visited by the flood at most once per level.
+ * A player in a sealed stack uses only the per-column sealed rule, no flood. */
 static bool camera_action_cutaway(object *pl, int ax, int ay, int depth,
                                   const spatial_cell *target) {
+    if (camera_stack_sealed(pl->map)) {
+        return camera_stack_sealed(target->map);
+    }
     bool surface = camera_surface(target->map, target->x, target->y);
     bool wall = camera_wall(target->map, target->x, target->y);
     if (!surface && !wall) {

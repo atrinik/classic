@@ -1882,7 +1882,14 @@ display the complete profile digest used for continuous-link validation.
 - Derive building cutaways from the stack, not authored flags. When the player
   is beneath an upper solid surface/roof, flood-fill that connected overhead
   component in the client viewport and omit it. Include the adjacent one-cell
-  wall boundary without recursively following unrelated wall chains. Send
+  wall boundary without recursively following unrelated wall chains. When the
+  player's own stack ends in a `sky_above sealed` map (an enclosed stack such
+  as a dungeon below another dungeon level), cut away every resolved upper cell
+  of each viewport column whose own stack also ends sealed, including empty and
+  wall-only cells, so floor gaps and disconnected islands on the level above
+  never show. Columns of an open neighbouring stack keep their cover and are not
+  cut. Links that are not loaded and open-sky player stacks keep the
+  connected-component rule. Send
   camera-occluded cells with `MAP2_MASK_HARD_CLEAR` so cached roofs/walls cannot
   reappear grey after re-entry. Fresh single-cell action checks use the same
   column and connectivity rules through a lazy bounded search; they neither
