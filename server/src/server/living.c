@@ -632,7 +632,6 @@ static void living_update_player_item(player *pl,
         pl->digestion += item->stats.food;
         pl->gen_sp += item->stats.sp;
         pl->gen_hp += item->stats.hp;
-        pl->gen_sp_armour += item->last_heal;
     }
 
     pl->item_power += item->item_power;
@@ -667,7 +666,6 @@ void living_update_player(object *op) {
     pl->digestion = 3;
     pl->gen_hp = 1;
     pl->gen_sp = 1;
-    pl->gen_sp_armour = 0;
     pl->item_power = 0;
     pl->quest_container = NULL;
     pl->dam_bonus = 0;
@@ -1583,19 +1581,6 @@ static int living_update_display(object *op, object *refop, player *refpl) {
                       op,
                       "You feel your mana regeneration "
                       "slowing down.");
-        }
-    }
-
-    if (pl->gen_sp_armour != refpl->gen_sp_armour) {
-        ret++;
-
-        if (pl->gen_sp_armour > refpl->gen_sp_armour) {
-            draw_info(COLOR_GRAY,
-                      op,
-                      "You feel the weight of your armour "
-                      "impairing your ability to concentrate on magic.");
-        } else {
-            draw_info(COLOR_WHITE, op, "You feel able to concentrate clearer.");
         }
     }
 

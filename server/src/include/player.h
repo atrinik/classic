@@ -282,9 +282,6 @@ struct pl_player {
     /** Any bonuses/penalties to digestion. */
     signed char digestion;
 
-    /** Penalty to sp regen from armour. */
-    signed char gen_sp_armour;
-
     /** Bonuses to regeneration speed of hp. */
     signed char gen_hp;
 
