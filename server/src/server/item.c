@@ -973,10 +973,6 @@ StringBuffer *object_get_description(const object *op, const object *caller, Str
                                                    ARMOUR_SPEED(op) / 10.0);
                     }
 
-                    if (ARMOUR_SPELLS(op) != 0) {
-                        stringbuffer_append_printf(sb, "(armour mana reg %d) ", -ARMOUR_SPELLS(op));
-                    }
-
                     /* Fall through */
 
                 case WEAPON:

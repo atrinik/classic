@@ -408,7 +408,6 @@ static player *get_player(player *p) {
 #endif
 
     p->target_hp = -1;
-    p->gen_sp_armour = 0;
     p->last_speed = -1;
     p->last_spell_cost_level = -1;
     p->last_target_level = -1;
@@ -774,7 +773,6 @@ static void player_do_some_living(object *op) {
     double gen_hp = (pl->gen_hp * (PLAYER_REGEN_HP_RATE / 20.0)) + (op->stats.maxhp / 4.0);
 
     double gen_sp = (pl->gen_sp * (PLAYER_REGEN_SP_RATE / 20.0)) + op->stats.maxsp;
-    gen_sp = gen_sp * 10 / MAX(pl->gen_sp_armour, 10);
 
     /* Update client's regen rates. */
     pl->gen_client_hp = get_regen_value(gen_hp, PLAYER_REGEN_HP_RATE);

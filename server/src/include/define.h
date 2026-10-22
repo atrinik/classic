@@ -2,7 +2,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -1376,7 +1376,6 @@
 #define DIRY(xyz) freearr_y[(xyz)->direction]
 
 #define ARMOUR_SPEED(xyz) (xyz)->last_sp
-#define ARMOUR_SPELLS(xyz) (xyz)->last_heal
 
 /**
  * @defgroup monster_movements Monster movements
