@@ -36,9 +36,14 @@ static struct {
     uint32_t error_status;
     uint32_t pressed[SDL_SCANCODE_COUNT];
     bool owned[SDL_SCANCODE_COUNT];
-    bool failed, pending, text_owner, blocked, batch_ime, attachment, bounds_valid;
+    bool failed, pending, text_owner, blocked, batch_ime, batch_composition, native_composing,
+        attachment, bounds_valid;
     int x, y, w, h;
 } pilot;
+
+/* Retired presses belong to the host event stream, not a particular widget.
+ * Keep them quarantined across /resetwidgets and periods with no pilot. */
+static bool retired_keys[SDL_SCANCODE_COUNT];
 
 static void cancel_world(void) {
     for (size_t i = 0; i < SDL_SCANCODE_COUNT; ++i) {
@@ -70,6 +75,7 @@ static bool state(twui_state *out) {
 
 static void native_barrier(void) {
     pilot.session_start = SDL_GetTicksNS();
+    pilot.native_composing = false;
     if (!SDL_StopTextInput(ScreenWindow) || !SDL_StartTextInput(ScreenWindow))
         fail_closed();
 }
@@ -138,8 +144,8 @@ void shared_chat_pilot_invalidate(void) {
 }
 
 static bool visible(void) {
-    return pilot.widget != NULL && pilot.widget->env == NULL && pilot.widget->show && !pilot.widget->hidden &&
-           cpl.state == ST_PLAY;
+    return pilot.widget != NULL && pilot.widget->env == NULL && pilot.widget->show &&
+           !pilot.widget->hidden && cpl.state == ST_PLAY;
 }
 
 void shared_chat_pilot_sync(void) {
@@ -322,6 +328,9 @@ static void destroy(widgetdata *widget) {
         SDL_DestroySurface(pilot.pixels);
     }
     bool was_owner = pilot.text_owner;
+    for (size_t i = 0; i < SDL_SCANCODE_COUNT; ++i) {
+        retired_keys[i] = retired_keys[i] || pilot.owned[i];
+    }
     memset(&pilot, 0, sizeof(pilot));
     if (was_owner) {
         (void)SDL_StopTextInput(ScreenWindow);
@@ -460,6 +469,15 @@ static void key_effect(const SDL_KeyboardEvent *event) {
 }
 
 bool shared_chat_pilot_event(SDL_Event *event) {
+    bool keyboard = event->type == SDL_EVENT_KEY_DOWN || event->type == SDL_EVENT_KEY_UP;
+    if (keyboard && event->key.scancode > SDL_SCANCODE_UNKNOWN &&
+        event->key.scancode < SDL_SCANCODE_COUNT && retired_keys[event->key.scancode]) {
+        keys[event->key.scancode].pressed = 0;
+        if (event->type == SDL_EVENT_KEY_UP) {
+            retired_keys[event->key.scancode] = false;
+        }
+        return true;
+    }
     if (pilot.widget == NULL)
         return false;
     shared_chat_pilot_sync();
@@ -483,7 +501,6 @@ bool shared_chat_pilot_event(SDL_Event *event) {
         default:
             break;
     }
-    bool keyboard = event->type == SDL_EVENT_KEY_DOWN || event->type == SDL_EVENT_KEY_UP;
     bool text_event = event->type == SDL_EVENT_TEXT_INPUT || event->type == SDL_EVENT_TEXT_EDITING;
     if (text_event && event->common.timestamp < pilot.session_start)
         return true;
@@ -514,15 +531,19 @@ bool shared_chat_pilot_event(SDL_Event *event) {
             return false;
         if (down && pilot.pressed[physical] == 0)
             pilot.pressed[physical] = key_value(event->key.key, event->key.mod);
+        uint32_t value = pilot.pressed[physical] ? pilot.pressed[physical]
+                                                 : key_value(event->key.key, event->key.mod);
         uint32_t consumed = 1;
         twui_status status =
             apply((twui_input){.kind = down ? TWUI_KEY_DOWN : TWUI_KEY_UP,
-                               .value = pilot.pressed[physical]
-                                            ? pilot.pressed[physical]
-                                            : key_value(event->key.key, event->key.mod),
+                               .value = value,
                                .physical_key = physical,
                                .key_repeat = down && event->key.repeat,
-                               .platform_composing = down && pilot.batch_ime},
+                               /* Ordinary text fences Enter only; other keys are
+                                * IME-owned only during an actual preedit session. */
+                               .platform_composing =
+                                   down && (pilot.native_composing || pilot.batch_composition ||
+                                            (value == TWUI_KEY_ENTER && pilot.batch_ime))},
                   &consumed);
         bool owned = was_owned || consumed != 0 || status != TWUI_OK;
         pilot.owned[physical] = down && owned;
@@ -541,6 +562,7 @@ bool shared_chat_pilot_event(SDL_Event *event) {
         const char *bytes =
             event->type == SDL_EVENT_TEXT_INPUT ? event->text.text : event->edit.text;
         size_t size = strnlen(bytes, PILOT_BYTES + 1);
+        pilot.native_composing = event->type == SDL_EVENT_TEXT_EDITING && size != 0;
         if (size <= PILOT_BYTES) {
             if (event->type == SDL_EVENT_TEXT_INPUT)
                 (void)text(TWUI_COMMIT, bytes, size, 0, 0);
@@ -604,12 +626,19 @@ bool shared_chat_pilot_poll(SDL_Event *event) {
     static SDL_Event batch[PILOT_BATCH];
     static char strings[PILOT_BATCH][PILOT_BYTES + 2];
     static unsigned int count, next;
+    /* Finish an already copied drain even if its widget was destroyed while
+     * dispatching the previous event. In particular, do not lose key releases. */
+    if (next < count) {
+        *event = batch[next++];
+        return true;
+    }
     if (pilot.widget == NULL)
         return SDL_PollEvent(event);
     if (next == count) {
         next = count = 0;
         twui_state current;
         pilot.batch_ime = !pilot.failed && state(&current) && current.preedit_bytes != 0;
+        pilot.batch_composition = pilot.batch_ime || pilot.native_composing;
         while (count < PILOT_BATCH && SDL_PollEvent(&batch[count])) {
             SDL_Event *item = &batch[count];
             const char *bytes = item->type == SDL_EVENT_TEXT_INPUT     ? item->text.text
@@ -624,6 +653,8 @@ bool shared_chat_pilot_poll(SDL_Event *event) {
                 else
                     item->edit.text = strings[count];
                 pilot.batch_ime = true;
+                if (item->type == SDL_EVENT_TEXT_EDITING)
+                    pilot.batch_composition = true;
             }
             ++count;
         }

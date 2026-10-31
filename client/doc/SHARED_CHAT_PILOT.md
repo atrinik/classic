@@ -50,8 +50,12 @@ they close, click the pilot to focus again.
 The host retains its single SDL window, event poller, GPU renderer and presenter.
 The adapter copies at most 256 native events per drain, bounds copied text to
 4096 bytes and fences both physical Enter keys on any text/composition activity
-in that drain. Control-epoch changes cancel held Classic movement and pointer
-gestures, even when the final shared state allows world input. Native text
+in that drain. Ordinary editing and clipboard keys remain usable alongside
+committed text; non-Enter keys are quarantined during actual native composition.
+Control-epoch changes cancel held Classic movement and pointer
+gestures, even when the final shared state allows world input. Host key
+quarantine survives widget/context destruction and reconstruction until matching
+key-up events arrive; a copied native drain also finishes after destruction. Native text
 sessions are restarted on ownership barriers; timestamps retire late text.
 Clipboard and visual movement additionally require shared physical-key effect
 permission. There is no implicit world hit from the embedded panel.
