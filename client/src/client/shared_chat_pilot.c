@@ -14,6 +14,7 @@
 #include <main.h>
 #include <player.h>
 #include <popup.h>
+#include <toolkit/memory.h>
 #include <video.h>
 #include <widget.h>
 #endif
