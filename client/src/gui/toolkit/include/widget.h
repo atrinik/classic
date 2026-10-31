@@ -472,6 +472,10 @@ extern int tooltip_need_redraw(void);
 extern widgetdata *cur_widget[TOTAL_SUBWIDGETS];
 
 extern widgetevent widget_mouse_event;
+/** Cancel gestures without completing a drag or firing a world action. */
+extern void widgets_cancel_pointer_gestures(void);
+/** True while an existing Classic chat/command input owns text. */
+extern bool widgets_text_input_active(void);
 
 extern int widget_id_from_name(const char *name);
 

@@ -86,6 +86,10 @@
   storage. Closing a popup cancels without joining; the main loop reaps finished
   jobs and metaserver teardown joins all workers before endpoint/toolkit cleanup.
   Retained workers share a bounded job budget, including cancelled requests.
+- The optional shared chat pilot owns one nonpersistent local-echo widget in
+  `shared_chat_pilot`; it has no network authority. Keep its build/runtime gates,
+  bounded input drain, control-epoch cancellation, exact whole-frame presentation
+  acknowledgment and native text ownership barriers. See `doc/SHARED_CHAT_PILOT.md`.
 - Capture privacy is owned by `capture_privacy`: private UI retention and frame
   composition deny new screenshots, video frames, and diagnostic captures until
   a successfully presented clean frame. UI close/reset and renderer recovery

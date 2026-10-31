@@ -29,6 +29,7 @@
  */
 
 #include <stdlib.h>
+#include <shared_chat_pilot.h>
 #include <mouse.h>
 #include <client.h>
 #include <event.h>
@@ -172,6 +173,8 @@ int Event_PollInputDevice(void) {
     static Uint32 Ticks = 0;
     static bool close_logged = false, quit_logged = false;
 
+    shared_chat_pilot_sync();
+
     /* Execute mouse actions, even if mouse button is being held. */
     if ((SDL_GetTicks() - Ticks > 125) || !Ticks) {
         if (cpl.state >= ST_PLAY && !live_movement_enabled()) {
@@ -185,7 +188,7 @@ int Event_PollInputDevice(void) {
         }
     }
 
-    while (SDL_PollEvent(&event)) {
+    while (shared_chat_pilot_poll(&event)) {
         if (live_movement_enabled() && live_movement_input_is_gameplay(event.type)) {
             continue;
         }
@@ -213,6 +216,10 @@ int Event_PollInputDevice(void) {
             keybind_movement_flush();
         } else if (event.type == SDL_EVENT_MOUSE_MOTION) {
             tooltip_dismiss();
+        }
+
+        if (shared_chat_pilot_event(&event)) {
+            continue;
         }
 
         if (event.type == SDL_EVENT_KEY_DOWN && event.key.key == SDLK_PRINTSCREEN) {
@@ -333,6 +340,7 @@ int Event_PollInputDevice(void) {
         }
     }
 
+    shared_chat_pilot_sync();
     if (!live_movement_enabled()) {
         keybind_state_ensure();
         keybind_movement_flush();

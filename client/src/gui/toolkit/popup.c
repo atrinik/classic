@@ -29,6 +29,7 @@
  * @author Zoey Rose
  */
 
+#include <shared_chat_pilot.h>
 #include <button.h>
 #include <event.h>
 #include <gpu_renderer.h>
@@ -116,6 +117,7 @@ popup_struct *popup_create(texture_struct *texture) {
     popup->selection_start = popup->selection_end = -1;
     popup->redraw = 1;
     popup->modal = 1;
+    shared_chat_pilot_sync();
 
     return popup;
 }
@@ -140,6 +142,7 @@ void popup_destroy(popup_struct *popup) {
     }
 
     DL_DELETE(popup_head, popup);
+    shared_chat_pilot_sync();
     SDL_DestroySurface(popup->surface);
 
     free(popup->buf);

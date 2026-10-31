@@ -33,6 +33,7 @@
 #include <animations.h>
 #include <book.h>
 #include <capture_privacy.h>
+#include <shared_chat_pilot.h>
 #include <access_resolver.h>
 #include <client.h>
 #include <client_celestial.h>
@@ -859,6 +860,7 @@ bool gpu_renderer_recovery_republish_test(void) {
 static bool gpu_renderer_recover_frame(unsigned int *attempts,
                                        const char *context,
                                        const gpu_renderer_recreation_diagnostic_t *consumed) {
+    shared_chat_pilot_invalidate();
     capture_privacy_block();
     HARD_ASSERT(attempts != NULL);
     HARD_ASSERT(context != NULL);
@@ -1448,6 +1450,7 @@ int main(int argc, char *argv[]) {
         }
         render_profiler_end(RENDER_PROFILE_GAME, profile_game_started);
 
+        shared_chat_pilot_sync();
         update = 0;
 
         if (window_is_active()) {
@@ -1548,6 +1551,7 @@ int main(int argc, char *argv[]) {
         bool frame_presented = false;
         if (update) {
             bool presented = gpu_renderer_present();
+            shared_chat_pilot_presented(presented);
             frame_presented = presented;
             capture_privacy_frame_end(presented);
             map_benchmark_statistics_present(presented);

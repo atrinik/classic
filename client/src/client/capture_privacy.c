@@ -5,6 +5,14 @@
 static bool blocked = true;
 static bool composing;
 static bool composition_sensitive;
+static bool shared_chat_retained;
+
+void capture_privacy_shared_chat_retained(bool retained) {
+    shared_chat_retained = retained;
+    if (retained) {
+        capture_privacy_block();
+    }
+}
 
 void capture_privacy_block(void) {
     blocked = true;
@@ -16,7 +24,7 @@ void capture_privacy_block(void) {
 void capture_privacy_frame_begin(bool sensitive_active) {
     blocked = true;
     composing = true;
-    composition_sensitive = sensitive_active;
+    composition_sensitive = sensitive_active || shared_chat_retained;
 }
 
 void capture_privacy_frame_end(bool presented) {
@@ -27,5 +35,5 @@ void capture_privacy_frame_end(bool presented) {
 }
 
 bool capture_privacy_allowed(bool sensitive_active) {
-    return !blocked && !composing && !sensitive_active;
+    return !blocked && !composing && !sensitive_active && !shared_chat_retained;
 }

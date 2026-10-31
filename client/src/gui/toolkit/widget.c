@@ -78,6 +78,7 @@
 #include <toolkit/string.h>
 #include <network_graph.h>
 #include <toolkit/path.h>
+#include <shared_chat_pilot.h>
 
 static widgetdata def_widget[TOTAL_SUBWIDGETS];
 static const char *const widget_names[TOTAL_SUBWIDGETS] = {"map",
@@ -149,6 +150,26 @@ static widgetresize widget_event_resize = {0, NULL, 0, 0};
  *
  */
 static int IsMouseExclusive = 0;
+
+bool widgets_text_input_active(void) {
+    for (widgetdata *widget = cur_widget[INPUT_ID]; widget != NULL; widget = widget->type_next) {
+        if (widget->show && !widget->hidden) return true;
+    }
+    for (widgetdata *widget = cur_widget[CHATWIN_ID]; widget != NULL; widget = widget->type_next) {
+        textwin_struct *chat = TEXTWIN(widget);
+        if (widget->show && !widget->hidden && chat != NULL && chat->tab_selected < chat->tabs_num &&
+            chat->tabs[chat->tab_selected].text_input.focus) return true;
+    }
+    return false;
+}
+
+void widgets_cancel_pointer_gestures(void) {
+    IsMouseExclusive = 0;
+    memset(&widget_mouse_event, 0, sizeof(widget_mouse_event));
+    memset(&widget_event_move, 0, sizeof(widget_event_move));
+    memset(&widget_event_resize, 0, sizeof(widget_event_resize));
+}
+
 static bool widget_fixture_read_only;
 
 #ifdef ATRINIK_WIDGET_TESTS
@@ -375,6 +396,7 @@ static void toolkit_widget_init_from(const char *interface_path) {
         }
     }
 
+    shared_chat_pilot_create();
     widget_enforce_map_priority();
     widgets_ensure_onscreen();
 }
@@ -405,6 +427,7 @@ void toolkit_widget_fixture_init(const char *interface_path, const char *layout_
             SetPriorityWidget(widget);
         }
     }
+    shared_chat_pilot_create();
     widget_enforce_map_priority();
     widgets_ensure_onscreen();
 }

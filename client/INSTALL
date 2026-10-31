@@ -100,3 +100,7 @@ Windows toolchain and recursive runtime packaging requirements are documented
 in `../docs/WINDOWS_TOOLCHAIN.md`. Use the required neutral
 `ATRINIK_WINDOWS_TOOLCHAIN_FILE`, `ATRINIK_WINDOWS_TARGET` and
 `ATRINIK_WINDOWS_RUNTIME_DIR` producer variables with plain CMake.
+
+The experimental shared local-echo panel is OFF by default and requires explicit
+external SDK and verified font inputs. See `doc/SHARED_CHAT_PILOT.md`; enabling
+it is a source-build experiment and does not change default package dependencies.
