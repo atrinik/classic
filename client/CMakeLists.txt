@@ -353,6 +353,7 @@ endif ()
 
 # Compile the sources into an executable.
 add_executable(${EXECUTABLE} WIN32 ${SOURCES})
+include(cmake/SharedChatPilot.cmake)
 if (PACKAGE_TYPE STREQUAL "appimage")
     set(ATRINIK_APPIMAGE_SOURCE_REVISION "" CACHE STRING
         "Exact source revision embedded in the AppImage identity")

@@ -8,6 +8,8 @@
 /* Client thread only. Starts denied. Private UI and renderer recovery invalidate
  * the completed frame; closing/resetting UI never grants capture permission. */
 void capture_privacy_block(void);
+/* Private pilot retention; clearing it never clears the presented-frame latch. */
+void capture_privacy_shared_chat_retained(bool retained);
 /* Snapshot privacy before composition. A private load during composition also
  * taints that frame, even if the UI closes before presentation. */
 void capture_privacy_frame_begin(bool sensitive_active);

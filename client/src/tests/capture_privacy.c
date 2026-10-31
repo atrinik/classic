@@ -42,5 +42,19 @@ int main(void) {
     capture_privacy_frame_begin(false);
     capture_privacy_frame_end(false); /* Failed clean redraw is conservative. */
     CHECK(!capture_privacy_allowed(false));
+    capture_privacy_frame_begin(false);
+    capture_privacy_frame_end(true);
+    capture_privacy_shared_chat_retained(true);
+    CHECK(!capture_privacy_allowed(false));
+    capture_privacy_frame_begin(false);
+    capture_privacy_shared_chat_retained(false); /* Close during composition. */
+    capture_privacy_frame_end(true);
+    CHECK(!capture_privacy_allowed(false));
+    capture_privacy_frame_begin(false);
+    capture_privacy_frame_end(false);
+    CHECK(!capture_privacy_allowed(false));
+    capture_privacy_frame_begin(false);
+    capture_privacy_frame_end(true);
+    CHECK(capture_privacy_allowed(false));
     return 0;
 }

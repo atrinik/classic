@@ -1,0 +1,38 @@
+# Copyright 2026 The Atrinik Project
+# SPDX-License-Identifier: GPL-2.0-or-later
+option(ATRINIK_SHARED_CHAT_PILOT "Build experimental local-only shared chat panel" OFF)
+if(ATRINIK_SHARED_CHAT_PILOT)
+    set(ATRINIK_SHARED_CHAT_INCLUDE_DIR "" CACHE PATH "Explicit ABI 2 header directory")
+    set(ATRINIK_SHARED_CHAT_LIBRARY "" CACHE FILEPATH "Explicit CPU prototype library")
+    set(ATRINIK_SHARED_CHAT_LINK_LIBRARIES "" CACHE STRING "Explicit platform static-library closure")
+    set(ATRINIK_SHARED_CHAT_FONT_MANIFEST "" CACHE FILEPATH "Explicit verified font-pack manifest")
+    foreach(input ATRINIK_SHARED_CHAT_INCLUDE_DIR ATRINIK_SHARED_CHAT_LIBRARY ATRINIK_SHARED_CHAT_FONT_MANIFEST)
+        if(NOT IS_ABSOLUTE "${${input}}" OR NOT EXISTS "${${input}}")
+            message(FATAL_ERROR "Shared chat pilot requires explicit existing absolute ${input}")
+        endif()
+    endforeach()
+    if(NOT EXISTS "${ATRINIK_SHARED_CHAT_INCLUDE_DIR}/tilewright_ui.h")
+        message(FATAL_ERROR "Shared chat pilot header missing")
+    endif()
+    execute_process(COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tools/shared_chat_fonts.py"
+        "${ATRINIK_SHARED_CHAT_FONT_MANIFEST}" "${CMAKE_CURRENT_BINARY_DIR}/shared_chat_fonts.h"
+        RESULT_VARIABLE font_result)
+    if(NOT font_result EQUAL 0)
+        message(FATAL_ERROR "Shared chat pilot font validation failed")
+    endif()
+    target_sources(${EXECUTABLE} PRIVATE src/client/shared_chat_pilot.c)
+    target_compile_definitions(${EXECUTABLE} PRIVATE ATRINIK_SHARED_CHAT_PILOT TWUI_CPU_PROTOTYPE)
+    target_include_directories(${EXECUTABLE} PRIVATE "${ATRINIK_SHARED_CHAT_INCLUDE_DIR}" "${CMAKE_CURRENT_BINARY_DIR}")
+    target_link_libraries(${EXECUTABLE} PRIVATE "${ATRINIK_SHARED_CHAT_LIBRARY}" ${ATRINIK_SHARED_CHAT_LINK_LIBRARIES})
+endif()
+if(ATRINIK_SHARED_CHAT_PILOT AND BUILD_TESTING)
+    add_executable(client-shared-chat-pilot-tests src/tests/shared_chat_pilot.c src/client/capture_privacy.c)
+    atrinik_configure_target(client-shared-chat-pilot-tests)
+    target_compile_definitions(client-shared-chat-pilot-tests PRIVATE ATRINIK_SHARED_CHAT_PILOT TWUI_CPU_PROTOTYPE)
+    target_include_directories(client-shared-chat-pilot-tests PRIVATE src/include
+        "${ATRINIK_SHARED_CHAT_INCLUDE_DIR}" "${CMAKE_CURRENT_BINARY_DIR}")
+    target_link_libraries(client-shared-chat-pilot-tests PRIVATE SDL3::SDL3
+        "${ATRINIK_SHARED_CHAT_LIBRARY}" ${ATRINIK_SHARED_CHAT_LINK_LIBRARIES})
+    add_test(NAME client-shared-chat-pilot COMMAND client-shared-chat-pilot-tests)
+    set_tests_properties(client-shared-chat-pilot PROPERTIES ENVIRONMENT "SDL_VIDEODRIVER=dummy")
+endif()

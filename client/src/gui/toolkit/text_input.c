@@ -37,6 +37,7 @@
 #include <sprite.h>
 #include <text.h>
 #include <text_input.h>
+#include <shared_chat_pilot.h>
 #include <video.h>
 #include <widget.h>
 #include <toolkit/toolkit.h>
@@ -376,7 +377,9 @@ static void multiline_show(text_input_struct *input, SDL_Surface *surface, bool 
             }
             SDL_Rect area = {.x = input->px + input->coords.x,
                              .y = input->py + y, .w = input->coords.w, .h = height};
-            SDL_SetTextInputArea(ScreenWindow, &area, cursor_x - input->coords.x);
+            if (!shared_chat_pilot_text_owner()) {
+                SDL_SetTextInputArea(ScreenWindow, &area, cursor_x - input->coords.x);
+            }
         }
         if (end == input->num) {
             break;
@@ -458,7 +461,9 @@ static void text_input_show_impl(text_input_struct *text_input,
             .h = text_input->coords.h,
         };
 
-        SDL_SetTextInputArea(ScreenWindow, &input_area, TEXT_INPUT_PADDING + box.w);
+        if (!shared_chat_pilot_text_owner()) {
+            SDL_SetTextInputArea(ScreenWindow, &input_area, TEXT_INPUT_PADDING + box.w);
+        }
     }
 
     sb = stringbuffer_new();
