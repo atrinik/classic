@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib.util
 import json
 from pathlib import Path
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -69,6 +70,66 @@ class DailyPerformanceSiteTests(unittest.TestCase):
 
     def tearDown(self) -> None:
         self.temporary.cleanup()
+
+    def test_exact_gpu_qualification_skip_preserves_publication(self) -> None:
+        # Observed producer record from daily run 41189141733, attempt 1.
+        skipped = {
+            "reason": "gpu-hardware-qualification-required",
+            "schema_version": 7,
+            "status": "skipped",
+        }
+        self.assertFalse(site.publication_required(skipped))
+        self.evidence.write_text(json.dumps(skipped))
+        result = self.classify()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, "publish=false\n")
+        self.assertFalse((self.root / "site").exists())
+        # A skip never becomes a valid complete report.
+        with self.assertRaises(report.ReportError):
+            report.validate_evidence(skipped)
+
+    def classify(self) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            [sys.executable, str(ROOT / "ci" / "daily_performance_site.py"),
+             "classify-evidence", "--evidence", str(self.evidence)],
+            capture_output=True, text=True, check=False,
+        )
+
+    def test_complete_measurements_continue_to_publication(self) -> None:
+        self.assertTrue(site.publication_required(evidence()))
+        result = self.classify()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, "publish=true\n")
+        output = self.root / "site"
+        manifest = self.build(output)
+        self.assertEqual(site.validate_site(output), manifest)
+
+    def test_unrecognized_or_incomplete_evidence_fails_closed(self) -> None:
+        skipped = {
+            "schema_version": 7, "status": "skipped",
+            "reason": "gpu-hardware-qualification-required",
+        }
+        complete = evidence()
+        invalid = [
+            {}, None, [],
+            dict(skipped, reason="no-movement-sensitive-changes"),
+            dict(skipped, schema_version=6),
+            dict(skipped, schema_version=7.0),
+            dict(skipped, extra="untrusted"),
+            dict(skipped, status="error"),
+            {key: value for key, value in complete.items() if key != "records"},
+        ]
+        for value in invalid:
+            with self.subTest(value=value):
+                self.evidence.write_text(json.dumps(value))
+                result = self.classify()
+                self.assertEqual(result.returncode, 2, result.stderr)
+                self.assertEqual(result.stdout, "")
+                self.assertIn("error:", result.stderr)
+        self.evidence.write_text("{broken")
+        result = self.classify()
+        self.assertEqual(result.returncode, 2)
+        self.assertEqual(result.stdout, "")
 
     def build(self, output: Path, *, run_id: str = "2", attempt: str = "1",
               checkpoint: Path | None = None) -> dict[str, object]:

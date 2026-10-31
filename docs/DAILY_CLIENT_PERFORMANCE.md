@@ -14,6 +14,14 @@ SHA, repository, workflow, run, attempt, and any explicit early-failure
 diagnostic. A successful benchmark that produces no movement JSON is an
 infrastructure failure, not a successful empty observation.
 
+The retired player-view benchmark currently emits the exact
+`gpu-hardware-qualification-required` skip record when its implementation is
+unavailable. That record is retained in the raw artifact but is not a performance
+observation. The workflow reports the unavailable GPU measurements and skips
+checkpoint projection, Pages deployment, and alert reconciliation, preserving
+the published site and alert state. Only this exact current-schema skip is
+accepted; malformed, incomplete, or other skipped evidence still fails closed.
+
 ## Public report and durable checkpoint
 
 Successful trusted `main` observations are published at
@@ -30,7 +38,10 @@ surfaces are:
 - `points/run-RUN.json`: one immutable detailed point per retained logical run;
 - `reports/run-RUN/index.html`: one readable detailed report per point.
 
-The normal predecessor is the last successfully deployed Pages tree. The
+The normal predecessor is the last successfully deployed Pages tree. Successful
+no-op runs are excluded when selecting its producer. The lookup checks at most
+200 successful workflow runs and fails closed if none has a successful Pages
+deployment; it never resets the checkpoint when that history bound is reached. The
 publisher downloads only the paths named by its manifest, rejects redirects,
 validates every digest and byte count, verifies the repository/workflow
 identity, and then constructs a new full tree. A benchmark, predecessor,

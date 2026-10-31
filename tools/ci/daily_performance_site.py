@@ -64,6 +64,22 @@ def _read_json(path: Path, context: str) -> Any:
         raise SiteError(f"cannot read {context}: {error}") from error
 
 
+def publication_required(evidence: Any) -> bool:
+    """Accept only complete measurements or the producer's exact GPU skip."""
+    if (
+        isinstance(evidence, dict)
+        and type(evidence.get("schema_version")) is int
+        and evidence == {
+            "schema_version": report.benchmark_contract.EVIDENCE_SCHEMA_VERSION,
+            "status": "skipped",
+            "reason": "gpu-hardware-qualification-required",
+        }
+    ):
+        return False
+    report.validate_evidence(evidence)
+    return True
+
+
 def _safe_relative_path(value: str) -> PurePosixPath:
     path = PurePosixPath(value)
     if (
@@ -816,6 +832,8 @@ def fetch_checkpoint(base_url: str, output: Path) -> dict[str, Any]:
 def main() -> int:
     parser = argparse.ArgumentParser()
     subparsers = parser.add_subparsers(dest="command", required=True)
+    classify = subparsers.add_parser("classify-evidence")
+    classify.add_argument("--evidence", type=Path, required=True)
     build = subparsers.add_parser("build")
     build.add_argument("--evidence", type=Path, required=True)
     build.add_argument("--output", type=Path, required=True)
@@ -838,7 +856,10 @@ def main() -> int:
     fetch.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     try:
-        if args.command == "build":
+        if args.command == "classify-evidence":
+            required = publication_required(_read_json(args.evidence, "movement evidence"))
+            print(f"publish={'true' if required else 'false'}")
+        elif args.command == "build":
             if (args.legacy_checkpoint is None) != (args.legacy_final_ref is None):
                 raise SiteError("legacy checkpoint and final ref must be supplied together")
             build_site(
