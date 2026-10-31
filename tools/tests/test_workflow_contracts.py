@@ -544,6 +544,64 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn("Verify the published Sound lock coordinate", check)
         self.assertIn("python3 tools/release/update_sound_lock.py --verify", check)
 
+    @unittest.skipUnless(shutil.which("jq"), "jq is required for workflow shell checks")
+    def test_sound_updater_creates_drafts_and_preserves_existing_review_state(self) -> None:
+        workflow = self.text("update-sound.yml")
+        mutation = workflow.split(
+            "      - name: Create or update the single App-owned pull request\n", 1,
+        )[1]
+        script = textwrap.dedent(mutation.split("        run: |\n", 1)[1])
+        payload_script = script[
+            script.index('title="chore(deps): update sound lock'):
+            script.rindex("jq -e \\\n")
+        ]
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            build = directory / "build/sound-update"
+            build.mkdir(parents=True)
+            body = "## Summary\n\nVerified Sound `v1.3.0`.\n"
+            (build / "pull-request.md").write_text(body)
+            commands = directory / "bin"
+            commands.mkdir()
+            gh = commands / "gh"
+            gh.write_text(f"#!{shutil.which('python3')}\n" + textwrap.dedent('''\
+                import json, os, sys
+                from pathlib import Path
+                args = sys.argv[1:]
+                Path(os.environ["CAPTURE"]).write_text(json.dumps({
+                    "method": args[args.index("--method") + 1],
+                    "endpoint": args[args.index("--method") + 2],
+                    "payload": json.loads(Path(args[args.index("--input") + 1]).read_text()),
+                }))
+                print("{}")
+                '''))
+            gh.chmod(0o755)
+            for existing in ("", "47"):
+                with self.subTest(existing_pr=existing):
+                    capture = directory / "request.json"
+                    result = subprocess.run(
+                        ["bash", "-euo", "pipefail", "-c", payload_script],
+                        cwd=directory, capture_output=True, text=True, check=False,
+                        env=dict(os.environ, PATH=f"{commands}:{os.environ['PATH']}",
+                                 CAPTURE=str(capture), EXISTING_PR=existing,
+                                 GITHUB_REPOSITORY="atrinik/classic", NEW_TAG="v1.3.0",
+                                 UPDATE_BRANCH="automation/sound-update"),
+                    )
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    request = json.loads(capture.read_text())
+                    payload = request["payload"]
+                    self.assertEqual(payload["title"], "chore(deps): update sound lock to v1.3.0")
+                    self.assertEqual(payload["body"], body)
+                    self.assertEqual(request["method"], "PATCH" if existing else "POST")
+                    self.assertEqual(request["endpoint"], "repos/atrinik/classic/pulls" +
+                                     (f"/{existing}" if existing else ""))
+                    if existing:
+                        self.assertEqual(set(payload), {"title", "body"})
+                    else:
+                        self.assertIs(payload["draft"], True)
+                        self.assertEqual(payload["base"], "main")
+                        self.assertEqual(payload["head"], "automation/sound-update")
+
     def test_nested_component_automation_remains_retired(self) -> None:
         for module in ("client", "editor", "libatrinik", "protocol", "server"):
             with self.subTest(module=module):

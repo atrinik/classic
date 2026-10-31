@@ -197,7 +197,7 @@ jobs:
               --arg title "${title}" \
               --arg head "${UPDATE_BRANCH}" \
               --rawfile body build/sound-update/pull-request.md \
-              '{title: $title, head: $head, base: "main", body: $body}' \
+              '{title: $title, head: $head, base: "main", body: $body, draft: true}' \
               > build/sound-update/pull-request.json
             gh api --method POST \
               "repos/${GITHUB_REPOSITORY}/pulls" \
