@@ -2276,6 +2276,11 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn("--legacy-final-ref", project)
         self.assertIn("daily_performance_site.py build", project)
         self.assertIn("daily_performance_site.py validate", project)
+        self.assertIn("publish: ${{ steps.evidence.outputs.publish }}", project)
+        self.assertIn("daily_performance_site.py classify-evidence", project)
+        self.assertLess(project.index("daily_performance_site.py classify-evidence"),
+                        project.index("      - name: Load the exact predecessor checkpoint"))
+        self.assertEqual(project.count("if: steps.evidence.outputs.publish == 'true'"), 4)
         self.assertRegex(project, r"actions/upload-pages-artifact@[0-9a-f]{40}\b")
         self.assertNotIn("benchmark-data:refs", workflow)
         self.assertNotIn("HEAD:benchmark-data", workflow)
@@ -2286,17 +2291,82 @@ class WorkflowContractTests(unittest.TestCase):
         ]
         self.assertIn("pages: write", deploy)
         self.assertIn("id-token: write", deploy)
+        self.assertIn("if: needs.project.outputs.publish == 'true'", deploy)
         self.assertNotIn("issues: write", deploy)
         self.assertIn("environment:\n      name: github-pages", deploy)
         self.assertRegex(deploy, r"actions/deploy-pages@[0-9a-f]{40}\b")
 
         alerts = workflow[workflow.index("  alerts:") :]
         self.assertIn("needs: [project, deploy]", alerts)
+        self.assertIn("if: needs.project.outputs.publish == 'true'", alerts)
         self.assertIn("issues: write", alerts)
         self.assertNotIn("pages: write", alerts)
         self.assertIn("reconcile_performance_alerts.py", alerts)
         self.assertIn("daily_performance_site.py validate-artifact", alerts)
         self.assertNotIn("pull_request:", workflow[: workflow.index("jobs:")])
+
+    @unittest.skipUnless(shutil.which("jq"), "jq is required for workflow shell checks")
+    def test_daily_predecessor_skips_successful_runs_without_a_deployment(self) -> None:
+        workflow = self.text("daily-client-performance.yml")
+        step = workflow.split("      - name: Load the exact predecessor checkpoint\n", 1)[1]
+        script = textwrap.dedent(step.split("        run: |\n", 1)[1].split(
+            "      - name: Build and validate the complete static deployment\n", 1)[0])
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            (directory / "build").mkdir()
+            commands = directory / "bin"
+            commands.mkdir()
+            gh = commands / "gh"
+            gh.write_text(f"#!{shutil.which('python3')}\n" + textwrap.dedent('''\
+                import json, os, sys
+                endpoint = sys.argv[-1]
+                with open(os.environ["READ_LOG"], "a") as log:
+                    log.write(endpoint + "\\n")
+                if "/workflows/" in endpoint:
+                    if "page=1" in endpoint:
+                        runs = [{"id": number, "event": "schedule", "run_attempt": 1,
+                                 "head_sha": "b" * 40} for number in range(22, 2, -1)]
+                    else:
+                        runs = [{"id": 2, "event": "schedule", "run_attempt": 1,
+                                 "head_sha": "a" * 40}]
+                    value = {"workflow_runs": runs}
+                else:
+                    success = "/runs/2/" in endpoint and os.environ["DEPLOY_RESULT"] == "success"
+                    value = {"total_count": 1, "jobs": [{
+                        "name": "Deploy the validated performance site", "status": "completed",
+                        "conclusion": "success" if success else "skipped"}]}
+                print(json.dumps(value))
+                '''))
+            gh.chmod(0o755)
+            fetch = commands / "python3"
+            fetch.write_text(f"#!{shutil.which('python3')}\n" + textwrap.dedent('''\
+                import json
+                from pathlib import Path
+                path = Path("build/performance-checkpoint/v1")
+                path.mkdir(parents=True, exist_ok=True)
+                (path / "manifest.json").write_text(json.dumps({
+                    "run_id": "2", "run_attempt": "1", "source_sha": "a" * 40}))
+                '''))
+            fetch.chmod(0o755)
+            for outcome in ("success", "skipped"):
+                with self.subTest(deployed=outcome):
+                    log = directory / "reads.log"
+                    log.unlink(missing_ok=True)
+                    result = subprocess.run(
+                        ["bash", "-euo", "pipefail", "-c", script], cwd=directory,
+                        env=dict(os.environ, PATH=f"{commands}:{os.environ['PATH']}",
+                                 CHECKPOINT_SOURCE="pages", GITHUB_REPOSITORY="atrinik/classic",
+                                 PAGES_URL="https://atrinik.github.io/classic/",
+                                 READ_LOG=str(log), DEPLOY_RESULT=outcome),
+                        capture_output=True, text=True, check=False,
+                    )
+                    if outcome == "success":
+                        self.assertEqual(result.returncode, 0, result.stderr)
+                    else:
+                        self.assertNotEqual(result.returncode, 0)
+                    self.assertIn("per_page=20&page=2", log.read_text())
+                    self.assertIn("/runs/3/jobs", log.read_text())
+                    self.assertIn("/runs/2/jobs", log.read_text())
 
     def test_linux_checks_pin_image_and_isolate_compiler_caches(self) -> None:
         workflow = self.text("check.yml")
