@@ -8,6 +8,8 @@ updates:
       github-actions:
         patterns:
           - "*"
+    assignees:
+      - zoeyrose
   - package-ecosystem: docker
     directory: /server
     schedule:
@@ -21,7 +23,11 @@ updates:
     ignore:
       - dependency-name: atrinik/classic-build
       - dependency-name: ubuntu
+    assignees:
+      - zoeyrose
   - package-ecosystem: pip
     directory: /protocol
     schedule:
       interval: weekly
+    assignees:
+      - zoeyrose
