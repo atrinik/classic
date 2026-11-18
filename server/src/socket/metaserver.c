@@ -445,10 +445,8 @@ static void *metaserver_rendezvous_thread(void *data) {
                 }
             } else {
                 uint64_t connected_at = datetime_monotonic_ms();
-                uint64_t next_heartbeat =
-                    UINT64_MAX - connected_at < METASERVER_RENDEZVOUS_HEARTBEAT_MS
-                        ? UINT64_MAX
-                        : connected_at + METASERVER_RENDEZVOUS_HEARTBEAT_MS;
+                metaserver_rendezvous_liveness_t liveness;
+                metaserver_rendezvous_liveness_init(&liveness, connected_at);
                 rendezvous_punch_job_t punch_jobs[RENDEZVOUS_PUNCH_JOBS_MAX] = {0};
                 metaserver_rendezvous_auth_job_t auth_jobs[METASERVER_RENDEZVOUS_AUTH_JOBS_MAX] = {
                     0};
@@ -457,20 +455,17 @@ static void *metaserver_rendezvous_thread(void *data) {
                 bool stop_control = false;
                 while (!stop_control && metaserver_rendezvous_current(args->generation)) {
                     uint64_t now = datetime_monotonic_ms();
-                    if (now >= next_heartbeat) {
+                    if (metaserver_rendezvous_liveness_ping_due(&liveness, now)) {
                         CURLcode heartbeat_result =
                             metaserver_rendezvous_ping(curl, args->generation);
                         if (heartbeat_result == CURLE_OK) {
-                            next_heartbeat =
-                                UINT64_MAX - now < METASERVER_RENDEZVOUS_HEARTBEAT_MS
-                                    ? UINT64_MAX
-                                    : now + METASERVER_RENDEZVOUS_HEARTBEAT_MS;
-                            LOG(DEBUG, "Sent rendezvous control heartbeat");
+                            /* Monitoring expects this line about every five
+                             * minutes, not on every PING. */
+                            if (metaserver_rendezvous_liveness_ping_sent(&liveness, now)) {
+                                LOG(DEBUG, "Sent rendezvous control heartbeat");
+                            }
                         } else if (heartbeat_result == CURLE_AGAIN) {
-                            next_heartbeat =
-                                UINT64_MAX - now < METASERVER_RENDEZVOUS_HEARTBEAT_RETRY_MS
-                                    ? UINT64_MAX
-                                    : now + METASERVER_RENDEZVOUS_HEARTBEAT_RETRY_MS;
+                            metaserver_rendezvous_liveness_ping_blocked(&liveness, now);
                         } else {
                             if (metaserver_rendezvous_current(args->generation)) {
                                 LOG(ERROR,
@@ -492,7 +487,36 @@ static void *metaserver_rendezvous_thread(void *data) {
                     socket_websocket_receive_info_t receive_info;
                     socket_websocket_receive_state_t receive_state =
                         socket_websocket_receive_ex(curl, VS(message), &used, &receive_info);
+                    if (receive_info.pongs_received != 0 ||
+                        receive_state == SOCKET_WEBSOCKET_PARTIAL ||
+                        receive_state == SOCKET_WEBSOCKET_MESSAGE) {
+                        metaserver_rendezvous_liveness_received(&liveness,
+                                                                receive_info.pongs_received);
+                    }
                     if (receive_state == SOCKET_WEBSOCKET_EMPTY) {
+                        /* Judge the deadline only once every arrived frame
+                         * has been drained, so a late wakeup cannot miss a
+                         * PONG that is already buffered. */
+                        uint64_t waited_ms;
+                        metaserver_rendezvous_liveness_result_t liveness_result =
+                            metaserver_rendezvous_liveness_poll(&liveness,
+                                                                datetime_monotonic_ms(),
+                                                                &waited_ms);
+                        if (liveness_result == METASERVER_RENDEZVOUS_LIVENESS_EXPIRED) {
+                            /* "Rendezvous control receive " keeps this counted
+                             * with the other receive failures by log monitors. */
+                            LOG(ERROR,
+                                "Rendezvous control receive deadline missed: no pong %" PRIu64
+                                " ms after a ping",
+                                waited_ms);
+                            break;
+                        }
+                        if (liveness_result == METASERVER_RENDEZVOUS_LIVENESS_UNANSWERED) {
+                            LOG(INFO,
+                                "Rendezvous control has not answered a ping after %" PRIu64
+                                " ms; not enforcing its pong deadline on this connection",
+                                waited_ms);
+                        }
                         if (!metaserver_rendezvous_wait(args->generation, 20)) {
                             break;
                         }

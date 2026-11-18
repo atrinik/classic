@@ -24,6 +24,11 @@
 #define METASERVER_RENDEZVOUS_RETRY_MAX_MS 3600000U
 #define METASERVER_RENDEZVOUS_RETRY_AFTER_MAX_SECONDS 86400U
 #define METASERVER_RENDEZVOUS_STABLE_MS 60000U
+/* Control PING cadence; the first PING is sent as soon as the control opens. */
+#define METASERVER_RENDEZVOUS_PING_INTERVAL_MS 30000U
+/* Close the control when no frame follows a PING for this long. */
+#define METASERVER_RENDEZVOUS_PONG_TIMEOUT_MS 20000U
+/* Minimum spacing of the monitored "Sent rendezvous control heartbeat" line. */
 #define METASERVER_RENDEZVOUS_HEARTBEAT_MS 300000U
 #define METASERVER_RENDEZVOUS_HEARTBEAT_RETRY_MS 20U
 #define METASERVER_RENDEZVOUS_CONNECT_TIMEOUT_MS 2000L
@@ -103,6 +108,32 @@ typedef enum metaserver_rendezvous_auth_claim {
     METASERVER_RENDEZVOUS_AUTH_CLAIM_FULL
 } metaserver_rendezvous_auth_claim_t;
 
+/**
+ * Liveness of one connected rendezvous control, in datetime_monotonic_ms()
+ * milliseconds. Owned by the rendezvous thread for that connection only.
+ *
+ * A PING is outstanding from the first attempt to write it until any frame
+ * arrives. The pong deadline is enforced only after this connection has
+ * received a PONG, so a peer or libcurl that never surfaces PONGs keeps the
+ * control open as before instead of reconnecting on every PING.
+ */
+typedef struct metaserver_rendezvous_liveness {
+    uint64_t next_ping_ms;
+    uint64_t next_heartbeat_log_ms;
+    uint64_t ping_sent_ms; ///< First attempt of the oldest unanswered PING.
+    bool ping_outstanding;
+    bool pong_seen;
+    bool unanswered_reported;
+} metaserver_rendezvous_liveness_t;
+
+typedef enum metaserver_rendezvous_liveness_result {
+    METASERVER_RENDEZVOUS_LIVENESS_OK,
+    /** A PONG-capable control missed its deadline; close it and retry. */
+    METASERVER_RENDEZVOUS_LIVENESS_EXPIRED,
+    /** First deadline lapse without any PONG on this connection; not enforced. */
+    METASERVER_RENDEZVOUS_LIVENESS_UNANSWERED
+} metaserver_rendezvous_liveness_result_t;
+
 typedef enum metaserver_publish_failure_action {
     METASERVER_PUBLISH_FAILURE_REPLAY,
     METASERVER_PUBLISH_FAILURE_RETRY,
@@ -120,6 +151,31 @@ bool metaserver_rendezvous_generation_allows(uint64_t current_generation,
                                              uint64_t requested_generation,
                                              bool shutdown);
 bool metaserver_rendezvous_upgrade_retryable(CURLcode result, long http_code, bool protocol_valid);
+/** Start tracking a control that connected at `now_ms`; its first PING is due at once. */
+void metaserver_rendezvous_liveness_init(metaserver_rendezvous_liveness_t *liveness,
+                                         uint64_t now_ms);
+bool metaserver_rendezvous_liveness_ping_due(const metaserver_rendezvous_liveness_t *liveness,
+                                             uint64_t now_ms);
+/**
+ * Record a PING written at `now_ms` and schedule the next one. Returns whether
+ * the monitored heartbeat line is due, at most once per HEARTBEAT_MS.
+ */
+bool metaserver_rendezvous_liveness_ping_sent(metaserver_rendezvous_liveness_t *liveness,
+                                              uint64_t now_ms);
+/** Retry a PING that could not be written yet (CURLE_AGAIN); its deadline still runs. */
+void metaserver_rendezvous_liveness_ping_blocked(metaserver_rendezvous_liveness_t *liveness,
+                                                 uint64_t now_ms);
+/** Any received frame answers the outstanding PING; `pongs` also proves PONG support. */
+void metaserver_rendezvous_liveness_received(metaserver_rendezvous_liveness_t *liveness,
+                                             uint32_t pongs);
+/**
+ * Evaluate the pong deadline after receive has been drained. `waited_ms`
+ * receives the age of the unanswered PING when the result is not OK.
+ */
+metaserver_rendezvous_liveness_result_t
+metaserver_rendezvous_liveness_poll(metaserver_rendezvous_liveness_t *liveness,
+                                    uint64_t now_ms,
+                                    uint64_t *waited_ms);
 void metaserver_attempt_budget_init(metaserver_attempt_budget_t *budget, server_monotonic_t now);
 bool metaserver_attempt_budget_consume(metaserver_attempt_budget_t *budget,
                                        server_monotonic_t now,

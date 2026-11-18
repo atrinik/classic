@@ -1658,6 +1658,10 @@ socket_websocket_receive_ex(void *handle,
             return SOCKET_WEBSOCKET_CLOSED;
         }
         if ((flags & (CURLWS_PING | CURLWS_PONG)) != 0) {
+            if ((flags & CURLWS_PONG) != 0 && frame->bytesleft == 0 && info != NULL &&
+                info->pongs_received != UINT32_MAX) {
+                info->pongs_received++;
+            }
             continue;
         }
         if ((flags & CURLWS_TEXT) == 0 || (flags & CURLWS_BINARY) != 0 ||

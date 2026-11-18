@@ -104,6 +104,55 @@ static void test_control_frames_are_ignored(void) {
     TEST_CHECK(strcmp(buffer, "hello") == 0);
     TEST_CHECK(info.frame_present);
     TEST_CHECK(info.frame_flags == CURLWS_TEXT);
+    TEST_CHECK(info.pongs_received == 1);
+}
+
+static void test_pongs_are_counted_per_call(void) {
+    static const unsigned char ping[] = {'p'};
+    /* The rendezvous control pings with an empty payload. */
+    const fake_websocket_frame_t frames[] = {
+        {CURLE_OK, CURLWS_PONG, NULL, 0, false},
+        {CURLE_OK, CURLWS_PING, ping, sizeof(ping), false},
+        {CURLE_OK, CURLWS_PONG, NULL, 0, false},
+    };
+    fake_websocket_frames_set(frames, arraysize(frames));
+
+    char buffer[8] = {0};
+    size_t used = 0;
+    socket_websocket_receive_info_t info;
+    TEST_CHECK(socket_websocket_receive_ex((void *)1, VS(buffer), &used, &info) ==
+               SOCKET_WEBSOCKET_EMPTY);
+    TEST_CHECK(used == 0);
+    TEST_CHECK(info.curl_result == CURLE_AGAIN);
+    TEST_CHECK(info.pongs_received == 2);
+
+    /* Counts are per call, and a partial PONG counts only once complete. */
+    static const unsigned char pong[] = "12345678";
+    const fake_websocket_frame_t split[] = {
+        {CURLE_OK, CURLWS_PONG, pong, sizeof(pong) - 1U, true},
+    };
+    fake_websocket_frames_set(split, arraysize(split));
+    TEST_CHECK(socket_websocket_receive_ex((void *)1, VS(buffer), &used, &info) ==
+               SOCKET_WEBSOCKET_EMPTY);
+    TEST_CHECK(info.pongs_received == 0);
+    TEST_CHECK(socket_websocket_receive_ex((void *)1, VS(buffer), &used, &info) ==
+               SOCKET_WEBSOCKET_EMPTY);
+    TEST_CHECK(info.pongs_received == 1);
+    TEST_CHECK(socket_websocket_receive_ex((void *)1, VS(buffer), &used, &info) ==
+               SOCKET_WEBSOCKET_EMPTY);
+    TEST_CHECK(info.pongs_received == 0);
+    TEST_CHECK(used == 0);
+
+    /* A PONG ahead of a terminal close is still reported. */
+    const fake_websocket_frame_t closing[] = {
+        {CURLE_OK, CURLWS_PONG, NULL, 0, false},
+        {CURLE_RECV_ERROR, 0, NULL, 0, false},
+    };
+    fake_websocket_frames_set(closing, arraysize(closing));
+    TEST_CHECK(socket_websocket_receive_ex((void *)1, VS(buffer), &used, &info) ==
+               SOCKET_WEBSOCKET_CLOSED);
+    TEST_CHECK(info.curl_result == CURLE_RECV_ERROR);
+    TEST_CHECK(info.pongs_received == 1);
 }
 
 static void test_fragmented_text_survives_control_frame(void) {
@@ -191,6 +240,7 @@ static void test_close_and_transport_diagnostics(void) {
 int main(void) {
 #if LIBCURL_VERSION_NUM >= 0x075600
     test_control_frames_are_ignored();
+    test_pongs_are_counted_per_call();
     test_fragmented_text_survives_control_frame();
     test_partial_control_frame_survives_again();
     test_close_and_transport_diagnostics();

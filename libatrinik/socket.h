@@ -1115,6 +1115,11 @@ typedef struct socket_websocket_receive_info {
     uint16_t close_code;
     /** Whether close_code was present and decoded. */
     bool has_close_code;
+    /**
+     * Complete PONG frames consumed and discarded during this call, saturating
+     * at UINT32_MAX. Counted whatever state the call returns, including EMPTY.
+     */
+    uint32_t pongs_received;
 } socket_websocket_receive_info_t;
 
 #ifdef WIN32
@@ -1310,7 +1315,9 @@ socket_websocket_receive(void *handle, char *buffer, size_t capacity, size_t *us
  *
  * PING and PONG frames are discarded while fragmented text is accumulated in
  * `buffer`. When the function returns CLOSED, `info` describes the last
- * libcurl result or WebSocket frame when available.
+ * libcurl result or WebSocket frame when available. `info->pongs_received`
+ * counts the PONG frames discarded by this call so a caller can observe
+ * replies to its own pings.
  */
 socket_websocket_receive_state_t
 socket_websocket_receive_ex(void *handle,
