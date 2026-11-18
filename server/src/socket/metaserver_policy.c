@@ -419,6 +419,10 @@ bool metaserver_rendezvous_upgrade_retryable(CURLcode result, long http_code, bo
     return result != CURLE_OK;
 }
 
+bool metaserver_rendezvous_upgrade_unreachable(CURLcode result, long http_code) {
+    return result != CURLE_OK && http_code == 0;
+}
+
 static uint64_t metaserver_milliseconds_after(uint64_t now_ms, uint64_t duration_ms) {
     return UINT64_MAX - now_ms < duration_ms ? UINT64_MAX : now_ms + duration_ms;
 }
@@ -564,6 +568,22 @@ void metaserver_attempt_budget_reset(metaserver_attempt_budget_t *budget, server
     budget->tokens = METASERVER_ATTEMPT_RATE_CAPACITY;
     budget->refill_deadline =
         metaserver_deadline_after_seconds(now, METASERVER_ATTEMPT_RATE_REFILL_SECONDS);
+}
+
+bool metaserver_attempt_budget_refund(metaserver_attempt_budget_t *budget,
+                                      server_monotonic_t window,
+                                      server_monotonic_t now) {
+    HARD_ASSERT(budget != NULL);
+
+    /* Every refill, reset and init moves refill_deadline, so an unchanged
+     * deadline that is still ahead identifies the consuming window. */
+    if (budget->refill_deadline.microseconds != window.microseconds ||
+        server_monotonic_reached(now, budget->refill_deadline) ||
+        budget->tokens >= METASERVER_ATTEMPT_RATE_CAPACITY) {
+        return false;
+    }
+    budget->tokens++;
+    return true;
 }
 
 uint32_t metaserver_publish_heartbeat_delay_seconds(uint32_t heartbeat_seconds,

@@ -353,6 +353,9 @@ static void *metaserver_rendezvous_thread(void *data) {
         bool budget_available = metaserver_attempt_budget_consume(&rendezvous_attempt_budget,
                                                                   server_monotonic_now(),
                                                                   &budget_wait_ms);
+        /* Identifies this token's window for a refund if the attempt never
+         * reaches the metaserver. */
+        server_monotonic_t budget_window = rendezvous_attempt_budget.refill_deadline;
         pthread_mutex_unlock(&rendezvous_lock);
         if (!budget_available) {
             LOG(INFO,
@@ -429,6 +432,22 @@ static void *metaserver_rendezvous_thread(void *data) {
             if (!connected) {
                 retryable =
                     metaserver_rendezvous_upgrade_retryable(result, http_code, protocol_valid);
+                /* An attempt that drew no HTTP response never reached the
+                 * metaserver, so it must not spend the reconnect allowance
+                 * needed once the network returns. Its failure still counts
+                 * toward the exponential backoff. */
+                if (metaserver_rendezvous_upgrade_unreachable(result, http_code)) {
+                    pthread_mutex_lock(&rendezvous_lock);
+                    bool refunded = metaserver_attempt_budget_refund(&rendezvous_attempt_budget,
+                                                                     budget_window,
+                                                                     server_monotonic_now());
+                    pthread_mutex_unlock(&rendezvous_lock);
+                    if (refunded) {
+                        LOG(DEBUG,
+                            "Returned the attempt budget token of a rendezvous attempt "
+                            "without an HTTP response");
+                    }
+                }
                 if (result != CURLE_OK) {
                     LOG(ERROR,
                         "Rendezvous connection failed (HTTP %ld): %s",

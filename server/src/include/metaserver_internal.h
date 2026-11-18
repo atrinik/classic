@@ -208,6 +208,23 @@ bool metaserver_attempt_budget_consume(metaserver_attempt_budget_t *budget,
                                        uint32_t *wait_ms);
 /** Restore the full reconnect allowance after a stable rendezvous session. */
 void metaserver_attempt_budget_reset(metaserver_attempt_budget_t *budget, server_monotonic_t now);
+/**
+ * Return the token consumed for one attempt that never reached the metaserver.
+ * `window` is the budget's refill_deadline read right after that successful
+ * consume. Nothing is returned once a refill, reset or init has started another
+ * window, once `now` reaches the window's refill deadline, or when the budget is
+ * already full. Returns whether a token was returned.
+ */
+bool metaserver_attempt_budget_refund(metaserver_attempt_budget_t *budget,
+                                      server_monotonic_t window,
+                                      server_monotonic_t now);
+/**
+ * Whether a rendezvous upgrade produced no HTTP response at all: the transfer
+ * failed and no status was received (DNS, connect or TLS failure, or a timeout
+ * before any response). Any HTTP status, including 101, 429 and 503, is a
+ * response that reached the metaserver.
+ */
+bool metaserver_rendezvous_upgrade_unreachable(CURLcode result, long http_code);
 
 uint32_t metaserver_publish_heartbeat_delay_seconds(uint32_t heartbeat_seconds,
                                                     uint32_t random_value);

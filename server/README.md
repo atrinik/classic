@@ -614,8 +614,12 @@ mode and connection ID in `/who`, formatted as `(route: QUIC/mapped; connection:
  safely below the directory's four-hour expiry. Separate publisher and
  rendezvous two-token buckets, each refilling once every 1920 seconds, cap one
  continuously running process at 47 attempts per route in any 24-hour interval
- while still allowing startup and one prompt coalesced change. Transient
+ while still allowing startup and one prompt coalesced change. A rendezvous
+ attempt that gets no HTTP response at all (a DNS, connect or TLS failure, or
+ a timeout before any response) never reached the metaserver and returns its
+ token, so a network outage cannot exhaust the bucket. Transient
  failures use exponential backoff with jitter up to one hour,
+ including attempts that returned their token,
  and `Retry-After` can extend that delay. Permanent publisher or rendezvous
  rejections stop retrying until public state changes, a later successful
  publish supplies a replacement token, or the operator restarts the server.
