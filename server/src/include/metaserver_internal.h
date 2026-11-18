@@ -209,22 +209,38 @@ bool metaserver_attempt_budget_consume(metaserver_attempt_budget_t *budget,
 /** Restore the full reconnect allowance after a stable rendezvous session. */
 void metaserver_attempt_budget_reset(metaserver_attempt_budget_t *budget, server_monotonic_t now);
 /**
- * Return the token consumed for one attempt that never reached the metaserver.
- * `window` is the budget's refill_deadline read right after that successful
- * consume. Nothing is returned once a refill, reset or init has started another
- * window, once `now` reaches the window's refill deadline, or when the budget is
- * already full. Returns whether a token was returned.
+ * Consume like metaserver_attempt_budget_consume(). `window` receives the
+ * budget window of the consumed token, for metaserver_attempt_budget_refund().
+ */
+bool metaserver_attempt_budget_consume_refundable(metaserver_attempt_budget_t *budget,
+                                                  server_monotonic_t now,
+                                                  uint32_t *wait_ms,
+                                                  server_monotonic_t *window);
+/**
+ * Return one token taken by metaserver_attempt_budget_consume_refundable() in
+ * `window`, exactly undoing that consume. Nothing is returned once a refill,
+ * reset or init has started another window, or when the budget is already
+ * full. Returns whether a token was returned.
  */
 bool metaserver_attempt_budget_refund(metaserver_attempt_budget_t *budget,
-                                      server_monotonic_t window,
-                                      server_monotonic_t now);
+                                      server_monotonic_t window);
 /**
  * Whether a rendezvous upgrade produced no HTTP response at all: the transfer
- * failed and no status was received (DNS, connect or TLS failure, or a timeout
- * before any response). Any HTTP status, including 101, 429 and 503, is a
- * response that reached the metaserver.
+ * failed and no status was received (a DNS, connect or TLS failure, or a
+ * request that drew no response before it failed or timed out). Any HTTP
+ * status, including 101, 429 and 503, is a response.
  */
 bool metaserver_rendezvous_upgrade_unreachable(CURLcode result, long http_code);
+/**
+ * Settle the budget token of a finished upgrade attempt that did not connect:
+ * an attempt without any HTTP response returns its token from `window`; any
+ * other attempt keeps it spent. The retry backoff is unaffected either way.
+ * Returns whether a token was returned.
+ */
+bool metaserver_rendezvous_attempt_refund(metaserver_attempt_budget_t *budget,
+                                          server_monotonic_t window,
+                                          CURLcode result,
+                                          long http_code);
 
 uint32_t metaserver_publish_heartbeat_delay_seconds(uint32_t heartbeat_seconds,
                                                     uint32_t random_value);

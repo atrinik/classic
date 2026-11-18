@@ -570,20 +570,42 @@ void metaserver_attempt_budget_reset(metaserver_attempt_budget_t *budget, server
         metaserver_deadline_after_seconds(now, METASERVER_ATTEMPT_RATE_REFILL_SECONDS);
 }
 
+bool metaserver_attempt_budget_consume_refundable(metaserver_attempt_budget_t *budget,
+                                                  server_monotonic_t now,
+                                                  uint32_t *wait_ms,
+                                                  server_monotonic_t *window) {
+    HARD_ASSERT(budget != NULL);
+    HARD_ASSERT(window != NULL);
+
+    bool consumed = metaserver_attempt_budget_consume(budget, now, wait_ms);
+    *window = budget->refill_deadline;
+    return consumed;
+}
+
 bool metaserver_attempt_budget_refund(metaserver_attempt_budget_t *budget,
-                                      server_monotonic_t window,
-                                      server_monotonic_t now) {
+                                      server_monotonic_t window) {
     HARD_ASSERT(budget != NULL);
 
-    /* Every refill, reset and init moves refill_deadline, so an unchanged
-     * deadline that is still ahead identifies the consuming window. */
+    /* Every applied refill, reset and init moves refill_deadline. While it is
+     * unchanged the budget is exactly as that consume left it, even if the
+     * deadline has since passed: the next consume then refills from the
+     * restored count, capped at capacity, as if the attempt never happened. */
     if (budget->refill_deadline.microseconds != window.microseconds ||
-        server_monotonic_reached(now, budget->refill_deadline) ||
         budget->tokens >= METASERVER_ATTEMPT_RATE_CAPACITY) {
         return false;
     }
     budget->tokens++;
     return true;
+}
+
+bool metaserver_rendezvous_attempt_refund(metaserver_attempt_budget_t *budget,
+                                          server_monotonic_t window,
+                                          CURLcode result,
+                                          long http_code) {
+    HARD_ASSERT(budget != NULL);
+
+    return metaserver_rendezvous_upgrade_unreachable(result, http_code) &&
+           metaserver_attempt_budget_refund(budget, window);
 }
 
 uint32_t metaserver_publish_heartbeat_delay_seconds(uint32_t heartbeat_seconds,

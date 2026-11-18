@@ -613,18 +613,17 @@ mode and connection ID in `/who`, formatted as `(route: QUIC/mapped; connection:
  base in seconds; the default 9000 seconds is jittered to 8100-9900 seconds,
  safely below the directory's four-hour expiry. Separate publisher and
  rendezvous two-token buckets, each refilling once every 1920 seconds, cap one
- continuously running process at 47 attempts per route in any 24-hour interval
- while still allowing startup and one prompt coalesced change. A rendezvous
- attempt that gets no HTTP response at all (a DNS, connect or TLS failure, or
- a timeout before any response) never reached the metaserver and returns its
- token, so a network outage cannot exhaust the bucket. Transient
- failures use exponential backoff with jitter up to one hour,
- including attempts that returned their token,
- and `Retry-After` can extend that delay. Permanent publisher or rendezvous
- rejections stop retrying until public state changes, a later successful
- publish supplies a replacement token, or the operator restarts the server.
- A crashed listing disappears no later than four hours after its last accepted
- publication.
+ continuously running process at 47 counted attempts per route in any 24-hour
+ interval while still allowing startup and one prompt coalesced change. A
+ rendezvous attempt that gets no HTTP response at all (a DNS, connect or TLS
+ failure, or a request that fails or times out before any response) returns
+ its token and is not counted, so a network outage cannot exhaust the bucket.
+ Transient failures, including uncounted ones, use exponential backoff with
+ jitter up to one hour, and `Retry-After` can extend that delay. Permanent
+ publisher or rendezvous rejections stop retrying until public state changes,
+ a later successful publish supplies a replacement token, or the operator
+ restarts the server. A crashed listing disappears no later than four hours
+ after its last accepted publication.
 
  The local buckets are defense in depth: the metaserver remains authoritative
  across process restarts and duplicate processes. Listing visibility, name,

@@ -350,12 +350,12 @@ static void *metaserver_rendezvous_thread(void *data) {
     while (metaserver_rendezvous_current(args->generation)) {
         pthread_mutex_lock(&rendezvous_lock);
         uint32_t budget_wait_ms;
-        bool budget_available = metaserver_attempt_budget_consume(&rendezvous_attempt_budget,
-                                                                  server_monotonic_now(),
-                                                                  &budget_wait_ms);
-        /* Identifies this token's window for a refund if the attempt never
-         * reaches the metaserver. */
-        server_monotonic_t budget_window = rendezvous_attempt_budget.refill_deadline;
+        server_monotonic_t budget_window;
+        bool budget_available =
+            metaserver_attempt_budget_consume_refundable(&rendezvous_attempt_budget,
+                                                         server_monotonic_now(),
+                                                         &budget_wait_ms,
+                                                         &budget_window);
         pthread_mutex_unlock(&rendezvous_lock);
         if (!budget_available) {
             LOG(INFO,
@@ -432,21 +432,20 @@ static void *metaserver_rendezvous_thread(void *data) {
             if (!connected) {
                 retryable =
                     metaserver_rendezvous_upgrade_retryable(result, http_code, protocol_valid);
-                /* An attempt that drew no HTTP response never reached the
-                 * metaserver, so it must not spend the reconnect allowance
-                 * needed once the network returns. Its failure still counts
-                 * toward the exponential backoff. */
-                if (metaserver_rendezvous_upgrade_unreachable(result, http_code)) {
-                    pthread_mutex_lock(&rendezvous_lock);
-                    bool refunded = metaserver_attempt_budget_refund(&rendezvous_attempt_budget,
+                /* An attempt that drew no HTTP response (usually a network
+                 * outage) must not spend the reconnect allowance needed once
+                 * the network returns. Its failure still counts toward the
+                 * exponential backoff. */
+                pthread_mutex_lock(&rendezvous_lock);
+                bool refunded = metaserver_rendezvous_attempt_refund(&rendezvous_attempt_budget,
                                                                      budget_window,
-                                                                     server_monotonic_now());
-                    pthread_mutex_unlock(&rendezvous_lock);
-                    if (refunded) {
-                        LOG(DEBUG,
-                            "Returned the attempt budget token of a rendezvous attempt "
-                            "without an HTTP response");
-                    }
+                                                                     result,
+                                                                     http_code);
+                pthread_mutex_unlock(&rendezvous_lock);
+                if (refunded) {
+                    LOG(DEBUG,
+                        "Returned the attempt budget token of a rendezvous attempt without an "
+                        "HTTP response");
                 }
                 if (result != CURLE_OK) {
                     LOG(ERROR,

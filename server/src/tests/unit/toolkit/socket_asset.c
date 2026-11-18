@@ -1641,25 +1641,22 @@ static server_monotonic_t test_monotonic_after_ms(server_monotonic_t now, uint64
     return later;
 }
 
-/* One upgrade attempt's budget accounting, as metaserver_rendezvous_thread
- * does it: consume, then refund only when the attempt drew no HTTP response.
- * The refund happens two seconds later, a typical connect timeout. */
+/* One upgrade attempt's budget accounting through the same policy calls as
+ * metaserver_rendezvous_thread: take a refundable token, then settle it once
+ * the attempt has failed. */
 static bool test_rendezvous_attempt(metaserver_attempt_budget_t *budget,
                                     server_monotonic_t now,
                                     CURLcode result,
                                     long http_code,
                                     bool *refunded) {
     uint32_t wait_ms = 0;
+    server_monotonic_t window;
     *refunded = false;
-    if (!metaserver_attempt_budget_consume(budget, now, &wait_ms)) {
+    if (!metaserver_attempt_budget_consume_refundable(budget, now, &wait_ms, &window)) {
         ck_assert_uint_gt(wait_ms, 0);
         return false;
     }
-    server_monotonic_t window = budget->refill_deadline;
-    if (metaserver_rendezvous_upgrade_unreachable(result, http_code)) {
-        *refunded =
-            metaserver_attempt_budget_refund(budget, window, test_monotonic_after_ms(now, 2000));
-    }
+    *refunded = metaserver_rendezvous_attempt_refund(budget, window, result, http_code);
     return true;
 }
 
@@ -1680,6 +1677,8 @@ START_TEST(test_metaserver_rendezvous_unreachable_refund) {
     const server_monotonic_t start = {UINT64_C(1000000)};
     metaserver_attempt_budget_t budget;
     bool refunded;
+    uint32_t wait_ms;
+    server_monotonic_t window;
 
     /* An unreachable attempt returns its token. */
     metaserver_attempt_budget_init(&budget, start);
@@ -1687,7 +1686,7 @@ START_TEST(test_metaserver_rendezvous_unreachable_refund) {
     ck_assert(refunded);
     ck_assert_uint_eq(budget.tokens, METASERVER_ATTEMPT_RATE_CAPACITY);
 
-    /* HTTP 429 and 503 reached the metaserver and keep spending tokens. */
+    /* HTTP 429 and 503 are responses and keep spending tokens. */
     ck_assert(test_rendezvous_attempt(&budget, start, CURLE_HTTP_RETURNED_ERROR, 429, &refunded));
     ck_assert(!refunded);
     ck_assert_uint_eq(budget.tokens, METASERVER_ATTEMPT_RATE_CAPACITY - 1U);
@@ -1699,39 +1698,67 @@ START_TEST(test_metaserver_rendezvous_unreachable_refund) {
 
     /* A refund never raises the budget above capacity. */
     metaserver_attempt_budget_init(&budget, start);
-    ck_assert(!metaserver_attempt_budget_refund(&budget, budget.refill_deadline, start));
+    ck_assert(!metaserver_attempt_budget_refund(&budget, budget.refill_deadline));
+    ck_assert(!metaserver_rendezvous_attempt_refund(&budget,
+                                                    budget.refill_deadline,
+                                                    CURLE_COULDNT_CONNECT,
+                                                    0));
     ck_assert_uint_eq(budget.tokens, METASERVER_ATTEMPT_RATE_CAPACITY);
-    uint32_t wait_ms;
-    ck_assert(metaserver_attempt_budget_consume(&budget, start, &wait_ms));
-    server_monotonic_t window = budget.refill_deadline;
-    ck_assert(metaserver_attempt_budget_refund(&budget, window, start));
-    ck_assert(!metaserver_attempt_budget_refund(&budget, window, start));
+    ck_assert(metaserver_attempt_budget_consume_refundable(&budget, start, &wait_ms, &window));
+    ck_assert(metaserver_attempt_budget_refund(&budget, window));
+    ck_assert(!metaserver_attempt_budget_refund(&budget, window));
     ck_assert_uint_eq(budget.tokens, METASERVER_ATTEMPT_RATE_CAPACITY);
 
     /* No refund into another budget window: after a reset ... */
     metaserver_attempt_budget_init(&budget, start);
-    ck_assert(metaserver_attempt_budget_consume(&budget, start, &wait_ms));
-    window = budget.refill_deadline;
+    ck_assert(metaserver_attempt_budget_consume_refundable(&budget, start, &wait_ms, &window));
     server_monotonic_t later = test_monotonic_after_ms(start, 5000);
     metaserver_attempt_budget_reset(&budget, later);
-    ck_assert(metaserver_attempt_budget_consume(&budget, later, &wait_ms));
-    ck_assert(!metaserver_attempt_budget_refund(&budget, window, later));
-    ck_assert_uint_eq(budget.tokens, METASERVER_ATTEMPT_RATE_CAPACITY - 1U);
-    /* ... once the consuming window's refill deadline has passed ... */
-    metaserver_attempt_budget_init(&budget, start);
-    ck_assert(metaserver_attempt_budget_consume(&budget, start, &wait_ms));
-    window = budget.refill_deadline;
-    ck_assert(!metaserver_attempt_budget_refund(&budget, window, window));
+    server_monotonic_t later_window;
+    ck_assert(
+        metaserver_attempt_budget_consume_refundable(&budget, later, &wait_ms, &later_window));
+    ck_assert(!metaserver_attempt_budget_refund(&budget, window));
     ck_assert_uint_eq(budget.tokens, METASERVER_ATTEMPT_RATE_CAPACITY - 1U);
     /* ... or after a refill has started the next window. */
-    ck_assert(metaserver_attempt_budget_consume(&budget, start, &wait_ms));
-    ck_assert(metaserver_attempt_budget_consume(&budget, window, &wait_ms));
-    ck_assert(server_monotonic_before(window, budget.refill_deadline));
-    ck_assert(!metaserver_attempt_budget_refund(&budget, window, window));
-    ck_assert(metaserver_attempt_budget_refund(&budget, budget.refill_deadline, window));
+    metaserver_attempt_budget_init(&budget, start);
+    ck_assert(metaserver_attempt_budget_consume_refundable(&budget, start, &wait_ms, &window));
+    ck_assert(metaserver_attempt_budget_consume_refundable(&budget, start, &wait_ms, &window));
+    server_monotonic_t refilled_window;
+    ck_assert(
+        metaserver_attempt_budget_consume_refundable(&budget, window, &wait_ms, &refilled_window));
+    ck_assert(server_monotonic_before(window, refilled_window));
+    ck_assert(!metaserver_attempt_budget_refund(&budget, window));
+    ck_assert(metaserver_attempt_budget_refund(&budget, refilled_window));
+    ck_assert_uint_eq(budget.tokens, 1);
+
+    /* An attempt that straddles its window's refill deadline, before any
+     * refill was applied, leaves the budget as if it had never happened. One
+     * token is already spent by an attempt that got a response. */
+    metaserver_attempt_budget_init(&budget, start);
+    ck_assert(test_rendezvous_attempt(&budget, start, CURLE_OK, 503, &refunded));
+    ck_assert(!refunded);
+    metaserver_attempt_budget_t reference = budget;
+    const server_monotonic_t deadline = budget.refill_deadline;
+    const server_monotonic_t just_before = {deadline.microseconds - UINT64_C(1000)};
+    ck_assert(
+        metaserver_attempt_budget_consume_refundable(&budget, just_before, &wait_ms, &window));
+    ck_assert_uint_eq(window.microseconds, deadline.microseconds);
+    ck_assert_uint_eq(budget.tokens, 0);
+    /* The upgrade times out after the deadline without any response. */
+    ck_assert(metaserver_rendezvous_attempt_refund(&budget, window, CURLE_OPERATION_TIMEDOUT, 0));
+    ck_assert_uint_eq(budget.tokens, reference.tokens);
+    ck_assert_uint_eq(budget.refill_deadline.microseconds, reference.refill_deadline.microseconds);
+    const server_monotonic_t after_deadline = test_monotonic_after_ms(deadline, 5000);
+    ck_assert(metaserver_attempt_budget_consume(&budget, after_deadline, &wait_ms));
+    ck_assert(metaserver_attempt_budget_consume(&reference, after_deadline, &wait_ms));
+    /* Refilled to capacity and no further, then one consumed. */
+    ck_assert_uint_eq(budget.tokens, METASERVER_ATTEMPT_RATE_CAPACITY - 1U);
+    ck_assert_uint_eq(budget.tokens, reference.tokens);
+    ck_assert_uint_eq(budget.refill_deadline.microseconds, reference.refill_deadline.microseconds);
 
     /* During an outage every attempt is refunded, so the budget never locks
-     * the control out, while the retry delay keeps growing to its cap. */
+     * the control out, while the retry delay keeps growing to its cap. Each
+     * attempt also runs into the full upgrade timeout. */
     metaserver_attempt_budget_init(&budget, start);
     server_monotonic_t now = start;
     uint32_t failures = 0;
@@ -1739,7 +1766,7 @@ START_TEST(test_metaserver_rendezvous_unreachable_refund) {
     const uint32_t capped_delay =
         METASERVER_RENDEZVOUS_RETRY_MAX_MS - METASERVER_RENDEZVOUS_RETRY_MAX_MS / 4U;
     for (unsigned int attempt = 0; attempt < 16; attempt++) {
-        ck_assert(test_rendezvous_attempt(&budget, now, CURLE_COULDNT_RESOLVE_HOST, 0, &refunded));
+        ck_assert(test_rendezvous_attempt(&budget, now, CURLE_OPERATION_TIMEDOUT, 0, &refunded));
         ck_assert(refunded);
         ck_assert_uint_eq(budget.tokens, METASERVER_ATTEMPT_RATE_CAPACITY);
         /* As metaserver_rendezvous_thread and metaserver_rendezvous_retry do. */
@@ -1752,11 +1779,13 @@ START_TEST(test_metaserver_rendezvous_unreachable_refund) {
             ck_assert_uint_eq(delay, capped_delay);
         }
         previous_delay = delay;
-        now = test_monotonic_after_ms(now, delay);
+        now = test_monotonic_after_ms(now,
+                                      (uint64_t)METASERVER_RENDEZVOUS_UPGRADE_TIMEOUT_MS +
+                                          (uint64_t)delay);
     }
     ck_assert_uint_eq(failures, 16);
     ck_assert_uint_eq(previous_delay, capped_delay);
-    /* A reachable failure after the outage still spends a token. */
+    /* A failure with a response after the outage still spends a token. */
     ck_assert(test_rendezvous_attempt(&budget, now, CURLE_OK, 503, &refunded));
     ck_assert(!refunded);
     ck_assert_uint_eq(budget.tokens, METASERVER_ATTEMPT_RATE_CAPACITY - 1U);
