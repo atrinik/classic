@@ -642,9 +642,11 @@ mode and connection ID in `/who`, formatted as `(route: QUIC/mapped; connection:
  The connected rendezvous control sends a WebSocket ping when it opens and
  every 30 seconds after. Once the connection has answered a ping, a ping that
  draws no frame within 20 seconds closes the control as a network drop
- (`Rendezvous control receive deadline missed`); it reconnects through the
- same backoff and bucket, and a control that lasted at least 60 seconds
- restores its bucket. The `Sent rendezvous control heartbeat` debug line is
+ (`Rendezvous control receive deadline missed`), typically 20-50 seconds and
+ at most about 80 seconds after the path dies. It reconnects through the same
+ backoff and bucket. A control that lasted at least 60 seconds restores its
+ bucket and resets the backoff; one closed this way counts only until the
+ last frame it received. The `Sent rendezvous control heartbeat` debug line is
  logged at most once every five minutes.
 
  The server reserves a fresh unsigned 64-bit publish sequence before every

@@ -1441,14 +1441,14 @@ START_TEST(test_metaserver_rendezvous_liveness) {
     ck_assert(metaserver_rendezvous_liveness_ping_due(&liveness, next));
     ck_assert(!metaserver_rendezvous_liveness_ping_sent(&liveness, next));
     /* A text frame answers the PING but does not prove PONG support. */
-    metaserver_rendezvous_liveness_received(&liveness, 0);
+    metaserver_rendezvous_liveness_received(&liveness, 0, next + 1U);
     ck_assert(!liveness.ping_outstanding);
     ck_assert(!liveness.pong_seen);
 
     /* After a PONG the deadline is enforced from the unanswered PING. */
     next += METASERVER_RENDEZVOUS_PING_INTERVAL_MS;
     ck_assert(!metaserver_rendezvous_liveness_ping_sent(&liveness, next));
-    metaserver_rendezvous_liveness_received(&liveness, 1);
+    metaserver_rendezvous_liveness_received(&liveness, 1, next + 1U);
     ck_assert(liveness.pong_seen);
     ck_assert(metaserver_rendezvous_liveness_poll(&liveness, next + UINT64_C(600000), &waited) ==
               METASERVER_RENDEZVOUS_LIVENESS_OK);
@@ -1464,7 +1464,7 @@ START_TEST(test_metaserver_rendezvous_liveness) {
               METASERVER_RENDEZVOUS_LIVENESS_EXPIRED);
     ck_assert_uint_eq(waited, METASERVER_RENDEZVOUS_PONG_TIMEOUT_MS + 7U);
     /* A frame that arrives in time, including any text, clears it. */
-    metaserver_rendezvous_liveness_received(&liveness, 0);
+    metaserver_rendezvous_liveness_received(&liveness, 0, lapse + 7U);
     ck_assert(liveness.pong_seen);
     ck_assert(metaserver_rendezvous_liveness_poll(&liveness, lapse + 7U, &waited) ==
               METASERVER_RENDEZVOUS_LIVENESS_OK);
@@ -1487,7 +1487,9 @@ START_TEST(test_metaserver_rendezvous_liveness) {
               METASERVER_RENDEZVOUS_LIVENESS_EXPIRED);
     ck_assert_uint_eq(waited, METASERVER_RENDEZVOUS_PONG_TIMEOUT_MS);
     /* A later PING does not restart the clock of an unanswered one. */
-    metaserver_rendezvous_liveness_received(&liveness, 1);
+    metaserver_rendezvous_liveness_received(&liveness,
+                                            1,
+                                            next + METASERVER_RENDEZVOUS_PONG_TIMEOUT_MS);
     next += METASERVER_RENDEZVOUS_PING_INTERVAL_MS;
     ck_assert(!metaserver_rendezvous_liveness_ping_sent(&liveness, next));
     ck_assert(!metaserver_rendezvous_liveness_ping_sent(&liveness, next + 10U));
@@ -1512,7 +1514,7 @@ START_TEST(test_metaserver_rendezvous_liveness) {
                 first_line = now;
             }
         }
-        metaserver_rendezvous_liveness_received(&liveness, 1);
+        metaserver_rendezvous_liveness_received(&liveness, 1, now + 1U);
         ck_assert(metaserver_rendezvous_liveness_poll(&liveness,
                                                       now + METASERVER_RENDEZVOUS_PONG_TIMEOUT_MS,
                                                       &waited) ==
@@ -1633,6 +1635,141 @@ START_TEST(test_metaserver_rendezvous_liveness_after_receive) {
                                                            lapse + UINT64_C(600000),
                                                            &waited) ==
               METASERVER_RENDEZVOUS_LIVENESS_OK);
+}
+END_TEST
+
+START_TEST(test_metaserver_rendezvous_liveness_session) {
+    const uint64_t connected = UINT64_C(9000000);
+    metaserver_rendezvous_liveness_t liveness;
+    uint64_t waited;
+
+    /* PINGs at 0 s and 30 s are answered, the path then stalls, the 60 s PING
+     * goes unanswered and the deadline closes the control at 80 s. */
+    metaserver_rendezvous_liveness_init(&liveness, connected);
+    uint64_t ping = connected;
+    for (; ping <= connected + METASERVER_RENDEZVOUS_PING_INTERVAL_MS;
+         ping += METASERVER_RENDEZVOUS_PING_INTERVAL_MS) {
+        ck_assert(metaserver_rendezvous_liveness_ping_due(&liveness, ping));
+        ck_assert(!metaserver_rendezvous_liveness_ping_sent(&liveness, ping));
+        ck_assert(metaserver_rendezvous_liveness_after_receive(&liveness,
+                                                               SOCKET_WEBSOCKET_EMPTY,
+                                                               1,
+                                                               ping + 50U,
+                                                               &waited) ==
+                  METASERVER_RENDEZVOUS_LIVENESS_OK);
+    }
+    ck_assert_uint_eq(ping, connected + 2U * METASERVER_RENDEZVOUS_PING_INTERVAL_MS);
+    ck_assert(metaserver_rendezvous_liveness_ping_due(&liveness, ping));
+    ck_assert(!metaserver_rendezvous_liveness_ping_sent(&liveness, ping));
+    uint64_t closed = ping + METASERVER_RENDEZVOUS_PONG_TIMEOUT_MS;
+    ck_assert(metaserver_rendezvous_liveness_after_receive(&liveness,
+                                                           SOCKET_WEBSOCKET_EMPTY,
+                                                           0,
+                                                           closed,
+                                                           &waited) ==
+              METASERVER_RENDEZVOUS_LIVENESS_EXPIRED);
+    /* Counted to the close, the wait for the missing PONG would look stable. */
+    ck_assert(metaserver_rendezvous_session_stable(closed - connected));
+    uint64_t session = metaserver_rendezvous_liveness_session_ms(&liveness, closed);
+    ck_assert_uint_eq(session, METASERVER_RENDEZVOUS_PING_INTERVAL_MS + 50U);
+    /* Not stable: neither the attempt budget nor the failures are reset. */
+    ck_assert(!metaserver_rendezvous_session_stable(session));
+    ck_assert_uint_eq(metaserver_rendezvous_retry_failures(3U, session), 3U);
+
+    /* A long healthy session that then misses a deadline is stable. */
+    metaserver_rendezvous_liveness_init(&liveness, connected);
+    for (ping = connected; ping <= connected + UINT64_C(600000);
+         ping += METASERVER_RENDEZVOUS_PING_INTERVAL_MS) {
+        ck_assert(metaserver_rendezvous_liveness_ping_due(&liveness, ping));
+        (void)metaserver_rendezvous_liveness_ping_sent(&liveness, ping);
+        ck_assert(metaserver_rendezvous_liveness_after_receive(&liveness,
+                                                               SOCKET_WEBSOCKET_EMPTY,
+                                                               1,
+                                                               ping + 50U,
+                                                               &waited) ==
+                  METASERVER_RENDEZVOUS_LIVENESS_OK);
+    }
+    (void)metaserver_rendezvous_liveness_ping_sent(&liveness, ping);
+    closed = ping + METASERVER_RENDEZVOUS_PONG_TIMEOUT_MS;
+    ck_assert(metaserver_rendezvous_liveness_after_receive(&liveness,
+                                                           SOCKET_WEBSOCKET_EMPTY,
+                                                           0,
+                                                           closed,
+                                                           &waited) ==
+              METASERVER_RENDEZVOUS_LIVENESS_EXPIRED);
+    session = metaserver_rendezvous_liveness_session_ms(&liveness, closed);
+    ck_assert_uint_eq(session, UINT64_C(600050));
+    ck_assert(metaserver_rendezvous_session_stable(session));
+    ck_assert_uint_eq(metaserver_rendezvous_retry_failures(3U, session), 0);
+
+    /* A text frame is proof of life too: answered PINGs at 0 s and 30 s, a
+     * client_candidate message at 65 s, then a missed deadline at 110 s. */
+    metaserver_rendezvous_liveness_init(&liveness, connected);
+    for (ping = connected; ping <= connected + METASERVER_RENDEZVOUS_PING_INTERVAL_MS;
+         ping += METASERVER_RENDEZVOUS_PING_INTERVAL_MS) {
+        ck_assert(!metaserver_rendezvous_liveness_ping_sent(&liveness, ping));
+        ck_assert(metaserver_rendezvous_liveness_after_receive(&liveness,
+                                                               SOCKET_WEBSOCKET_EMPTY,
+                                                               1,
+                                                               ping + 50U,
+                                                               &waited) ==
+                  METASERVER_RENDEZVOUS_LIVENESS_OK);
+    }
+    ck_assert(!metaserver_rendezvous_liveness_ping_sent(&liveness, ping));
+    ck_assert(metaserver_rendezvous_liveness_after_receive(&liveness,
+                                                           SOCKET_WEBSOCKET_MESSAGE,
+                                                           0,
+                                                           connected + UINT64_C(65000),
+                                                           &waited) ==
+              METASERVER_RENDEZVOUS_LIVENESS_OK);
+    ping += METASERVER_RENDEZVOUS_PING_INTERVAL_MS;
+    ck_assert(metaserver_rendezvous_liveness_ping_due(&liveness, ping));
+    ck_assert(!metaserver_rendezvous_liveness_ping_sent(&liveness, ping));
+    closed = ping + METASERVER_RENDEZVOUS_PONG_TIMEOUT_MS;
+    ck_assert_uint_eq(closed, connected + UINT64_C(110000));
+    ck_assert(metaserver_rendezvous_liveness_after_receive(&liveness,
+                                                           SOCKET_WEBSOCKET_EMPTY,
+                                                           0,
+                                                           closed,
+                                                           &waited) ==
+              METASERVER_RENDEZVOUS_LIVENESS_EXPIRED);
+    session = metaserver_rendezvous_liveness_session_ms(&liveness, closed);
+    ck_assert_uint_eq(session, UINT64_C(65000));
+    ck_assert(metaserver_rendezvous_session_stable(session));
+
+    /* Any other close counts from the open to the close, as before: a
+     * receive failure ... */
+    metaserver_rendezvous_liveness_init(&liveness, connected);
+    ck_assert(!metaserver_rendezvous_liveness_ping_sent(&liveness, connected));
+    ck_assert(metaserver_rendezvous_liveness_after_receive(&liveness,
+                                                           SOCKET_WEBSOCKET_EMPTY,
+                                                           1,
+                                                           connected + 50U,
+                                                           &waited) ==
+              METASERVER_RENDEZVOUS_LIVENESS_OK);
+    closed = connected + UINT64_C(80000);
+    ck_assert(metaserver_rendezvous_liveness_after_receive(&liveness,
+                                                           SOCKET_WEBSOCKET_CLOSED,
+                                                           0,
+                                                           closed,
+                                                           &waited) ==
+              METASERVER_RENDEZVOUS_LIVENESS_OK);
+    ck_assert_uint_eq(metaserver_rendezvous_liveness_session_ms(&liveness, closed),
+                      UINT64_C(80000));
+    /* ... or a control that never answered a PING, whose lapse is reported
+     * but not enforced. */
+    metaserver_rendezvous_liveness_init(&liveness, connected);
+    ck_assert(!metaserver_rendezvous_liveness_ping_sent(&liveness, connected));
+    ck_assert(metaserver_rendezvous_liveness_after_receive(
+                  &liveness,
+                  SOCKET_WEBSOCKET_EMPTY,
+                  0,
+                  connected + METASERVER_RENDEZVOUS_PONG_TIMEOUT_MS,
+                  &waited) == METASERVER_RENDEZVOUS_LIVENESS_UNANSWERED);
+    ck_assert_uint_eq(metaserver_rendezvous_liveness_session_ms(&liveness, closed),
+                      UINT64_C(80000));
+    /* A clock earlier than the open never underflows. */
+    ck_assert_uint_eq(metaserver_rendezvous_liveness_session_ms(&liveness, connected - 1U), 0);
 }
 END_TEST
 
@@ -2993,6 +3130,7 @@ static Suite *suite(void) {
     tcase_add_test(tc_core, test_metaserver_rendezvous_retry_policy);
     tcase_add_test(tc_core, test_metaserver_rendezvous_liveness);
     tcase_add_test(tc_core, test_metaserver_rendezvous_liveness_after_receive);
+    tcase_add_test(tc_core, test_metaserver_rendezvous_liveness_session);
     tcase_add_test(tc_core, test_metaserver_rendezvous_unreachable_refund);
     tcase_add_test(tc_core, test_metaserver_access_route_acknowledgments);
     tcase_add_test(tc_core, test_metaserver_access_route_cancellation_is_pending);

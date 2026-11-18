@@ -34,19 +34,23 @@
 /* Retry delay for a PING that libcurl could not write yet (CURLE_AGAIN). */
 #define METASERVER_RENDEZVOUS_PING_RETRY_MS 20U
 #define METASERVER_RENDEZVOUS_CONNECT_TIMEOUT_MS 2000L
+#define METASERVER_RENDEZVOUS_UPGRADE_TIMEOUT_MS 10000L
 
 /* At most one PING is outstanding when its deadline expires. */
 _Static_assert(METASERVER_RENDEZVOUS_PONG_TIMEOUT_MS < METASERVER_RENDEZVOUS_PING_INTERVAL_MS,
                "pong timeout must be shorter than the ping interval");
-/* A dead control is detected within a minute. */
+/* A dead control closes at most interval + timeout (50 s) after the last frame
+ * that actually arrives, so typically 20-50 s after the path dies. A frame
+ * still in flight when the path dies arrives late and can answer a PING sent
+ * after the death, adding that frame's delay; treat about 80 s as a
+ * conservative ceiling rather than a strict bound. */
 _Static_assert(METASERVER_RENDEZVOUS_PING_INTERVAL_MS + METASERVER_RENDEZVOUS_PONG_TIMEOUT_MS <=
                    60000U,
-               "dead-control detection must stay within a minute");
+               "ping interval plus pong timeout must stay within a minute");
 /* The heartbeat line falls on a PING, well inside the 15-minute stale alert. */
 _Static_assert(METASERVER_RENDEZVOUS_HEARTBEAT_MS % METASERVER_RENDEZVOUS_PING_INTERVAL_MS == 0U &&
                    METASERVER_RENDEZVOUS_HEARTBEAT_MS < 900000U,
                "heartbeat line cadence must match the ping cadence and monitoring");
-#define METASERVER_RENDEZVOUS_UPGRADE_TIMEOUT_MS 10000L
 
 #define METASERVER_PUBLISH_DEBOUNCE_SECONDS 10U
 #define METASERVER_ATTEMPT_RATE_CAPACITY 2U
@@ -132,12 +136,15 @@ typedef enum metaserver_rendezvous_auth_claim {
  * control open as before instead of reconnecting on every PING.
  */
 typedef struct metaserver_rendezvous_liveness {
+    uint64_t opened_ms; ///< When the control opened.
+    uint64_t last_frame_ms; ///< Last proof of life: the open, or the latest received frame.
     uint64_t next_ping_ms;
     uint64_t next_heartbeat_log_ms;
     uint64_t ping_sent_ms; ///< First attempt of the oldest unanswered PING.
     bool ping_outstanding;
     bool pong_seen;
     bool unanswered_reported;
+    bool expired; ///< The pong deadline was missed; the control is closing.
 } metaserver_rendezvous_liveness_t;
 
 typedef enum metaserver_rendezvous_liveness_result {
@@ -160,6 +167,8 @@ bool metaserver_rendezvous_protocol_allows(const metaserver_rendezvous_headers_t
 uint32_t metaserver_rendezvous_retry_delay_ms(uint32_t failures,
                                               uint32_t retry_after_seconds,
                                               uint32_t random_value);
+/** Whether a closed control session was long enough to reset failures and the budget. */
+bool metaserver_rendezvous_session_stable(uint64_t session_ms);
 uint32_t metaserver_rendezvous_retry_failures(uint32_t failures, uint64_t connected_ms);
 bool metaserver_rendezvous_generation_allows(uint64_t current_generation,
                                              uint64_t requested_generation,
@@ -179,12 +188,17 @@ bool metaserver_rendezvous_liveness_ping_sent(metaserver_rendezvous_liveness_t *
 /** Retry a PING that could not be written yet (CURLE_AGAIN); its deadline still runs. */
 void metaserver_rendezvous_liveness_ping_blocked(metaserver_rendezvous_liveness_t *liveness,
                                                  uint64_t now_ms);
-/** Any received frame answers the outstanding PING; `pongs` also proves PONG support. */
+/**
+ * A frame received at `now_ms` answers the outstanding PING and is the latest
+ * proof of life; `pongs` also proves PONG support.
+ */
 void metaserver_rendezvous_liveness_received(metaserver_rendezvous_liveness_t *liveness,
-                                             uint32_t pongs);
+                                             uint32_t pongs,
+                                             uint64_t now_ms);
 /**
  * Evaluate the pong deadline after receive has been drained. `waited_ms`
- * receives the age of the unanswered PING when the result is not OK.
+ * receives the age of the unanswered PING when the result is not OK. EXPIRED
+ * also marks the control as closed for the missed deadline.
  */
 metaserver_rendezvous_liveness_result_t
 metaserver_rendezvous_liveness_poll(metaserver_rendezvous_liveness_t *liveness,
@@ -202,6 +216,15 @@ metaserver_rendezvous_liveness_after_receive(metaserver_rendezvous_liveness_t *l
                                              uint32_t pongs,
                                              uint64_t now_ms,
                                              uint64_t *waited_ms);
+/**
+ * Session length of a control closed at `closed_ms`, as judged against
+ * METASERVER_RENDEZVOUS_STABLE_MS for the failure and attempt-budget reset. A
+ * control closed for a missed pong deadline counts only up to its last
+ * received frame, so the wait for the missing PONG cannot make a stalling path
+ * look stable. Any other close counts from the open to the close.
+ */
+uint64_t metaserver_rendezvous_liveness_session_ms(const metaserver_rendezvous_liveness_t *liveness,
+                                                   uint64_t closed_ms);
 void metaserver_attempt_budget_init(metaserver_attempt_budget_t *budget, server_monotonic_t now);
 bool metaserver_attempt_budget_consume(metaserver_attempt_budget_t *budget,
                                        server_monotonic_t now,

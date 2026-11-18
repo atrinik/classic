@@ -399,8 +399,12 @@ uint32_t metaserver_rendezvous_retry_delay_ms(uint32_t failures,
     return MAX(delay, retry_after_ms);
 }
 
+bool metaserver_rendezvous_session_stable(uint64_t session_ms) {
+    return session_ms >= METASERVER_RENDEZVOUS_STABLE_MS;
+}
+
 uint32_t metaserver_rendezvous_retry_failures(uint32_t failures, uint64_t connected_ms) {
-    return connected_ms >= METASERVER_RENDEZVOUS_STABLE_MS ? 0 : failures;
+    return metaserver_rendezvous_session_stable(connected_ms) ? 0 : failures;
 }
 
 bool metaserver_rendezvous_generation_allows(uint64_t current_generation,
@@ -442,6 +446,8 @@ void metaserver_rendezvous_liveness_init(metaserver_rendezvous_liveness_t *liven
     HARD_ASSERT(liveness != NULL);
 
     memset(liveness, 0, sizeof(*liveness));
+    liveness->opened_ms = now_ms;
+    liveness->last_frame_ms = now_ms;
     liveness->next_ping_ms = now_ms;
     liveness->next_heartbeat_log_ms =
         metaserver_milliseconds_after(now_ms, METASERVER_RENDEZVOUS_HEARTBEAT_MS);
@@ -479,12 +485,16 @@ void metaserver_rendezvous_liveness_ping_blocked(metaserver_rendezvous_liveness_
 }
 
 void metaserver_rendezvous_liveness_received(metaserver_rendezvous_liveness_t *liveness,
-                                             uint32_t pongs) {
+                                             uint32_t pongs,
+                                             uint64_t now_ms) {
     HARD_ASSERT(liveness != NULL);
 
     liveness->ping_outstanding = false;
     if (pongs != 0) {
         liveness->pong_seen = true;
+    }
+    if (now_ms > liveness->last_frame_ms) {
+        liveness->last_frame_ms = now_ms;
     }
 }
 
@@ -501,6 +511,7 @@ metaserver_rendezvous_liveness_poll(metaserver_rendezvous_liveness_t *liveness,
         return METASERVER_RENDEZVOUS_LIVENESS_OK;
     }
     if (liveness->pong_seen) {
+        liveness->expired = true;
         *waited_ms = now_ms - liveness->ping_sent_ms;
         return METASERVER_RENDEZVOUS_LIVENESS_EXPIRED;
     }
@@ -523,12 +534,20 @@ metaserver_rendezvous_liveness_after_receive(metaserver_rendezvous_liveness_t *l
 
     *waited_ms = 0;
     if (pongs != 0 || state == SOCKET_WEBSOCKET_PARTIAL || state == SOCKET_WEBSOCKET_MESSAGE) {
-        metaserver_rendezvous_liveness_received(liveness, pongs);
+        metaserver_rendezvous_liveness_received(liveness, pongs, now_ms);
     }
     if (state != SOCKET_WEBSOCKET_EMPTY) {
         return METASERVER_RENDEZVOUS_LIVENESS_OK;
     }
     return metaserver_rendezvous_liveness_poll(liveness, now_ms, waited_ms);
+}
+
+uint64_t metaserver_rendezvous_liveness_session_ms(const metaserver_rendezvous_liveness_t *liveness,
+                                                   uint64_t closed_ms) {
+    HARD_ASSERT(liveness != NULL);
+
+    uint64_t ended_ms = liveness->expired ? liveness->last_frame_ms : closed_ms;
+    return ended_ms >= liveness->opened_ms ? ended_ms - liveness->opened_ms : 0;
 }
 
 void metaserver_attempt_budget_init(metaserver_attempt_budget_t *budget, server_monotonic_t now) {

@@ -659,10 +659,11 @@ static void *metaserver_rendezvous_thread(void *data) {
                     used = 0;
                 }
 
-                uint64_t disconnected_at = datetime_monotonic_ms();
-                if (disconnected_at >= connected_at) {
-                    connected_ms = disconnected_at - connected_at;
-                }
+                /* A missed pong deadline counts only to the last received
+                 * frame, so the wait for the missing PONG never counts
+                 * toward the stable threshold. */
+                connected_ms =
+                    metaserver_rendezvous_liveness_session_ms(&liveness, datetime_monotonic_ms());
                 OPENSSL_cleanse(message, sizeof(message));
                 OPENSSL_cleanse(auth_jobs, sizeof(auth_jobs));
                 OPENSSL_cleanse(punch_jobs, sizeof(punch_jobs));
@@ -688,7 +689,7 @@ static void *metaserver_rendezvous_thread(void *data) {
             pthread_mutex_unlock(&stats_lock);
             break;
         }
-        if (connected_ms >= METASERVER_RENDEZVOUS_STABLE_MS) {
+        if (metaserver_rendezvous_session_stable(connected_ms)) {
             pthread_mutex_lock(&rendezvous_lock);
             if (metaserver_rendezvous_current_locked(args->generation)) {
                 metaserver_attempt_budget_reset(&rendezvous_attempt_budget,
