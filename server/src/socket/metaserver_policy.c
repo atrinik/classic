@@ -471,7 +471,7 @@ void metaserver_rendezvous_liveness_ping_blocked(metaserver_rendezvous_liveness_
 
     metaserver_rendezvous_liveness_attempted(liveness, now_ms);
     liveness->next_ping_ms =
-        metaserver_milliseconds_after(now_ms, METASERVER_RENDEZVOUS_HEARTBEAT_RETRY_MS);
+        metaserver_milliseconds_after(now_ms, METASERVER_RENDEZVOUS_PING_RETRY_MS);
 }
 
 void metaserver_rendezvous_liveness_received(metaserver_rendezvous_liveness_t *liveness,
@@ -506,6 +506,25 @@ metaserver_rendezvous_liveness_poll(metaserver_rendezvous_liveness_t *liveness,
     liveness->unanswered_reported = true;
     *waited_ms = now_ms - liveness->ping_sent_ms;
     return METASERVER_RENDEZVOUS_LIVENESS_UNANSWERED;
+}
+
+metaserver_rendezvous_liveness_result_t
+metaserver_rendezvous_liveness_after_receive(metaserver_rendezvous_liveness_t *liveness,
+                                             socket_websocket_receive_state_t state,
+                                             uint32_t pongs,
+                                             uint64_t now_ms,
+                                             uint64_t *waited_ms) {
+    HARD_ASSERT(liveness != NULL);
+    HARD_ASSERT(waited_ms != NULL);
+
+    *waited_ms = 0;
+    if (pongs != 0 || state == SOCKET_WEBSOCKET_PARTIAL || state == SOCKET_WEBSOCKET_MESSAGE) {
+        metaserver_rendezvous_liveness_received(liveness, pongs);
+    }
+    if (state != SOCKET_WEBSOCKET_EMPTY) {
+        return METASERVER_RENDEZVOUS_LIVENESS_OK;
+    }
+    return metaserver_rendezvous_liveness_poll(liveness, now_ms, waited_ms);
 }
 
 void metaserver_attempt_budget_init(metaserver_attempt_budget_t *budget, server_monotonic_t now) {

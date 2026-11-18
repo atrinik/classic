@@ -487,36 +487,31 @@ static void *metaserver_rendezvous_thread(void *data) {
                     socket_websocket_receive_info_t receive_info;
                     socket_websocket_receive_state_t receive_state =
                         socket_websocket_receive_ex(curl, VS(message), &used, &receive_info);
-                    if (receive_info.pongs_received != 0 ||
-                        receive_state == SOCKET_WEBSOCKET_PARTIAL ||
-                        receive_state == SOCKET_WEBSOCKET_MESSAGE) {
-                        metaserver_rendezvous_liveness_received(&liveness,
-                                                                receive_info.pongs_received);
-                    }
-                    if (receive_state == SOCKET_WEBSOCKET_EMPTY) {
-                        /* Judge the deadline only once every arrived frame
-                         * has been drained, so a late wakeup cannot miss a
-                         * PONG that is already buffered. */
-                        uint64_t waited_ms;
-                        metaserver_rendezvous_liveness_result_t liveness_result =
-                            metaserver_rendezvous_liveness_poll(&liveness,
-                                                                datetime_monotonic_ms(),
-                                                                &waited_ms);
-                        if (liveness_result == METASERVER_RENDEZVOUS_LIVENESS_EXPIRED) {
-                            /* "Rendezvous control receive " keeps this counted
-                             * with the other receive failures by log monitors. */
+                    uint64_t waited_ms;
+                    metaserver_rendezvous_liveness_result_t liveness_result =
+                        metaserver_rendezvous_liveness_after_receive(&liveness,
+                                                                     receive_state,
+                                                                     receive_info.pongs_received,
+                                                                     datetime_monotonic_ms(),
+                                                                     &waited_ms);
+                    if (liveness_result == METASERVER_RENDEZVOUS_LIVENESS_EXPIRED) {
+                        /* "Rendezvous control receive " keeps this counted
+                         * with the other receive failures by log monitors. */
+                        if (metaserver_rendezvous_current(args->generation)) {
                             LOG(ERROR,
                                 "Rendezvous control receive deadline missed: no pong %" PRIu64
                                 " ms after a ping",
                                 waited_ms);
-                            break;
                         }
-                        if (liveness_result == METASERVER_RENDEZVOUS_LIVENESS_UNANSWERED) {
-                            LOG(INFO,
-                                "Rendezvous control has not answered a ping after %" PRIu64
-                                " ms; not enforcing its pong deadline on this connection",
-                                waited_ms);
-                        }
+                        break;
+                    }
+                    if (liveness_result == METASERVER_RENDEZVOUS_LIVENESS_UNANSWERED) {
+                        LOG(INFO,
+                            "Rendezvous control has not answered a ping after %" PRIu64
+                            " ms; not enforcing its pong deadline on this connection",
+                            waited_ms);
+                    }
+                    if (receive_state == SOCKET_WEBSOCKET_EMPTY) {
                         if (!metaserver_rendezvous_wait(args->generation, 20)) {
                             break;
                         }

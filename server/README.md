@@ -622,14 +622,6 @@ mode and connection ID in `/who`, formatted as `(route: QUIC/mapped; connection:
  A crashed listing disappears no later than four hours after its last accepted
  publication.
 
- The connected rendezvous control sends a WebSocket ping when it opens and
- every 30 seconds after. Once the connection has answered a ping, a ping that
- draws no frame within 20 seconds closes the control as a network drop
- (`Rendezvous control receive deadline missed`); it reconnects through the
- same backoff and bucket, and a control that lasted at least 60 seconds
- restores its bucket. The `Sent rendezvous control heartbeat` debug line is
- logged at most once every five minutes.
-
  The local buckets are defense in depth: the metaserver remains authoritative
  across process restarts and duplicate processes. Listing visibility, name,
  description, and access policy are startup settings; changing them
@@ -643,6 +635,14 @@ mode and connection ID in `/who`, formatted as `(route: QUIC/mapped; connection:
  make the server directory-visible. Player joins and departures neither trigger
  private publications nor alter their payload. The rendezvous WebSocket alone
  does not refresh this signed-presence expiry.
+
+ The connected rendezvous control sends a WebSocket ping when it opens and
+ every 30 seconds after. Once the connection has answered a ping, a ping that
+ draws no frame within 20 seconds closes the control as a network drop
+ (`Rendezvous control receive deadline missed`); it reconnects through the
+ same backoff and bucket, and a control that lasted at least 60 seconds
+ restores its bucket. The `Sent rendezvous control heartbeat` debug line is
+ logged at most once every five minutes.
 
  The server reserves a fresh unsigned 64-bit publish sequence before every
  network attempt. Its crash-safe high-water mark is kept in two owner-only

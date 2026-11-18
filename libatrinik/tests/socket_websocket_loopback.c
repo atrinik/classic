@@ -156,10 +156,16 @@ static void *fixture_run(void *user_data) {
         unsigned char ping[6];
         fixture->ping_valid =
             fixture_read(client, ping, sizeof(ping)) && ping[0] == 0x89 && ping[1] == 0x80;
-        /* The unmasked empty PONG a conforming peer answers with, then text. */
-        static const unsigned char reply[] = {0x8a, 0x00, 0x81, 0x02, 'o', 'k'};
-        if (fixture->ping_valid && fixture_write(client, reply, sizeof(reply))) {
-            /* Hold the connection until the client has read the reply. */
+        /* The unmasked empty PONG a conforming peer answers with, on its own. */
+        static const unsigned char pong[] = {0x8a, 0x00};
+        /* The client's masked "go" text, sent once it has seen the PONG. */
+        unsigned char go[8];
+        static const unsigned char text[] = {0x81, 0x02, 'o', 'k'};
+        if (fixture->ping_valid && fixture_write(client, pong, sizeof(pong)) &&
+            fixture_read(client, go, sizeof(go)) && go[0] == 0x81 && go[1] == 0x82 &&
+            (go[6] ^ go[2]) == 'g' && (go[7] ^ go[3]) == 'o' &&
+            fixture_write(client, text, sizeof(text))) {
+            /* Hold the connection until the client has read the text. */
             unsigned char ignored;
             (void)fixture_wait(client, POLLIN);
             (void)recv(client, &ignored, sizeof(ignored), 0);
@@ -213,10 +219,13 @@ static int test_empty_ping_reply_is_counted(void) {
     CURL *curl = curl_easy_init();
     TEST_CHECK(curl != NULL);
     curl_easy_setopt(curl, CURLOPT_URL, url);
+    curl_easy_setopt(curl, CURLOPT_NOPROXY, "*");
     curl_easy_setopt(curl, CURLOPT_CONNECT_ONLY, 2L);
     curl_easy_setopt(curl, CURLOPT_TIMEOUT_MS, (long)FIXTURE_TIMEOUT_MS);
     curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
     TEST_CHECK(curl_easy_perform(curl) == CURLE_OK);
+    /* As the rendezvous control does, drop the upgrade deadline for frames. */
+    curl_easy_setopt(curl, CURLOPT_TIMEOUT_MS, 0L);
     long http_code = 0;
     curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &http_code);
     TEST_CHECK(http_code == 101);
@@ -226,15 +235,34 @@ static int test_empty_ping_reply_is_counted(void) {
     TEST_CHECK(curl_ws_send(curl, "", 0, &sent, 0, CURLWS_PING) == CURLE_OK);
     TEST_CHECK(sent == 0);
 
+    /* The lone PONG is reported by a receive that otherwise finds nothing,
+     * which is how the rendezvous thread observes it. */
     char message[16] = {0};
     size_t used = 0;
-    uint32_t pongs = 0;
-    socket_websocket_receive_state_t state = SOCKET_WEBSOCKET_EMPTY;
+    bool pong_reported = false;
     uint64_t deadline = monotonic_ms() + FIXTURE_TIMEOUT_MS;
+    while (!pong_reported && monotonic_ms() < deadline) {
+        socket_websocket_receive_info_t info;
+        socket_websocket_receive_state_t state =
+            socket_websocket_receive_ex(curl, message, sizeof(message), &used, &info);
+        TEST_CHECK(state == SOCKET_WEBSOCKET_EMPTY);
+        TEST_CHECK(info.pongs_received <= 1);
+        pong_reported = info.pongs_received == 1;
+        if (!pong_reported) {
+            usleep(1000);
+        }
+    }
+    TEST_CHECK(pong_reported);
+    TEST_CHECK(used == 0);
+
+    TEST_CHECK(curl_ws_send(curl, "go", 2, &sent, 0, CURLWS_TEXT) == CURLE_OK);
+    TEST_CHECK(sent == 2);
+    socket_websocket_receive_state_t state = SOCKET_WEBSOCKET_EMPTY;
+    deadline = monotonic_ms() + FIXTURE_TIMEOUT_MS;
     while (state != SOCKET_WEBSOCKET_MESSAGE && monotonic_ms() < deadline) {
         socket_websocket_receive_info_t info;
         state = socket_websocket_receive_ex(curl, message, sizeof(message), &used, &info);
-        pongs += info.pongs_received;
+        TEST_CHECK(info.pongs_received == 0);
         TEST_CHECK(state == SOCKET_WEBSOCKET_EMPTY || state == SOCKET_WEBSOCKET_PARTIAL ||
                    state == SOCKET_WEBSOCKET_MESSAGE);
         if (state == SOCKET_WEBSOCKET_EMPTY) {
@@ -243,7 +271,6 @@ static int test_empty_ping_reply_is_counted(void) {
     }
     TEST_CHECK(state == SOCKET_WEBSOCKET_MESSAGE);
     TEST_CHECK(strcmp(message, "ok") == 0);
-    TEST_CHECK(pongs == 1);
 
     /* Release the fixture's final read; libcurl may close without a frame. */
     curl_easy_cleanup(curl);

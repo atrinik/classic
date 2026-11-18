@@ -13,6 +13,7 @@
 #define METASERVER_INTERNAL_H
 
 #include <toolkit/curl.h>
+#include <toolkit/socket.h>
 #include <toolkit/rendezvous.h>
 #include <toolkit/metaserver_publisher.h>
 #include <server_clock.h>
@@ -30,8 +31,21 @@
 #define METASERVER_RENDEZVOUS_PONG_TIMEOUT_MS 20000U
 /* Minimum spacing of the monitored "Sent rendezvous control heartbeat" line. */
 #define METASERVER_RENDEZVOUS_HEARTBEAT_MS 300000U
-#define METASERVER_RENDEZVOUS_HEARTBEAT_RETRY_MS 20U
+/* Retry delay for a PING that libcurl could not write yet (CURLE_AGAIN). */
+#define METASERVER_RENDEZVOUS_PING_RETRY_MS 20U
 #define METASERVER_RENDEZVOUS_CONNECT_TIMEOUT_MS 2000L
+
+/* At most one PING is outstanding when its deadline expires. */
+_Static_assert(METASERVER_RENDEZVOUS_PONG_TIMEOUT_MS < METASERVER_RENDEZVOUS_PING_INTERVAL_MS,
+               "pong timeout must be shorter than the ping interval");
+/* A dead control is detected within a minute. */
+_Static_assert(METASERVER_RENDEZVOUS_PING_INTERVAL_MS + METASERVER_RENDEZVOUS_PONG_TIMEOUT_MS <=
+                   60000U,
+               "dead-control detection must stay within a minute");
+/* The heartbeat line falls on a PING, well inside the 15-minute stale alert. */
+_Static_assert(METASERVER_RENDEZVOUS_HEARTBEAT_MS % METASERVER_RENDEZVOUS_PING_INTERVAL_MS == 0U &&
+                   METASERVER_RENDEZVOUS_HEARTBEAT_MS < 900000U,
+               "heartbeat line cadence must match the ping cadence and monitoring");
 #define METASERVER_RENDEZVOUS_UPGRADE_TIMEOUT_MS 10000L
 
 #define METASERVER_PUBLISH_DEBOUNCE_SECONDS 10U
@@ -176,6 +190,18 @@ metaserver_rendezvous_liveness_result_t
 metaserver_rendezvous_liveness_poll(metaserver_rendezvous_liveness_t *liveness,
                                     uint64_t now_ms,
                                     uint64_t *waited_ms);
+/**
+ * Apply one socket_websocket_receive_ex() outcome. Counted PONGs and text
+ * (PARTIAL or MESSAGE) answer the outstanding PING. The deadline is judged
+ * only on EMPTY, after every arrived frame has been drained, so a late wakeup
+ * cannot miss a buffered PONG; other states return OK.
+ */
+metaserver_rendezvous_liveness_result_t
+metaserver_rendezvous_liveness_after_receive(metaserver_rendezvous_liveness_t *liveness,
+                                             socket_websocket_receive_state_t state,
+                                             uint32_t pongs,
+                                             uint64_t now_ms,
+                                             uint64_t *waited_ms);
 void metaserver_attempt_budget_init(metaserver_attempt_budget_t *budget, server_monotonic_t now);
 bool metaserver_attempt_budget_consume(metaserver_attempt_budget_t *budget,
                                        server_monotonic_t now,
