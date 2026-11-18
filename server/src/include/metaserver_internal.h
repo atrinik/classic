@@ -218,9 +218,10 @@ bool metaserver_attempt_budget_consume_refundable(metaserver_attempt_budget_t *b
                                                   server_monotonic_t *window);
 /**
  * Return one token taken by metaserver_attempt_budget_consume_refundable() in
- * `window`, exactly undoing that consume. Nothing is returned once a refill,
- * reset or init has started another window, or when the budget is already
- * full. Returns whether a token was returned.
+ * `window`, exactly undoing that consume. Call at most once per consume: a
+ * window that held several consumes cannot tell them apart. Nothing is returned
+ * once a refill, reset or init has started another window, or when the budget
+ * is already full. Returns whether a token was returned.
  */
 bool metaserver_attempt_budget_refund(metaserver_attempt_budget_t *budget,
                                       server_monotonic_t window);
