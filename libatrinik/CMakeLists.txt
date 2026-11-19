@@ -728,6 +728,18 @@ if ((CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR OR
         add_test(NAME libatrinik-socket-websocket COMMAND libatrinik-socket-websocket)
     endif ()
 
+    if (CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        add_executable(libatrinik-socket-websocket-loopback
+            tests/socket_websocket_loopback.c)
+        atrinik_configure_target(libatrinik-socket-websocket-loopback)
+        target_link_libraries(libatrinik-socket-websocket-loopback PRIVATE
+            Atrinik::Core OpenSSL::Crypto Threads::Threads)
+        add_test(NAME libatrinik-socket-websocket-loopback
+            COMMAND libatrinik-socket-websocket-loopback)
+        set_tests_properties(libatrinik-socket-websocket-loopback PROPERTIES
+            TIMEOUT 30 SKIP_RETURN_CODE 77)
+    endif ()
+
     add_executable(libatrinik-socket-fd-set tests/socket_fd_set.c)
     atrinik_configure_target(libatrinik-socket-fd-set)
     add_test(NAME libatrinik-socket-fd-set COMMAND libatrinik-socket-fd-set)

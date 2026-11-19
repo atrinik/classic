@@ -399,8 +399,12 @@ uint32_t metaserver_rendezvous_retry_delay_ms(uint32_t failures,
     return MAX(delay, retry_after_ms);
 }
 
+bool metaserver_rendezvous_session_stable(uint64_t session_ms) {
+    return session_ms >= METASERVER_RENDEZVOUS_STABLE_MS;
+}
+
 uint32_t metaserver_rendezvous_retry_failures(uint32_t failures, uint64_t connected_ms) {
-    return connected_ms >= METASERVER_RENDEZVOUS_STABLE_MS ? 0 : failures;
+    return metaserver_rendezvous_session_stable(connected_ms) ? 0 : failures;
 }
 
 bool metaserver_rendezvous_generation_allows(uint64_t current_generation,
@@ -417,6 +421,133 @@ bool metaserver_rendezvous_upgrade_retryable(CURLcode result, long http_code, bo
         return http_code == 408 || http_code == 429 || (http_code >= 500 && http_code <= 599);
     }
     return result != CURLE_OK;
+}
+
+bool metaserver_rendezvous_upgrade_unreachable(CURLcode result, long http_code) {
+    return result != CURLE_OK && http_code == 0;
+}
+
+static uint64_t metaserver_milliseconds_after(uint64_t now_ms, uint64_t duration_ms) {
+    return UINT64_MAX - now_ms < duration_ms ? UINT64_MAX : now_ms + duration_ms;
+}
+
+/* The deadline clock starts at the first attempt to write a PING, so a socket
+ * that cannot even accept the PING is held to the same deadline. */
+static void metaserver_rendezvous_liveness_attempted(metaserver_rendezvous_liveness_t *liveness,
+                                                     uint64_t now_ms) {
+    if (!liveness->ping_outstanding) {
+        liveness->ping_outstanding = true;
+        liveness->ping_sent_ms = now_ms;
+    }
+}
+
+void metaserver_rendezvous_liveness_init(metaserver_rendezvous_liveness_t *liveness,
+                                         uint64_t now_ms) {
+    HARD_ASSERT(liveness != NULL);
+
+    memset(liveness, 0, sizeof(*liveness));
+    liveness->opened_ms = now_ms;
+    liveness->last_frame_ms = now_ms;
+    liveness->next_ping_ms = now_ms;
+    liveness->next_heartbeat_log_ms =
+        metaserver_milliseconds_after(now_ms, METASERVER_RENDEZVOUS_HEARTBEAT_MS);
+}
+
+bool metaserver_rendezvous_liveness_ping_due(const metaserver_rendezvous_liveness_t *liveness,
+                                             uint64_t now_ms) {
+    HARD_ASSERT(liveness != NULL);
+
+    return now_ms >= liveness->next_ping_ms;
+}
+
+bool metaserver_rendezvous_liveness_ping_sent(metaserver_rendezvous_liveness_t *liveness,
+                                              uint64_t now_ms) {
+    HARD_ASSERT(liveness != NULL);
+
+    metaserver_rendezvous_liveness_attempted(liveness, now_ms);
+    liveness->next_ping_ms =
+        metaserver_milliseconds_after(now_ms, METASERVER_RENDEZVOUS_PING_INTERVAL_MS);
+    if (now_ms < liveness->next_heartbeat_log_ms) {
+        return false;
+    }
+    liveness->next_heartbeat_log_ms =
+        metaserver_milliseconds_after(now_ms, METASERVER_RENDEZVOUS_HEARTBEAT_MS);
+    return true;
+}
+
+void metaserver_rendezvous_liveness_ping_blocked(metaserver_rendezvous_liveness_t *liveness,
+                                                 uint64_t now_ms) {
+    HARD_ASSERT(liveness != NULL);
+
+    metaserver_rendezvous_liveness_attempted(liveness, now_ms);
+    liveness->next_ping_ms =
+        metaserver_milliseconds_after(now_ms, METASERVER_RENDEZVOUS_PING_RETRY_MS);
+}
+
+void metaserver_rendezvous_liveness_received(metaserver_rendezvous_liveness_t *liveness,
+                                             uint32_t pongs,
+                                             uint64_t now_ms) {
+    HARD_ASSERT(liveness != NULL);
+
+    liveness->ping_outstanding = false;
+    if (pongs != 0) {
+        liveness->pong_seen = true;
+    }
+    if (now_ms > liveness->last_frame_ms) {
+        liveness->last_frame_ms = now_ms;
+    }
+}
+
+metaserver_rendezvous_liveness_result_t
+metaserver_rendezvous_liveness_poll(metaserver_rendezvous_liveness_t *liveness,
+                                    uint64_t now_ms,
+                                    uint64_t *waited_ms) {
+    HARD_ASSERT(liveness != NULL);
+    HARD_ASSERT(waited_ms != NULL);
+
+    *waited_ms = 0;
+    if (!liveness->ping_outstanding || now_ms < liveness->ping_sent_ms ||
+        now_ms - liveness->ping_sent_ms < METASERVER_RENDEZVOUS_PONG_TIMEOUT_MS) {
+        return METASERVER_RENDEZVOUS_LIVENESS_OK;
+    }
+    if (liveness->pong_seen) {
+        liveness->expired = true;
+        *waited_ms = now_ms - liveness->ping_sent_ms;
+        return METASERVER_RENDEZVOUS_LIVENESS_EXPIRED;
+    }
+    if (liveness->unanswered_reported) {
+        return METASERVER_RENDEZVOUS_LIVENESS_OK;
+    }
+    liveness->unanswered_reported = true;
+    *waited_ms = now_ms - liveness->ping_sent_ms;
+    return METASERVER_RENDEZVOUS_LIVENESS_UNANSWERED;
+}
+
+metaserver_rendezvous_liveness_result_t
+metaserver_rendezvous_liveness_after_receive(metaserver_rendezvous_liveness_t *liveness,
+                                             socket_websocket_receive_state_t state,
+                                             uint32_t pongs,
+                                             uint64_t now_ms,
+                                             uint64_t *waited_ms) {
+    HARD_ASSERT(liveness != NULL);
+    HARD_ASSERT(waited_ms != NULL);
+
+    *waited_ms = 0;
+    if (pongs != 0 || state == SOCKET_WEBSOCKET_PARTIAL || state == SOCKET_WEBSOCKET_MESSAGE) {
+        metaserver_rendezvous_liveness_received(liveness, pongs, now_ms);
+    }
+    if (state != SOCKET_WEBSOCKET_EMPTY) {
+        return METASERVER_RENDEZVOUS_LIVENESS_OK;
+    }
+    return metaserver_rendezvous_liveness_poll(liveness, now_ms, waited_ms);
+}
+
+uint64_t metaserver_rendezvous_liveness_session_ms(const metaserver_rendezvous_liveness_t *liveness,
+                                                   uint64_t closed_ms) {
+    HARD_ASSERT(liveness != NULL);
+
+    uint64_t ended_ms = liveness->expired ? liveness->last_frame_ms : closed_ms;
+    return ended_ms >= liveness->opened_ms ? ended_ms - liveness->opened_ms : 0;
 }
 
 void metaserver_attempt_budget_init(metaserver_attempt_budget_t *budget, server_monotonic_t now) {
@@ -456,6 +587,44 @@ void metaserver_attempt_budget_reset(metaserver_attempt_budget_t *budget, server
     budget->tokens = METASERVER_ATTEMPT_RATE_CAPACITY;
     budget->refill_deadline =
         metaserver_deadline_after_seconds(now, METASERVER_ATTEMPT_RATE_REFILL_SECONDS);
+}
+
+bool metaserver_attempt_budget_consume_refundable(metaserver_attempt_budget_t *budget,
+                                                  server_monotonic_t now,
+                                                  uint32_t *wait_ms,
+                                                  server_monotonic_t *window) {
+    HARD_ASSERT(budget != NULL);
+    HARD_ASSERT(window != NULL);
+
+    bool consumed = metaserver_attempt_budget_consume(budget, now, wait_ms);
+    *window = budget->refill_deadline;
+    return consumed;
+}
+
+bool metaserver_attempt_budget_refund(metaserver_attempt_budget_t *budget,
+                                      server_monotonic_t window) {
+    HARD_ASSERT(budget != NULL);
+
+    /* Every applied refill, reset and init moves refill_deadline. While it is
+     * unchanged the budget is exactly as that consume left it, even if the
+     * deadline has since passed: the next consume then refills from the
+     * restored count, capped at capacity, as if the attempt never happened. */
+    if (budget->refill_deadline.microseconds != window.microseconds ||
+        budget->tokens >= METASERVER_ATTEMPT_RATE_CAPACITY) {
+        return false;
+    }
+    budget->tokens++;
+    return true;
+}
+
+bool metaserver_rendezvous_attempt_refund(metaserver_attempt_budget_t *budget,
+                                          server_monotonic_t window,
+                                          CURLcode result,
+                                          long http_code) {
+    HARD_ASSERT(budget != NULL);
+
+    return metaserver_rendezvous_upgrade_unreachable(result, http_code) &&
+           metaserver_attempt_budget_refund(budget, window);
 }
 
 uint32_t metaserver_publish_heartbeat_delay_seconds(uint32_t heartbeat_seconds,

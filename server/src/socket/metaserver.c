@@ -350,9 +350,12 @@ static void *metaserver_rendezvous_thread(void *data) {
     while (metaserver_rendezvous_current(args->generation)) {
         pthread_mutex_lock(&rendezvous_lock);
         uint32_t budget_wait_ms;
-        bool budget_available = metaserver_attempt_budget_consume(&rendezvous_attempt_budget,
-                                                                  server_monotonic_now(),
-                                                                  &budget_wait_ms);
+        server_monotonic_t budget_window;
+        bool budget_available =
+            metaserver_attempt_budget_consume_refundable(&rendezvous_attempt_budget,
+                                                         server_monotonic_now(),
+                                                         &budget_wait_ms,
+                                                         &budget_window);
         pthread_mutex_unlock(&rendezvous_lock);
         if (!budget_available) {
             LOG(INFO,
@@ -429,6 +432,21 @@ static void *metaserver_rendezvous_thread(void *data) {
             if (!connected) {
                 retryable =
                     metaserver_rendezvous_upgrade_retryable(result, http_code, protocol_valid);
+                /* An attempt that drew no HTTP response (usually a network
+                 * outage) must not spend the reconnect allowance needed once
+                 * the network returns. Its failure still counts toward the
+                 * exponential backoff. */
+                pthread_mutex_lock(&rendezvous_lock);
+                bool refunded = metaserver_rendezvous_attempt_refund(&rendezvous_attempt_budget,
+                                                                     budget_window,
+                                                                     result,
+                                                                     http_code);
+                pthread_mutex_unlock(&rendezvous_lock);
+                if (refunded) {
+                    LOG(DEBUG,
+                        "Returned the attempt budget token of a rendezvous attempt without an "
+                        "HTTP response");
+                }
                 if (result != CURLE_OK) {
                     LOG(ERROR,
                         "Rendezvous connection failed (HTTP %ld): %s",
@@ -445,10 +463,8 @@ static void *metaserver_rendezvous_thread(void *data) {
                 }
             } else {
                 uint64_t connected_at = datetime_monotonic_ms();
-                uint64_t next_heartbeat =
-                    UINT64_MAX - connected_at < METASERVER_RENDEZVOUS_HEARTBEAT_MS
-                        ? UINT64_MAX
-                        : connected_at + METASERVER_RENDEZVOUS_HEARTBEAT_MS;
+                metaserver_rendezvous_liveness_t liveness;
+                metaserver_rendezvous_liveness_init(&liveness, connected_at);
                 rendezvous_punch_job_t punch_jobs[RENDEZVOUS_PUNCH_JOBS_MAX] = {0};
                 metaserver_rendezvous_auth_job_t auth_jobs[METASERVER_RENDEZVOUS_AUTH_JOBS_MAX] = {
                     0};
@@ -457,20 +473,17 @@ static void *metaserver_rendezvous_thread(void *data) {
                 bool stop_control = false;
                 while (!stop_control && metaserver_rendezvous_current(args->generation)) {
                     uint64_t now = datetime_monotonic_ms();
-                    if (now >= next_heartbeat) {
+                    if (metaserver_rendezvous_liveness_ping_due(&liveness, now)) {
                         CURLcode heartbeat_result =
                             metaserver_rendezvous_ping(curl, args->generation);
                         if (heartbeat_result == CURLE_OK) {
-                            next_heartbeat =
-                                UINT64_MAX - now < METASERVER_RENDEZVOUS_HEARTBEAT_MS
-                                    ? UINT64_MAX
-                                    : now + METASERVER_RENDEZVOUS_HEARTBEAT_MS;
-                            LOG(DEBUG, "Sent rendezvous control heartbeat");
+                            /* Monitoring expects this line about every five
+                             * minutes, not on every PING. */
+                            if (metaserver_rendezvous_liveness_ping_sent(&liveness, now)) {
+                                LOG(DEBUG, "Sent rendezvous control heartbeat");
+                            }
                         } else if (heartbeat_result == CURLE_AGAIN) {
-                            next_heartbeat =
-                                UINT64_MAX - now < METASERVER_RENDEZVOUS_HEARTBEAT_RETRY_MS
-                                    ? UINT64_MAX
-                                    : now + METASERVER_RENDEZVOUS_HEARTBEAT_RETRY_MS;
+                            metaserver_rendezvous_liveness_ping_blocked(&liveness, now);
                         } else {
                             if (metaserver_rendezvous_current(args->generation)) {
                                 LOG(ERROR,
@@ -492,6 +505,30 @@ static void *metaserver_rendezvous_thread(void *data) {
                     socket_websocket_receive_info_t receive_info;
                     socket_websocket_receive_state_t receive_state =
                         socket_websocket_receive_ex(curl, VS(message), &used, &receive_info);
+                    uint64_t waited_ms;
+                    metaserver_rendezvous_liveness_result_t liveness_result =
+                        metaserver_rendezvous_liveness_after_receive(&liveness,
+                                                                     receive_state,
+                                                                     receive_info.pongs_received,
+                                                                     datetime_monotonic_ms(),
+                                                                     &waited_ms);
+                    if (liveness_result == METASERVER_RENDEZVOUS_LIVENESS_EXPIRED) {
+                        /* "Rendezvous control receive " keeps this counted
+                         * with the other receive failures by log monitors. */
+                        if (metaserver_rendezvous_current(args->generation)) {
+                            LOG(ERROR,
+                                "Rendezvous control receive deadline missed: no pong %" PRIu64
+                                " ms after a ping",
+                                waited_ms);
+                        }
+                        break;
+                    }
+                    if (liveness_result == METASERVER_RENDEZVOUS_LIVENESS_UNANSWERED) {
+                        LOG(INFO,
+                            "Rendezvous control has not answered a ping after %" PRIu64
+                            " ms; not enforcing its pong deadline on this connection",
+                            waited_ms);
+                    }
                     if (receive_state == SOCKET_WEBSOCKET_EMPTY) {
                         if (!metaserver_rendezvous_wait(args->generation, 20)) {
                             break;
@@ -622,10 +659,11 @@ static void *metaserver_rendezvous_thread(void *data) {
                     used = 0;
                 }
 
-                uint64_t disconnected_at = datetime_monotonic_ms();
-                if (disconnected_at >= connected_at) {
-                    connected_ms = disconnected_at - connected_at;
-                }
+                /* A missed pong deadline counts only to the last received
+                 * frame, so the wait for the missing PONG never counts
+                 * toward the stable threshold. */
+                connected_ms =
+                    metaserver_rendezvous_liveness_session_ms(&liveness, datetime_monotonic_ms());
                 OPENSSL_cleanse(message, sizeof(message));
                 OPENSSL_cleanse(auth_jobs, sizeof(auth_jobs));
                 OPENSSL_cleanse(punch_jobs, sizeof(punch_jobs));
@@ -651,7 +689,7 @@ static void *metaserver_rendezvous_thread(void *data) {
             pthread_mutex_unlock(&stats_lock);
             break;
         }
-        if (connected_ms >= METASERVER_RENDEZVOUS_STABLE_MS) {
+        if (metaserver_rendezvous_session_stable(connected_ms)) {
             pthread_mutex_lock(&rendezvous_lock);
             if (metaserver_rendezvous_current_locked(args->generation)) {
                 metaserver_attempt_budget_reset(&rendezvous_attempt_budget,

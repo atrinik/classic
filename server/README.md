@@ -613,14 +613,17 @@ mode and connection ID in `/who`, formatted as `(route: QUIC/mapped; connection:
  base in seconds; the default 9000 seconds is jittered to 8100-9900 seconds,
  safely below the directory's four-hour expiry. Separate publisher and
  rendezvous two-token buckets, each refilling once every 1920 seconds, cap one
- continuously running process at 47 attempts per route in any 24-hour interval
- while still allowing startup and one prompt coalesced change. Transient
- failures use exponential backoff with jitter up to one hour,
- and `Retry-After` can extend that delay. Permanent publisher or rendezvous
- rejections stop retrying until public state changes, a later successful
- publish supplies a replacement token, or the operator restarts the server.
- A crashed listing disappears no later than four hours after its last accepted
- publication.
+ continuously running process at 47 counted attempts per route in any 24-hour
+ interval while still allowing startup and one prompt coalesced change. A
+ rendezvous attempt that gets no HTTP response at all (a DNS, connect or TLS
+ failure, or a request that fails or times out before any response) returns
+ its token and is not counted, so a network outage cannot exhaust the bucket.
+ Transient failures, including uncounted ones, use exponential backoff with
+ jitter up to one hour, and `Retry-After` can extend that delay. Permanent
+ publisher or rendezvous rejections stop retrying until public state changes,
+ a later successful publish supplies a replacement token, or the operator
+ restarts the server. A crashed listing disappears no later than four hours
+ after its last accepted publication.
 
  The local buckets are defense in depth: the metaserver remains authoritative
  across process restarts and duplicate processes. Listing visibility, name,
@@ -635,6 +638,16 @@ mode and connection ID in `/who`, formatted as `(route: QUIC/mapped; connection:
  make the server directory-visible. Player joins and departures neither trigger
  private publications nor alter their payload. The rendezvous WebSocket alone
  does not refresh this signed-presence expiry.
+
+ The connected rendezvous control sends a WebSocket ping when it opens and
+ every 30 seconds after. Once the connection has answered a ping, a ping that
+ draws no frame within 20 seconds closes the control as a network drop
+ (`Rendezvous control receive deadline missed`), typically 20-50 seconds and
+ at most about 80 seconds after the path dies. It reconnects through the same
+ backoff and bucket. A control that lasted at least 60 seconds restores its
+ bucket and resets the backoff; one closed this way counts only until the
+ last frame it received. The `Sent rendezvous control heartbeat` debug line is
+ logged at most once every five minutes.
 
  The server reserves a fresh unsigned 64-bit publish sequence before every
  network attempt. Its crash-safe high-water mark is kept in two owner-only
