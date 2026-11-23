@@ -47,11 +47,16 @@ IMAGE_INSPECTION_STEP = "Inspect the versioned server image"
 MAX_API_PAGES = 20
 MAX_WORKFLOW_RUNS = 50
 MAX_CANDIDATE_INSPECTIONS = 25
-MAX_AUTOMATIC_SERVER_IMAGE_RETRIES = 3
+# The first tag-ref dispatch plus two automatic retries. Recovery always rebuilds
+# the immutable tag definition, so a third consecutive failure is treated as
+# deterministic: it needs an operator rather than another full release build.
+# The cap also bounds the check runs each attempt adds to the tag commit and
+# freezes the failed-run inventory that a failed-release disposition lists.
+MAX_AUTOMATIC_PACKAGE_ATTEMPTS = 3
 
 RETAINED_PROOF_STEPS = (
     IMAGE_INSPECTION_STEP,
-    "Recheck candidate hashes before publication",
+    "Recheck the revision-specific candidate before publication",
     "Attest downloadable artifact provenance",
     "Attest downloadable artifact SBOM",
     "Resume draft assets or verify the immutable release",
@@ -480,7 +485,7 @@ def recent_failure_classes(
         if isinstance(run_id, bool) or not isinstance(run_id, int) or run_id <= 0:
             continue
         inspected += 1
-        if inspected > MAX_AUTOMATIC_SERVER_IMAGE_RETRIES:
+        if inspected > MAX_AUTOMATIC_PACKAGE_ATTEMPTS:
             break
         run = _validate_package_run(
             repository, run_id, request(f"repos/{repository}/actions/runs/{run_id}")
@@ -495,15 +500,6 @@ def recent_failure_classes(
             continue
         classes.append(classify_failed_run(_collect_jobs(repository, run_id, request)))
     return classes
-
-
-def _leading_failure_class_count(classes: list[str], failure_class: str) -> int:
-    count = 0
-    for value in classes:
-        if value != failure_class:
-            break
-        count += 1
-    return count
 
 
 def resolve(
@@ -577,12 +573,11 @@ def resolve(
             )
         classes = failure_classes(tag) if failure_classes is not None else []
         if classes:
+            # Newest first: report the latest failure boundary and how many
+            # consecutive failed attempts on the tag lineage were inspected.
             failure_class = classes[0]
-            retry_count = _leading_failure_class_count(classes, failure_class)
-            if (
-                failure_class == "server-image-build"
-                and retry_count >= MAX_AUTOMATIC_SERVER_IMAGE_RETRIES
-            ):
+            retry_count = len(classes)
+            if retry_count >= MAX_AUTOMATIC_PACKAGE_ATTEMPTS:
                 return {
                     "action": "blocked",
                     "tag": tag,

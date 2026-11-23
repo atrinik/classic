@@ -959,7 +959,7 @@ class WorkflowContractTests(unittest.TestCase):
             self.assertNotIn("contents: write", job)
         self.assertEqual(package[: package.index("jobs:")].count("contents: read"), 1)
 
-    def test_current_main_preflight_uses_the_trusted_recovery_verifier(self) -> None:
+    def test_retained_publication_preflight_uses_the_current_branch_verifier(self) -> None:
         workflow = self.text("package-release.yml")
         preflight_job = workflow[
             workflow.index("  preflight:") : workflow.index("  discord-config:")
@@ -989,14 +989,17 @@ class WorkflowContractTests(unittest.TestCase):
             branch_mode.index('if test -z "${RELEASE_CANDIDATE_RUN_ID}"; then'),
             branch_mode.index('test "${RELEASE_REF_TYPE}" = branch'),
         )
-        self.assertIn("candidate builds must run from refs/tags/${RELEASE_TAG}", branch_mode)
+        self.assertIn(
+            'echo "candidate builds must run from refs/tags/${RELEASE_TAG}" >&2\n'
+            "              exit 1\n",
+            branch_mode,
+        )
         metadata = preflight_job[
             preflight_job.index("id: metadata"):preflight_job.index("id: retained")
         ]
         self.assertIn("if: inputs.candidate_run_id == ''", metadata)
         self.assertIn('test "${GITHUB_REF_TYPE}" = tag', metadata)
         self.assertNotIn("--recovery-branch", metadata)
-        self.assertNotIn("--recovery-main", metadata)
         retained = preflight_job[preflight_job.index("id: retained"):]
         self.assertIn(".head_sha, .head_branch] | @tsv", retained)
         self.assertIn('test "${run_ref}" = "${RELEASE_TAG}"', retained)
@@ -1008,6 +1011,35 @@ class WorkflowContractTests(unittest.TestCase):
         for start, end in (("  discord-config:", "  candidate:"), ("  candidate:", "  publish:")):
             job = workflow[workflow.index(start) : workflow.index(end)]
             self.assertIn("inputs.candidate_run_id == ''", job)
+
+    def test_publication_requires_tag_bound_provenance_after_every_attestation(self) -> None:
+        workflow = self.text("package-release.yml")
+        publish = workflow[workflow.index("  publish:") : workflow.index("  queue-latest:")]
+        verify = publish.index("name: Require tag-bound provenance for every published byte")
+        for attestation in ("name: Attest downloadable artifact provenance",
+                            "name: Attest the exact published server image",
+                            "name: Resume draft assets or verify the immutable release"):
+            self.assertLess(publish.index(attestation), verify)
+        self.assertLess(verify, publish.index("name: Recheck the exact release assets immediately before publication"))
+        self.assertLess(verify, publish.index("name: Publish the complete draft release"))
+        step = publish[verify : publish.index("      - id: final-assets")]
+        self.assertIn("if: steps.assets.outputs.state == 'draft'", step)
+        self.assertIn("IMAGE_DIGEST: ${{ steps.image.outputs.digest || steps.registry.outputs.digest }}", step)
+        self.assertIn("subjects=(build/release/*)", step)
+        self.assertIn('oci://ghcr.io/atrinik/classic-server@${IMAGE_DIGEST}', step)
+
+    def test_release_validation_selects_the_aggregate_check_by_name(self) -> None:
+        # Each Package Release attempt adds check runs to the tag commit; an
+        # unfiltered first page can lose the aggregate after a few attempts.
+        query = "check-runs?check_name=Classic%20validation&per_page=100"
+        package = self.text("package-release.yml")
+        self.assertIn(query, package)
+        self.assertNotIn("check-runs?per_page=100", package)
+        for helper in ("validate_release.py", "recover_release.py"):
+            source = (ROOT / "tools/release" / helper).read_text(encoding="utf-8")
+            self.assertIn('/check-runs"\n', source)
+            self.assertIn('"?check_name=Classic%20validation&per_page=100"', source)
+            self.assertNotIn("check-runs?per_page=100", source)
 
     def test_semantic_release_skips_cross_repository_issue_comments(self) -> None:
         config = (ROOT / ".releaserc.cjs").read_text(encoding="utf-8")

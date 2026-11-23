@@ -83,7 +83,6 @@ def main() -> int:
     parser.add_argument("--tag", required=True)
     parser.add_argument("--repository", required=True)
     parser.add_argument("--github-output", type=Path)
-    parser.add_argument("--recovery-main", action="store_true")
     parser.add_argument(
         "--recovery-branch",
         help="require HEAD to equal the current source branch before recovery",
@@ -95,11 +94,7 @@ def main() -> int:
 
     release_version = version(arguments.tag)
     branch, maintenance = source_branch(arguments.source_branch)
-    if arguments.recovery_main and arguments.recovery_branch is not None:
-        raise ValidationError("recovery-main and recovery-branch are mutually exclusive")
     recovery_branch = arguments.recovery_branch
-    if arguments.recovery_main:
-        recovery_branch = "main"
     if recovery_branch is not None:
         recovery_branch, _ = source_branch(recovery_branch)
         if recovery_branch != branch:
@@ -158,7 +153,10 @@ def main() -> int:
         "api",
         "-H",
         "Accept: application/vnd.github+json",
-        f"repos/{arguments.repository}/commits/{commit}/check-runs?per_page=100",
+        # Release runs add check runs to the tag commit; select by name so
+        # repeated packaging attempts cannot push the aggregate off one page.
+        f"repos/{arguments.repository}/commits/{commit}/check-runs"
+        "?check_name=Classic%20validation&per_page=100",
         json_output=True,
     )
     assert isinstance(checks, dict)

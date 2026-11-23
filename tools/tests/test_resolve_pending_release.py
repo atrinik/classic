@@ -4,6 +4,7 @@ import copy
 import importlib.util
 import json
 from pathlib import Path
+import re
 import sys
 import unittest
 from unittest.mock import patch
@@ -73,6 +74,57 @@ def retained_publication_steps(failed_name: str) -> list[dict[str, str]]:
     if failed_name not in resolve_pending_release.RETAINED_PROOF_STEPS:
         steps.append({"name": failed_name, "conclusion": "failure"})
     return steps
+
+
+WORKFLOWS = Path(__file__).resolve().parents[2] / ".github" / "workflows"
+
+
+def workflow_jobs(name: str) -> dict[str, tuple[str, str]]:
+    """Map each job ID to its display name and text block, without YAML."""
+    text = (WORKFLOWS / name).read_text(encoding="utf-8")
+    jobs = text[text.index("\njobs:\n") :]
+    starts = list(re.finditer(r"(?m)^  ([A-Za-z0-9_-]+):\n    name: (.+)$", jobs))
+    return {
+        match[1]: (match[2], jobs[match.start() : starts[index + 1].start()
+                                  if index + 1 < len(starts) else len(jobs)])
+        for index, match in enumerate(starts)
+    }
+
+
+def step_names(job: str) -> list[str]:
+    return [first or second for first, second in
+            re.findall(r"(?m)^      - name: (.+)$|^        name: (.+)$", job)]
+
+
+class WorkflowIdentityTests(unittest.TestCase):
+    def test_every_inspected_job_and_step_name_exists(self) -> None:
+        # A renamed job or step silently turns its evidence check into a
+        # permanent mismatch, so the resolver must name the live workflow.
+        package = workflow_jobs("package-release.yml")
+        candidate_caller, candidate_job = package["candidate"]
+        self.assertIn("uses: ./.github/workflows/build-release-candidate.yml", candidate_job)
+        reusable = {
+            f"{candidate_caller} / {name}"
+            for name, _ in workflow_jobs("build-release-candidate.yml").values()
+        }
+        for job in (
+            resolve_pending_release.IMAGE_JOB,
+            resolve_pending_release.WINDOWS_JOB,
+            resolve_pending_release.CANDIDATE_FINALIZER_JOB,
+        ):
+            self.assertIn(job, reusable)
+        publish_name, publish_job = package["publish"]
+        self.assertEqual(resolve_pending_release.PUBLISH_JOB, publish_name)
+        steps = step_names(publish_job)
+        for step in (
+            resolve_pending_release.PUBLISH_STEP,
+            resolve_pending_release.IMAGE_INSPECTION_STEP,
+            *resolve_pending_release.RETAINED_PROOF_STEPS,
+        ):
+            self.assertEqual(steps.count(step), 1, step)
+        workflow = (WORKFLOWS / "package-release.yml").read_text(encoding="utf-8")
+        for job in (resolve_pending_release.CANDIDATE_FINALIZER_JOB, publish_name):
+            self.assertIn(f'select(.name == "{job}" and .conclusion == ', workflow)
 
 
 class ResolvePendingReleaseTests(unittest.TestCase):
@@ -346,6 +398,76 @@ class ResolvePendingReleaseTests(unittest.TestCase):
         self.assertEqual(result["action"], "resume")
         self.assertEqual(result["failure_class"], "server-image-build")
         self.assertEqual(result["retry_count"], "1")
+
+    def test_third_consecutive_failure_of_any_class_stops_automatic_retries(self) -> None:
+        def resolved(classes: list[str]) -> dict[str, str]:
+            return resolve_pending_release.resolve(
+                [draft(id=10, tag_name="v5.8.0")],
+                policy(),
+                lambda tag: "0" * 40,
+                lambda run, windows, image: None,
+                failure_classes=lambda tag: classes,
+            )
+
+        self.assertEqual(resolve_pending_release.MAX_AUTOMATIC_PACKAGE_ATTEMPTS, 3)
+        self.assertEqual(
+            resolved(["unknown", "windows-server-build"]),
+            {
+                "action": "resume",
+                "tag": "v5.8.0",
+                "release_id": "10",
+                "failure_class": "unknown",
+                "retry_count": "2",
+            },
+        )
+        self.assertEqual(
+            resolved(["unknown", "candidate-validation", "server-image-build"]),
+            {
+                "action": "blocked",
+                "tag": "v5.8.0",
+                "release_id": "10",
+                "failure_class": "unknown",
+                "retry_count": "3",
+            },
+        )
+
+    def test_failure_inspection_stops_at_the_attempt_cap(self) -> None:
+        listed = [
+            {
+                "id": run_id,
+                "name": "Package Release",
+                "path": ".github/workflows/package-release.yml",
+                "event": "workflow_dispatch",
+                "conclusion": "failure",
+                "head_branch": "v5.8.0",
+                "head_sha": "1" * 40,
+            }
+            for run_id in range(201, 206)
+        ]
+        requested: list[str] = []
+
+        def request(path: str) -> object:
+            requested.append(path)
+            run_id = int(path.rsplit("/", 1)[1])
+            return dict(listed[run_id - 201], head_repository={"full_name": "atrinik/classic"})
+
+        with (
+            patch.object(
+                resolve_pending_release, "list_workflow_runs", return_value=listed
+            ),
+            patch.object(resolve_pending_release, "is_ancestor", return_value=True),
+            patch.object(resolve_pending_release, "_collect_jobs", return_value=[]),
+        ):
+            self.assertEqual(
+                resolve_pending_release.recent_failure_classes(
+                    "atrinik/classic", "v5.8.0", "1" * 40, "2" * 40, request
+                ),
+                ["unknown"] * 3,
+            )
+        self.assertEqual(
+            requested,
+            [f"repos/atrinik/classic/actions/runs/{run_id}" for run_id in (201, 202, 203)],
+        )
 
     def test_multiple_drafts_fail_closed(self) -> None:
         with self.assertRaisesRegex(

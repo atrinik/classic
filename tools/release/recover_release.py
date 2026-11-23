@@ -157,7 +157,8 @@ def main() -> int:
                 "api",
                 "-H",
                 "Accept: application/vnd.github+json",
-                f"repos/{arguments.repository}/commits/{tag_commit}/check-runs?per_page=100",
+                f"repos/{arguments.repository}/commits/{tag_commit}/check-runs"
+                "?check_name=Classic%20validation&per_page=100",
             )
         )
         if not has_successful_classic_check(checks):

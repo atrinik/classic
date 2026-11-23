@@ -92,7 +92,7 @@ jobs:
               "${RELEASE_WORKFLOW_SHA}"
             successful=$(gh api \
               -H 'Accept: application/vnd.github+json' \
-              "repos/${RELEASE_REPOSITORY}/commits/${RELEASE_WORKFLOW_SHA}/check-runs?per_page=100" \
+              "repos/${RELEASE_REPOSITORY}/commits/${RELEASE_WORKFLOW_SHA}/check-runs?check_name=Classic%20validation&per_page=100" \
               --jq '[.check_runs[] | select(.name == "Classic validation" and .conclusion == "success" and .app.id == 15368)] | length')
             test "${successful}" -ge 1
           fi
@@ -385,6 +385,45 @@ jobs:
           gh attestation verify
           "oci://ghcr.io/atrinik/classic-server@${IMAGE_DIGEST}"
           --repo "${RELEASE_REPOSITORY}"
+      - name: Require tag-bound provenance for every published byte
+        if: steps.assets.outputs.state == 'draft'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          IMAGE_DIGEST: ${{ steps.image.outputs.digest || steps.registry.outputs.digest }}
+          RELEASE_REPOSITORY: ${{ github.repository }}
+          RELEASE_TAG: ${{ env.RELEASE_TAG }}
+        run: |
+          set -euo pipefail
+          # Consumers pin the tag commit and ref. GitHub signs each attestation
+          # with its own run's ref and commit, so this requires a tag-ref
+          # Package Release run (this one, or a retained candidate's) to have
+          # attested every asset and the image.
+          [[ ${RELEASE_TAG} =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          [[ ${RELEASE_COMMIT} =~ ^[0-9a-f]{40}$ ]]
+          [[ ${IMAGE_DIGEST} =~ ^sha256:[0-9a-f]{64}$ ]]
+          test "$(git rev-parse "refs/tags/${RELEASE_TAG}^{commit}")" = "${RELEASE_COMMIT}"
+          policy=(
+            --repo "${RELEASE_REPOSITORY}"
+            --signer-workflow "${RELEASE_REPOSITORY}/.github/workflows/package-release.yml"
+            --source-digest "${RELEASE_COMMIT}"
+            --source-ref "refs/tags/${RELEASE_TAG}"
+            --deny-self-hosted-runners
+          )
+          subjects=(build/release/*)
+          test -f "${subjects[0]}"
+          subjects+=("oci://ghcr.io/atrinik/classic-server@${IMAGE_DIGEST}")
+          for subject in "${subjects[@]}"; do
+            for attempt in {1..3}; do
+              if gh attestation verify "${subject}" "${policy[@]}" > /dev/null; then
+                break
+              fi
+              if ((attempt == 3)); then
+                echo "no tag-bound provenance for ${subject}" >&2
+                exit 1
+              fi
+              sleep 10
+            done
+          done
       - id: final-assets
         name: Recheck the exact release assets immediately before publication
         env:

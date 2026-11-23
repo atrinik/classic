@@ -214,7 +214,7 @@ jobs:
             echo "### Pending release recovery disposition"
             echo "- action: \`${RELEASE_ACTION}\`"
             echo "- failure class: \`${RELEASE_FAILURE_CLASS}\`"
-            echo "- consecutive matching failures inspected: \`${RELEASE_RETRY_COUNT}\`"
+            echo "- consecutive failed package attempts inspected: \`${RELEASE_RETRY_COUNT}\`"
           } >> "${GITHUB_STEP_SUMMARY}"
       - name: Analyze commits, tag, and publish release notes
         if: >-
