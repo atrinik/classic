@@ -21,7 +21,15 @@ IMAGE_DIGEST = "sha256:" + "c" * 64
 GUARD = "Require an immutable tag or validated release-branch definition"
 METADATA = "Validate tag, release, checks, and ancestry"
 RETAINED = "Validate the retained complete candidate"
-PROVENANCE = "Require tag-bound provenance for every published byte"
+ASSET_PROVENANCE = "Require tag-bound provenance for every release asset"
+IMAGE_PROVENANCE = "Require tag-bound provenance for the server image"
+PROVENANCE_HELPER = ROOT / "tools/release/verify_tag_provenance.sh"
+POLICY = {
+    "--repo": "atrinik/classic",
+    "--signer-workflow": "atrinik/classic/.github/workflows/package-release.yml",
+    "--source-digest": TAG_COMMIT,
+    "--source-ref": f"refs/tags/{TAG}",
+}
 
 
 def run_blocks() -> dict[str, str]:
@@ -33,7 +41,7 @@ def run_blocks() -> dict[str, str]:
         script = re.search(r"(?m)^        run: \|\n((?:          .*\n?|\n)+)", block)
         if name is not None and script is not None:
             result[name[1]] = textwrap.dedent(script[1])
-    missing = {GUARD, METADATA, RETAINED, PROVENANCE} - set(result)
+    missing = {GUARD, METADATA, RETAINED, ASSET_PROVENANCE, IMAGE_PROVENANCE} - set(result)
     if missing:
         raise AssertionError(f"package workflow no longer contains: {sorted(missing)}")
     return result
@@ -46,11 +54,17 @@ class Fixture:
         self.log.touch()
         bin_directory = directory / "bin"
         bin_directory.mkdir()
-        # PATH holds only these inert mocks: no real Git, GitHub API, Python or sleep.
+        (bin_directory / "bash").symlink_to("/bin/bash")
+        # Steps run the trusted helper from the release-automation checkout.
+        automation = directory / "build/release-automation/tools/release"
+        automation.mkdir(parents=True)
+        (automation / PROVENANCE_HELPER.name).write_bytes(PROVENANCE_HELPER.read_bytes())
+        # PATH holds Bash and these inert mocks only: no real Git, GitHub API,
+        # Python or sleep.
         commands = {
             "git": f"""case "$*" in
   "rev-parse HEAD"|"rev-parse refs/remotes/origin/main") echo {BRANCH_HEAD} ;;
-  "rev-parse refs/tags/{TAG}^{{commit}}") echo {TAG_COMMIT} ;;
+  "rev-parse refs/tags/{TAG}^{{commit}}"|"rev-parse --verify --quiet refs/tags/{TAG}^{{commit}}") echo {TAG_COMMIT} ;;
   "merge-base --is-ancestor "*) exit 0 ;;
   *) exit 90 ;;
 esac""",
@@ -162,55 +176,75 @@ class PackageReleaseTagBindingTests(unittest.TestCase):
                 self.assertNotEqual(result.returncode, 0)
                 self.assertFalse(any(c[0] == "python3" for c in commands))
 
-    def test_publication_requires_tag_bound_provenance_for_every_subject(self) -> None:
-        environment = {"RELEASE_COMMIT": TAG_COMMIT, "IMAGE_DIGEST": IMAGE_DIGEST}
+    def verify_calls(self, fixture: Fixture) -> list[list[str]]:
+        return [c for c in fixture.commands() if c[:3] == ["gh", "attestation", "verify"]]
+
+    def assert_policy(self, call: list[str]) -> None:
+        self.assertIn("--deny-self-hosted-runners", call)
+        flags = [value for value in call[4:] if value != "--deny-self-hosted-runners"]
+        self.assertEqual(dict(zip(flags[::2], flags[1::2])), POLICY)
+
+    def release_fixture(self, temporary: str) -> Fixture:
+        fixture = Fixture(Path(temporary))
+        release = fixture.directory / "build/release"
+        release.mkdir(parents=True)
+        for name in ("SHA256SUMS", "atrinik-classic-5.120.0.tar.gz"):
+            (release / name).write_text(name)
+        return fixture
+
+    def test_every_release_asset_needs_tag_bound_provenance(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
-            fixture = Fixture(Path(temporary))
-            release = fixture.directory / "build/release"
-            release.mkdir(parents=True)
-            for name in ("SHA256SUMS", "atrinik-classic-5.120.0.tar.gz"):
-                (release / name).write_text(name)
-            result = fixture.run(self.steps[PROVENANCE], **environment)
+            fixture = self.release_fixture(temporary)
+            result = fixture.run(self.steps[ASSET_PROVENANCE], RELEASE_COMMIT=TAG_COMMIT)
             self.assertEqual(result.returncode, 0, result.stderr)
-            verified = [c for c in fixture.commands() if c[:3] == ["gh", "attestation", "verify"]]
+            calls = self.verify_calls(fixture)
             self.assertEqual(
-                [c[3] for c in verified],
-                ["build/release/SHA256SUMS", "build/release/atrinik-classic-5.120.0.tar.gz",
-                 f"oci://ghcr.io/atrinik/classic-server@{IMAGE_DIGEST}"],
+                [c[3] for c in calls],
+                ["build/release/SHA256SUMS", "build/release/atrinik-classic-5.120.0.tar.gz"],
             )
-            for call in verified:
-                self.assertIn("--deny-self-hosted-runners", call)
-                flags = [value for value in call[4:] if value != "--deny-self-hosted-runners"]
-                policy = dict(zip(flags[::2], flags[1::2]))
-                self.assertEqual(policy, {
-                    "--repo": "atrinik/classic",
-                    "--signer-workflow": "atrinik/classic/.github/workflows/package-release.yml",
-                    "--source-digest": TAG_COMMIT,
-                    "--source-ref": f"refs/tags/{TAG}",
-                })
+            for call in calls:
+                self.assert_policy(call)
 
             fixture.log.write_text("")
-            fixture.environment["MOCK_GH_FAIL"] = "build/release/atrinik-classic-5.120.0.tar.gz"
-            result = fixture.run(self.steps[PROVENANCE], **environment)
+            fixture.environment["MOCK_GH_FAIL"] = "build/release/SHA256SUMS"
+            result = fixture.run(self.steps[ASSET_PROVENANCE], RELEASE_COMMIT=TAG_COMMIT)
             self.assertEqual(result.returncode, 1)
-            self.assertIn("no tag-bound provenance for build/release/atrinik-classic-5.120.0.tar.gz",
-                          result.stderr)
-            subjects = [c[3] for c in fixture.commands() if c[:3] == ["gh", "attestation", "verify"]]
-            self.assertEqual(subjects.count("build/release/atrinik-classic-5.120.0.tar.gz"), 3)
-            self.assertNotIn(f"oci://ghcr.io/atrinik/classic-server@{IMAGE_DIGEST}", subjects)
+            self.assertIn("no tag-bound provenance for build/release/SHA256SUMS", result.stderr)
+            self.assertEqual([c[3] for c in self.verify_calls(fixture)],
+                             ["build/release/SHA256SUMS"] * 3)
 
-        for name, value in (("RELEASE_COMMIT", "main"), ("IMAGE_DIGEST", ""), ("RELEASE_TAG", "main")):
-            with self.subTest(invalid=name):
-                result, commands = self.run_step(PROVENANCE, **(environment | {name: value}))
+        result, commands = self.run_step(ASSET_PROVENANCE, RELEASE_COMMIT=TAG_COMMIT)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertFalse(any(c[0] == "gh" for c in commands))
+
+    def test_the_server_image_needs_tag_bound_provenance(self) -> None:
+        result, commands = self.run_step(
+            IMAGE_PROVENANCE, RELEASE_COMMIT=TAG_COMMIT, IMAGE_DIGEST=IMAGE_DIGEST
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        calls = [c for c in commands if c[:3] == ["gh", "attestation", "verify"]]
+        self.assertEqual([c[3] for c in calls],
+                         [f"oci://ghcr.io/atrinik/classic-server@{IMAGE_DIGEST}"])
+        self.assert_policy(calls[0])
+        for digest in ("", "sha256:" + "c" * 63, "latest"):
+            with self.subTest(digest=digest):
+                result, commands = self.run_step(
+                    IMAGE_PROVENANCE, RELEASE_COMMIT=TAG_COMMIT, IMAGE_DIGEST=digest
+                )
                 self.assertNotEqual(result.returncode, 0)
                 self.assertFalse(any(c[0] == "gh" for c in commands))
 
-    def test_publication_rejects_a_commit_other_than_the_tag(self) -> None:
-        result, commands = self.run_step(
-            PROVENANCE, RELEASE_COMMIT=BRANCH_HEAD, IMAGE_DIGEST=IMAGE_DIGEST
-        )
-        self.assertNotEqual(result.returncode, 0)
-        self.assertFalse(any(c[0] == "gh" for c in commands))
+    def test_provenance_policy_is_bound_to_the_exact_tag_commit(self) -> None:
+        for name, value in (("RELEASE_COMMIT", BRANCH_HEAD), ("RELEASE_COMMIT", "main"),
+                            ("RELEASE_TAG", "main"), ("RELEASE_REPOSITORY", "")):
+            with self.subTest(name=name, value=value), tempfile.TemporaryDirectory() as temporary:
+                fixture = self.release_fixture(temporary)
+                result = fixture.run(
+                    self.steps[ASSET_PROVENANCE], **({"RELEASE_COMMIT": TAG_COMMIT} | {name: value})
+                )
+                self.assertEqual(result.returncode, 1)
+                self.assertIn("tag provenance:", result.stderr)
+                self.assertEqual(self.verify_calls(fixture), [])
 
 
 if __name__ == "__main__":

@@ -213,6 +213,12 @@ class ReleaseMutationFenceTests(unittest.TestCase):
                     self.assertEqual(reference, "main" if action == "resume-retained-candidate" else "v5.80.0")
                 self.assertEqual(fixture.github_env.read_text(), "")
 
+    def test_blocked_recovery_runs_no_mutation(self) -> None:
+        # The attempt cap stops release writes, including version analysis.
+        for name, _, _ in CASES:
+            with self.subTest(step=name):
+                self.assertFalse(eligible(self.steps[name].condition, "blocked"))
+
     def test_superseded_status_three_skips_all_mutations_and_latches(self) -> None:
         for name, _, _ in CASES:
             with self.subTest(step=name), tempfile.TemporaryDirectory() as temporary:

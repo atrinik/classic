@@ -1015,18 +1015,31 @@ class WorkflowContractTests(unittest.TestCase):
     def test_publication_requires_tag_bound_provenance_after_every_attestation(self) -> None:
         workflow = self.text("package-release.yml")
         publish = workflow[workflow.index("  publish:") : workflow.index("  queue-latest:")]
-        verify = publish.index("name: Require tag-bound provenance for every published byte")
-        for attestation in ("name: Attest downloadable artifact provenance",
-                            "name: Attest the exact published server image",
-                            "name: Resume draft assets or verify the immutable release"):
-            self.assertLess(publish.index(attestation), verify)
-        self.assertLess(verify, publish.index("name: Recheck the exact release assets immediately before publication"))
-        self.assertLess(verify, publish.index("name: Publish the complete draft release"))
-        step = publish[verify : publish.index("      - id: final-assets")]
-        self.assertIn("if: steps.assets.outputs.state == 'draft'", step)
-        self.assertIn("IMAGE_DIGEST: ${{ steps.image.outputs.digest || steps.registry.outputs.digest }}", step)
-        self.assertIn("subjects=(build/release/*)", step)
-        self.assertIn('oci://ghcr.io/atrinik/classic-server@${IMAGE_DIGEST}', step)
+        helper = "bash build/release-automation/tools/release/verify_tag_provenance.sh"
+        self.assertEqual(publish.count(helper), 2)
+        assets = publish.index("name: Require tag-bound provenance for every release asset")
+        image = publish.index("name: Require tag-bound provenance for the server image")
+        # Assets are verified after this run attests them and before any upload.
+        self.assertLess(publish.index("name: Attest downloadable artifact provenance"), assets)
+        self.assertLess(publish.index("name: Attest downloadable artifact SBOM"), assets)
+        self.assertLess(assets, publish.index("name: Resume draft assets or verify the immutable release"))
+        # The image is verified after its attestation and before publication.
+        self.assertLess(publish.index("name: Verify the GitHub server-image attestation"), image)
+        self.assertLess(image, publish.index("name: Recheck the exact release assets immediately before publication"))
+        self.assertLess(image, publish.index("name: Publish the complete draft release"))
+        for start, end in ((assets, publish.index("      - id: assets")),
+                           (image, publish.index("      - id: final-assets"))):
+            step = publish[start:end]
+            self.assertNotIn("        if:", step)
+            self.assertIn(helper, step)
+        self.assertIn("assets=(build/release/*)", publish[assets:image])
+        self.assertIn('"oci://ghcr.io/atrinik/classic-server@${IMAGE_DIGEST}"', publish[image:])
+        script = (ROOT / "tools/release/verify_tag_provenance.sh").read_text(encoding="utf-8")
+        for flag in ('--signer-workflow "${RELEASE_REPOSITORY}/.github/workflows/package-release.yml"',
+                     '--source-digest "${RELEASE_COMMIT}"',
+                     '--source-ref "refs/tags/${RELEASE_TAG}"',
+                     "--deny-self-hosted-runners"):
+            self.assertIn(flag, script)
 
     def test_release_validation_selects_the_aggregate_check_by_name(self) -> None:
         # Each Package Release attempt adds check runs to the tag commit; an

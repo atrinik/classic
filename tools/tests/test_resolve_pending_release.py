@@ -364,6 +364,78 @@ class ResolvePendingReleaseTests(unittest.TestCase):
             },
         )
 
+    def test_failed_retained_continuations_stop_at_the_attempt_cap(self) -> None:
+        def resolved(classes: list[str]) -> dict[str, str]:
+            return resolve_pending_release.resolve(
+                [draft(id=371791046, tag_name="v5.37.0",
+                       assets=[{"name": "atrinik-classic-v5.37.0.tar.gz"}])],
+                policy(),
+                lambda tag: "0" * 40,
+                lambda run, windows, image: None,
+                lambda tag: [retained_candidate()],
+                lambda tag: classes,
+            )
+
+        self.assertEqual(
+            resolved(["release-publication", "release-publication"])["action"],
+            "resume-retained-candidate",
+        )
+        self.assertEqual(
+            resolved(["release-publication"] * 3),
+            {
+                "action": "blocked",
+                "tag": "v5.37.0",
+                "release_id": "371791046",
+                "failure_class": "release-publication",
+                "retry_count": "3",
+            },
+        )
+
+    def test_off_lineage_failures_do_not_use_the_attempt_budget(self) -> None:
+        tag_commit = "1" * 40
+        listed = [
+            {
+                "id": run_id,
+                "name": "Package Release",
+                "path": ".github/workflows/package-release.yml",
+                "event": "workflow_dispatch",
+                "conclusion": "failure",
+                "head_branch": "main",
+                "head_sha": sha,
+            }
+            for run_id, sha in ((301, "9" * 40), (302, "8" * 40), (303, tag_commit),
+                                (304, tag_commit), (305, tag_commit))
+        ]
+        requested: list[str] = []
+
+        def request(path: str) -> object:
+            requested.append(path)
+            run_id = int(path.rsplit("/", 1)[1])
+            return dict(listed[run_id - 301], head_repository={"full_name": "atrinik/classic"})
+
+        with (
+            patch.object(
+                resolve_pending_release, "list_workflow_runs", return_value=listed
+            ),
+            patch.object(
+                resolve_pending_release,
+                "is_ancestor",
+                side_effect=lambda older, newer: tag_commit in (older, newer)
+                and "9" * 40 not in (older, newer) and "8" * 40 not in (older, newer),
+            ),
+            patch.object(resolve_pending_release, "_collect_jobs", return_value=[]),
+        ):
+            self.assertEqual(
+                resolve_pending_release.recent_failure_classes(
+                    "atrinik/classic", "v5.8.0", tag_commit, "2" * 40, request
+                ),
+                ["unknown"] * 3,
+            )
+        self.assertEqual(
+            requested,
+            [f"repos/atrinik/classic/actions/runs/{run_id}" for run_id in (303, 304, 305)],
+        )
+
     def test_repeated_server_image_failures_stop_automatic_retries(self) -> None:
         result = resolve_pending_release.resolve(
             [draft(id=10, tag_name="v5.8.0")],

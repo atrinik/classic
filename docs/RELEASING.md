@@ -177,39 +177,59 @@ helper recognizes only failures whose Windows-server and server-image jobs ran
 and whose candidate finalizer and publisher were skipped. Multiple drafts fail
 closed for manual investigation.
 
-Automatic recovery is capped at three consecutive failed attempts for the
-draft tag, whatever their failure class: the first tag-ref dispatch and two
-automatic retries. The third failure returns a successful `blocked`
-disposition, so later main validations neither rebuild the immutable tag again
-nor analyze a new version over the pending draft. Releases stall until an
-operator inspects the failed job boundary and either uses **Re-run failed
-jobs** on the newest failed tag-ref run (a transient failure), or lands a
-reviewed failed-release disposition for that exact tag so Semantic Release can
-remove the empty draft and supersede the tag. The cap also bounds the check
-runs that each attempt adds to the tag commit and fixes the failed-run
-inventory such a disposition lists; release validation selects the
-`Classic validation` check by name, so added runs cannot hide it. The guard
-counts only completed runs. If several Semantic Release wake-ups are queued
-while a resume is still pending, each can dispatch another tag-ref retry. The
-publication queue serializes them, a later duplicate fails closed once the
-release is published because it requires a draft, and each failed duplicate
-counts toward the cap.
+Automatic recovery is capped at three consecutive failed attempts on the draft
+tag's lineage, whatever their failure class. For an assetless draft these are
+the first tag-ref dispatch and two automatic retries; for a retained candidate,
+the candidate run and its failed current-main continuations. The third failure
+returns a successful `blocked` disposition, so later main validations neither
+rebuild the immutable tag again nor analyze a new version over the pending
+draft. Releases stall until an operator inspects the failed job boundary. A
+transient failure of an assetless draft can be retried by dispatching Package
+Release from the exact tag ref:
 
-Before it publishes a draft, Package Release verifies every asset and the
-versioned image with `gh attestation verify`, requiring the
-`package-release.yml` signer, the tag commit as source digest and the tag ref
-as source ref. It therefore publishes only bytes that a tag-ref run has
-attested: the same run, or the tag-ref candidate run of a retained-candidate
-recovery.
+```sh
+gh workflow run package-release.yml --repo atrinik/classic --ref vX.Y.Z \
+  -f tag=vX.Y.Z -f source_branch=main
+```
+
+**Re-run failed jobs** on the newest failed tag-ref run also keeps tag
+provenance, but GitHub allows it for only 30 days, and a rerun of a client
+package job more than a day later fails because the run's Discord
+configuration artifact has expired. A deterministic failure needs a reviewed
+failed-release disposition for that exact tag, so Semantic Release can remove
+the empty draft and supersede the tag. The disposition helper currently
+expresses only failures whose Windows-server and server-image jobs ran and
+whose candidate finalizer and publisher were skipped. Any other boundary, such
+as a preflight, client-package, candidate-validation or publication failure,
+or a mix of boundaries, first needs a reviewed helper change.
+
+The cap also bounds the check runs that each attempt adds to the tag commit and
+fixes the failed-run inventory such a disposition lists; release validation
+selects the `Classic validation` check by name, so added runs cannot hide it.
+The guard counts only completed runs. If several Semantic Release wake-ups are
+queued while a resume is still pending, each can dispatch another tag-ref
+retry. The publication queue serializes them, a later duplicate fails closed
+once the release is published because it requires a draft, and each failed
+duplicate counts toward the cap.
+
+Package Release definitions that contain the tag-provenance check, which are
+those of tags created after it merged, verify every downloadable asset before
+any draft upload and the versioned image before publication. They use
+`gh attestation verify`, requiring the `package-release.yml` signer, the tag
+commit as source digest, the tag ref as source ref and a GitHub-hosted runner.
+A release is therefore published only from bytes that a tag-ref run attested:
+the same run, or the tag-ref candidate run of a retained-candidate recovery. An
+asset verification failure leaves the draft assetless, within the automatic
+retry policy above.
 
 Maintenance branches carry the release workflows of the tag they are cut from.
-Before cutting an `X.Y.x` branch from `v5.117.0` or an earlier tag, backport
-this tag-bound recovery and provenance contract to that branch; otherwise a
-maintenance resume would rebuild from the branch ref and publish provenance
-that names the branch head.
+Before cutting an `X.Y.x` branch from any tag created before this tag-bound
+recovery and provenance contract merged, backport the contract to that branch.
+Otherwise a maintenance resume would rebuild from the branch ref and publish
+provenance that names the branch head.
 
-The retired `v5.8.1` and `v5.10.0` coordinates are the recorded exceptions to that
-retry rule. Both `v5.8.1` Package Release attempts failed in the Release-only
+The retired `v5.8.1` and `v5.10.0` coordinates are the recorded exceptions to the
+rule against deleting a draft to recover. Both `v5.8.1` Package Release attempts failed in the Release-only
 server build before finalizing a candidate, publishing an image, or uploading
 a draft asset. `docs/history/release-tags.json` records each exact tag commit,
 empty draft ID, failed run IDs, expected Windows-server and server-image job
@@ -910,14 +930,15 @@ the alias is never a rollback source.
 The pending-release guard classifies failed Package Release boundaries as
 `server-image-build`, `server-image-inspection`, `windows-server-build`,
 `release-publication`, or `candidate-validation`, and `unknown` for any other
-boundary. An assetless ordinary draft may receive at most two automatic retries
-after consecutive failed attempts of any class; the third failure returns a
-successful `blocked` disposition with the newest class and the attempt count in
-the workflow summary, so successful main validation does not waste another
-release run. Tag-bound runs, including automatic retries, and earlier
-current-main recovery runs count only when their commits are on the draft tag's
-lineage to current `main`. Operators must inspect the recorded failed job
-boundary before changing any retry policy.
+boundary. A pending ordinary draft, assetless or with a retained candidate,
+may receive at most two automatic retries after consecutive failed attempts of
+any class; the third failure returns a successful `blocked` disposition with
+the newest class and the attempt count in the workflow summary, so successful
+main validation does not waste another release run. Tag-bound runs, including
+automatic retries, and current-main continuation runs count only when their
+commits are on the draft tag's lineage to current `main`; runs off that lineage
+do not use up attempts. Operators must inspect the recorded failed job boundary
+before changing any retry policy.
 
 Before upgrading a production server, snapshot its state and retain the exact
 prior `content@main` Classic artifact coordinate. Roll back by stopping the

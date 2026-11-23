@@ -54,6 +54,9 @@ MAX_CANDIDATE_INSPECTIONS = 25
 # freezes the failed-run inventory that a failed-release disposition lists.
 MAX_AUTOMATIC_PACKAGE_ATTEMPTS = 3
 
+# These name steps in the definition the inspected run executed, which may be
+# a tag's frozen copy. Renaming one on main needs the old name kept here while
+# any draft from a tag with the old name can still be pending.
 RETAINED_PROOF_STEPS = (
     IMAGE_INSPECTION_STEP,
     "Recheck the revision-specific candidate before publication",
@@ -484,6 +487,15 @@ def recent_failure_classes(
         run_id = listed_run.get("id")
         if isinstance(run_id, bool) or not isinstance(run_id, int) or run_id <= 0:
             continue
+        # Only attempts on this tag's lineage use up the attempt budget; the
+        # fetched run below is checked again before it is classified.
+        if (
+            not isinstance(listed_sha, str)
+            or SHA_RE.fullmatch(listed_sha) is None
+            or not is_ancestor(tag_commit, listed_sha)
+            or not is_ancestor(listed_sha, current_head)
+        ):
+            continue
         inspected += 1
         if inspected > MAX_AUTOMATIC_PACKAGE_ATTEMPTS:
             break
@@ -560,6 +572,17 @@ def resolve(
                     raise PendingReleaseError(
                         f"draft {tag}: retained candidate identity is invalid"
                     )
+                # Failed continuations count too, so a deterministic
+                # publication failure cannot redispatch on every main check.
+                classes = failure_classes(tag) if failure_classes is not None else []
+                if len(classes) >= MAX_AUTOMATIC_PACKAGE_ATTEMPTS:
+                    return {
+                        "action": "blocked",
+                        "tag": tag,
+                        "release_id": str(release_id),
+                        "failure_class": classes[0],
+                        "retry_count": str(len(classes)),
+                    }
                 return {
                     "action": "resume-retained-candidate",
                     "tag": tag,
