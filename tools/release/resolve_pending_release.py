@@ -55,8 +55,9 @@ MAX_CANDIDATE_INSPECTIONS = 25
 MAX_AUTOMATIC_PACKAGE_ATTEMPTS = 3
 
 # These name steps in the definition the inspected run executed, which may be
-# a tag's frozen copy. Renaming one on main needs the old name kept here while
-# any draft from a tag with the old name can still be pending.
+# a tag's frozen copy. Each must match exactly one successful step, so renaming
+# one on main while a draft from an older tag may be pending needs accepted
+# alternative names per proof step (and the matching identity test) first.
 RETAINED_PROOF_STEPS = (
     IMAGE_INSPECTION_STEP,
     "Recheck the revision-specific candidate before publication",
@@ -583,13 +584,16 @@ def resolve(
                         "failure_class": classes[0],
                         "retry_count": str(len(classes)),
                     }
-                return {
+                resumed = {
                     "action": "resume-retained-candidate",
                     "tag": tag,
                     "release_id": str(release_id),
                     "candidate_run_id": candidate_run_id,
                     "failure_class": failure_class,
                 }
+                if classes:
+                    resumed["retry_count"] = str(len(classes))
+                return resumed
             raise PendingReleaseError(
                 f"draft {tag} has assets; retained-candidate recovery is required "
                 "but no safe retained-candidate run was found"

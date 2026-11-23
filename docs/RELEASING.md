@@ -185,7 +185,8 @@ returns a successful `blocked` disposition, so later main validations neither
 rebuild the immutable tag again nor analyze a new version over the pending
 draft. Releases stall until an operator inspects the failed job boundary. A
 transient failure of an assetless draft can be retried by dispatching Package
-Release from the exact tag ref:
+Release from the exact tag ref, with the tag's release branch (`main`, or its
+`X.Y.x` line) as `source_branch`:
 
 ```sh
 gh workflow run package-release.yml --repo atrinik/classic --ref vX.Y.Z \
@@ -198,10 +199,18 @@ package job more than a day later fails because the run's Discord
 configuration artifact has expired. A deterministic failure needs a reviewed
 failed-release disposition for that exact tag, so Semantic Release can remove
 the empty draft and supersede the tag. The disposition helper currently
-expresses only failures whose Windows-server and server-image jobs ran and
-whose candidate finalizer and publisher were skipped. Any other boundary, such
-as a preflight, client-package, candidate-validation or publication failure,
-or a mix of boundaries, first needs a reviewed helper change.
+expresses only failures whose Windows-server and server-image jobs both ran,
+with one recorded conclusion each, and whose candidate finalizer and publisher
+were skipped; a client-package failure with both server jobs run fits. Any
+other boundary, such as a preflight, candidate-validation or publication
+failure, or attempts whose server-job conclusions differ, first needs a
+reviewed helper change. A blocked draft that already has assets cannot be
+rebuilt or deleted: use **Re-run failed jobs** on its tag-ref candidate run
+within 30 days, or, once a publication fix is on `main`, dispatch the
+retained-candidate recovery shown below with that run's ID. A failure of the
+server-image provenance check, which runs after the asset upload, leaves such a
+draft without a retained candidate, so Semantic Release reports an error until
+the operator re-runs that run's failed jobs.
 
 The cap also bounds the check runs that each attempt adds to the tag commit and
 fixes the failed-run inventory such a disposition lists; release validation
@@ -213,8 +222,9 @@ once the release is published because it requires a draft, and each failed
 duplicate counts toward the cap.
 
 Package Release definitions that contain the tag-provenance check, which are
-those of tags created after it merged, verify every downloadable asset before
-any draft upload and the versioned image before publication. They use
+those of tags created after it merged and every current-main retained-candidate
+continuation, verify every downloadable asset before any draft upload and the
+versioned image before publication. They use
 `gh attestation verify`, requiring the `package-release.yml` signer, the tag
 commit as source digest, the tag ref as source ref and a GitHub-hosted runner.
 A release is therefore published only from bytes that a tag-ref run attested:
@@ -228,10 +238,10 @@ recovery and provenance contract merged, backport the contract to that branch.
 Otherwise a maintenance resume would rebuild from the branch ref and publish
 provenance that names the branch head.
 
-The retired `v5.8.1` and `v5.10.0` coordinates are the recorded exceptions to the
-rule against deleting a draft to recover. Both `v5.8.1` Package Release attempts failed in the Release-only
-server build before finalizing a candidate, publishing an image, or uploading
-a draft asset. `docs/history/release-tags.json` records each exact tag commit,
+The retired `v5.8.1` and `v5.10.0` coordinates are the recorded exceptions to
+the rule against deleting a draft to recover. Both `v5.8.1` Package Release
+attempts failed in the Release-only server build before finalizing a
+candidate, publishing an image, or uploading a draft asset. `docs/history/release-tags.json` records each exact tag commit,
 empty draft ID, failed run IDs, expected Windows-server and server-image job
 conclusions, and
 `delete-empty-draft` disposition. On current validated `main`, Semantic Release
