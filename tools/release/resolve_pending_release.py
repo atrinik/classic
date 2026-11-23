@@ -47,11 +47,21 @@ IMAGE_INSPECTION_STEP = "Inspect the versioned server image"
 MAX_API_PAGES = 20
 MAX_WORKFLOW_RUNS = 50
 MAX_CANDIDATE_INSPECTIONS = 25
-MAX_AUTOMATIC_SERVER_IMAGE_RETRIES = 3
+# The first tag-ref dispatch plus two automatic retries. Recovery always rebuilds
+# the immutable tag definition, so a third consecutive failure is treated as
+# deterministic: it needs an operator rather than another full release build.
+# The cap also bounds the check runs each attempt adds to the tag commit and
+# freezes the failed-run inventory that a failed-release disposition lists.
+MAX_AUTOMATIC_PACKAGE_ATTEMPTS = 3
 
+# These, like the job and publish-step names above, name steps in the tag's
+# frozen workflow copy that the inspected tag-ref run executed. Each must match
+# exactly one successful step, so renaming one on main while a draft from an
+# older tag may be pending needs accepted alternative names per step (and the
+# matching identity test) first.
 RETAINED_PROOF_STEPS = (
     IMAGE_INSPECTION_STEP,
-    "Recheck candidate hashes before publication",
+    "Recheck the revision-specific candidate before publication",
     "Attest downloadable artifact provenance",
     "Attest downloadable artifact SBOM",
     "Resume draft assets or verify the immutable release",
@@ -300,6 +310,10 @@ def validate_retained_candidate(
     run_commit = run.get("head_sha")
     if not isinstance(run_commit, str) or SHA_RE.fullmatch(run_commit) is None:
         raise CandidateNotSafe(f"run {run_id} has no immutable source commit")
+    # The candidate run's attestations are the release's tag provenance:
+    # GitHub signs them with that run's ref and commit.
+    if run.get("head_branch") != tag:
+        raise CandidateNotSafe(f"run {run_id} did not run on release tag {tag}")
 
     jobs = _collect_jobs(repository, run_id, request)
     finalizer_jobs = [
@@ -437,7 +451,7 @@ def find_retained_candidates(
             candidate = validate_retained_candidate(repository, tag, run_id, request)
         except CandidateNotSafe:
             continue
-        if not is_ancestor(tag_commit, candidate["run_commit"]):
+        if candidate["run_commit"] != tag_commit:
             continue
         if not is_ancestor(candidate["run_commit"], current_head):
             continue
@@ -475,8 +489,17 @@ def recent_failure_classes(
         run_id = listed_run.get("id")
         if isinstance(run_id, bool) or not isinstance(run_id, int) or run_id <= 0:
             continue
+        # Only attempts on this tag's lineage use up the attempt budget; the
+        # fetched run below is checked again before it is classified.
+        if (
+            not isinstance(listed_sha, str)
+            or SHA_RE.fullmatch(listed_sha) is None
+            or not is_ancestor(tag_commit, listed_sha)
+            or not is_ancestor(listed_sha, current_head)
+        ):
+            continue
         inspected += 1
-        if inspected > MAX_AUTOMATIC_SERVER_IMAGE_RETRIES:
+        if inspected > MAX_AUTOMATIC_PACKAGE_ATTEMPTS:
             break
         run = _validate_package_run(
             repository, run_id, request(f"repos/{repository}/actions/runs/{run_id}")
@@ -491,15 +514,6 @@ def recent_failure_classes(
             continue
         classes.append(classify_failed_run(_collect_jobs(repository, run_id, request)))
     return classes
-
-
-def _leading_failure_class_count(classes: list[str], failure_class: str) -> int:
-    count = 0
-    for value in classes:
-        if value != failure_class:
-            break
-        count += 1
-    return count
 
 
 def resolve(
@@ -560,25 +574,38 @@ def resolve(
                     raise PendingReleaseError(
                         f"draft {tag}: retained candidate identity is invalid"
                     )
-                return {
+                # Failed continuations count too, so a deterministic
+                # publication failure cannot redispatch on every main check.
+                classes = failure_classes(tag) if failure_classes is not None else []
+                if len(classes) >= MAX_AUTOMATIC_PACKAGE_ATTEMPTS:
+                    return {
+                        "action": "blocked",
+                        "tag": tag,
+                        "release_id": str(release_id),
+                        "failure_class": classes[0],
+                        "retry_count": str(len(classes)),
+                    }
+                resumed = {
                     "action": "resume-retained-candidate",
                     "tag": tag,
                     "release_id": str(release_id),
                     "candidate_run_id": candidate_run_id,
                     "failure_class": failure_class,
                 }
+                if classes:
+                    resumed["retry_count"] = str(len(classes))
+                return resumed
             raise PendingReleaseError(
                 f"draft {tag} has assets; retained-candidate recovery is required "
                 "but no safe retained-candidate run was found"
             )
         classes = failure_classes(tag) if failure_classes is not None else []
         if classes:
+            # Newest first: report the latest failure boundary and how many
+            # consecutive failed attempts on the tag lineage were inspected.
             failure_class = classes[0]
-            retry_count = _leading_failure_class_count(classes, failure_class)
-            if (
-                failure_class == "server-image-build"
-                and retry_count >= MAX_AUTOMATIC_SERVER_IMAGE_RETRIES
-            ):
+            retry_count = len(classes)
+            if retry_count >= MAX_AUTOMATIC_PACKAGE_ATTEMPTS:
                 return {
                     "action": "blocked",
                     "tag": tag,

@@ -3,8 +3,12 @@ from __future__ import annotations
 import copy
 import importlib.util
 import json
+import os
 from pathlib import Path
+import re
+import subprocess
 import sys
+import tempfile
 import unittest
 from unittest.mock import patch
 from urllib.parse import parse_qs, urlsplit
@@ -73,6 +77,57 @@ def retained_publication_steps(failed_name: str) -> list[dict[str, str]]:
     if failed_name not in resolve_pending_release.RETAINED_PROOF_STEPS:
         steps.append({"name": failed_name, "conclusion": "failure"})
     return steps
+
+
+WORKFLOWS = Path(__file__).resolve().parents[2] / ".github" / "workflows"
+
+
+def workflow_jobs(name: str) -> dict[str, tuple[str, str]]:
+    """Map each job ID to its display name and text block, without YAML."""
+    text = (WORKFLOWS / name).read_text(encoding="utf-8")
+    jobs = text[text.index("\njobs:\n") :]
+    starts = list(re.finditer(r"(?m)^  ([A-Za-z0-9_-]+):\n    name: (.+)$", jobs))
+    return {
+        match[1]: (match[2], jobs[match.start() : starts[index + 1].start()
+                                  if index + 1 < len(starts) else len(jobs)])
+        for index, match in enumerate(starts)
+    }
+
+
+def step_names(job: str) -> list[str]:
+    return [first or second for first, second in
+            re.findall(r"(?m)^      - name: (.+)$|^        name: (.+)$", job)]
+
+
+class WorkflowIdentityTests(unittest.TestCase):
+    def test_every_inspected_job_and_step_name_exists(self) -> None:
+        # A renamed job or step silently turns its evidence check into a
+        # permanent mismatch, so the resolver must name the live workflow.
+        package = workflow_jobs("package-release.yml")
+        candidate_caller, candidate_job = package["candidate"]
+        self.assertIn("uses: ./.github/workflows/build-release-candidate.yml", candidate_job)
+        reusable = {
+            f"{candidate_caller} / {name}"
+            for name, _ in workflow_jobs("build-release-candidate.yml").values()
+        }
+        for job in (
+            resolve_pending_release.IMAGE_JOB,
+            resolve_pending_release.WINDOWS_JOB,
+            resolve_pending_release.CANDIDATE_FINALIZER_JOB,
+        ):
+            self.assertIn(job, reusable)
+        publish_name, publish_job = package["publish"]
+        self.assertEqual(resolve_pending_release.PUBLISH_JOB, publish_name)
+        steps = step_names(publish_job)
+        for step in (
+            resolve_pending_release.PUBLISH_STEP,
+            resolve_pending_release.IMAGE_INSPECTION_STEP,
+            *resolve_pending_release.RETAINED_PROOF_STEPS,
+        ):
+            self.assertEqual(steps.count(step), 1, step)
+        workflow = (WORKFLOWS / "package-release.yml").read_text(encoding="utf-8")
+        for job in (resolve_pending_release.CANDIDATE_FINALIZER_JOB, publish_name):
+            self.assertIn(f'select(.name == "{job}" and .conclusion == ', workflow)
 
 
 class ResolvePendingReleaseTests(unittest.TestCase):
@@ -312,6 +367,171 @@ class ResolvePendingReleaseTests(unittest.TestCase):
             },
         )
 
+    def test_failed_retained_continuations_stop_at_the_attempt_cap(self) -> None:
+        def resolved(classes: list[str]) -> dict[str, str]:
+            return resolve_pending_release.resolve(
+                [draft(id=371791046, tag_name="v5.37.0",
+                       assets=[{"name": "atrinik-classic-v5.37.0.tar.gz"}])],
+                policy(),
+                lambda tag: "0" * 40,
+                lambda run, windows, image: None,
+                lambda tag: [retained_candidate()],
+                lambda tag: classes,
+            )
+
+        self.assertEqual(
+            resolved(["release-publication", "release-publication"])["action"],
+            "resume-retained-candidate",
+        )
+        self.assertEqual(
+            resolved(["release-publication"] * 3),
+            {
+                "action": "blocked",
+                "tag": "v5.37.0",
+                "release_id": "371791046",
+                "failure_class": "release-publication",
+                "retry_count": "3",
+            },
+        )
+
+    def test_retained_candidate_and_continuations_share_the_real_lineage_budget(self) -> None:
+        tag = "v5.120.0"
+        repository = "atrinik/classic"
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            environment = {"GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@example.invalid",
+                           "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@example.invalid",
+                           "GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_NOSYSTEM": "1",
+                           "PATH": os.environ.get("PATH", "/usr/bin:/bin")}
+
+            def git(*arguments: str) -> str:
+                return subprocess.run(["git", "-C", str(root), *arguments], check=True,
+                                      capture_output=True, text=True, env=environment).stdout.strip()
+
+            git("init", "-q", "-b", "main")
+            commits = []
+            for message in ("before-tag", "tag", "main-1", "main-2", "main-3"):
+                git("commit", "-q", "--allow-empty", "-m", message)
+                commits.append(git("rev-parse", "HEAD"))
+            before_tag, tag_commit, main_1, main_2, head = commits
+
+            def run(run_id: int, branch: str, sha: str) -> dict[str, object]:
+                return {"id": run_id, "name": "Package Release",
+                        "path": ".github/workflows/package-release.yml",
+                        "event": "workflow_dispatch", "conclusion": "failure",
+                        "status": "completed", "head_branch": branch, "head_sha": sha,
+                        "head_repository": {"full_name": repository}}
+
+            publisher_steps = retained_publication_steps(resolve_pending_release.PUBLISH_STEP)
+            jobs = {
+                100: [{"name": resolve_pending_release.CANDIDATE_FINALIZER_JOB, "conclusion": "success"},
+                      {"name": resolve_pending_release.PUBLISH_JOB, "conclusion": "failure",
+                       "steps": publisher_steps}],
+                201: [{"name": resolve_pending_release.PUBLISH_JOB, "conclusion": "failure",
+                       "steps": [{"name": resolve_pending_release.PUBLISH_STEP, "conclusion": "failure"}]}],
+                202: [{"name": "Bind workflow definition to release tag", "conclusion": "failure"}],
+                50: [],
+            }
+            # A tag-ref candidate, two main-ref continuations at later main
+            # heads, and an older main-ref failure off the tag's lineage.
+            runs = {100: run(100, tag, tag_commit), 201: run(201, "main", main_1),
+                    202: run(202, "main", main_2), 50: run(50, "main", before_tag)}
+
+            def resolved(listed_ids: list[int]) -> dict[str, str]:
+                listed = [runs[run_id] for run_id in listed_ids]
+
+                def request(path: str) -> object:
+                    if "/actions/workflows/package-release.yml/runs?" in path:
+                        return {"total_count": len(listed), "workflow_runs": listed}
+                    parts = path.split("?")[0].split("/")
+                    run_id = int(parts[5])
+                    if len(parts) == 6:
+                        return runs[run_id]
+                    if parts[6] == "jobs":
+                        return {"total_count": len(jobs[run_id]), "jobs": jobs[run_id]}
+                    artifacts = ([{"name": f"complete-release-candidate-{tag}", "expired": False,
+                                   "size_in_bytes": 10, "digest": "sha256:" + "d" * 64}]
+                                 if run_id == 100 else [])
+                    return {"total_count": len(artifacts), "artifacts": artifacts}
+
+                return resolve_pending_release.resolve(
+                    [draft(id=7, tag_name=tag, assets=[{"name": "SHA256SUMS"}])],
+                    {},
+                    lambda _: tag_commit,
+                    lambda *_: None,
+                    lambda name: resolve_pending_release.find_retained_candidates(
+                        repository, name, tag_commit, head, request),
+                    lambda name: resolve_pending_release.recent_failure_classes(
+                        repository, name, tag_commit, head, request),
+                )
+
+            # The resolver's Git calls inherit the process environment; drop any
+            # GIT_* repository overrides so they read the temporary lineage.
+            clean = {key: value for key, value in os.environ.items()
+                     if not key.startswith("GIT_")}
+            clean |= {"GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_NOSYSTEM": "1"}
+            with (
+                patch.object(resolve_pending_release, "ROOT", root),
+                patch.dict(os.environ, clean, clear=True),
+            ):
+                first = resolved([100, 50])
+                self.assertEqual(first["action"], "resume-retained-candidate")
+                self.assertEqual(first["retry_count"], "1")
+                second = resolved([201, 100, 50])
+                self.assertEqual(second["action"], "resume-retained-candidate")
+                self.assertEqual(second["candidate_run_id"], "100")
+                self.assertEqual(second["retry_count"], "2")
+                self.assertEqual(
+                    resolved([202, 201, 100, 50]),
+                    {"action": "blocked", "tag": tag, "release_id": "7",
+                     "failure_class": "unknown", "retry_count": "3"},
+                )
+
+    def test_off_lineage_failures_do_not_use_the_attempt_budget(self) -> None:
+        tag_commit = "1" * 40
+        listed = [
+            {
+                "id": run_id,
+                "name": "Package Release",
+                "path": ".github/workflows/package-release.yml",
+                "event": "workflow_dispatch",
+                "conclusion": "failure",
+                "head_branch": "main",
+                "head_sha": sha,
+            }
+            for run_id, sha in ((301, "9" * 40), (302, "8" * 40), (303, tag_commit),
+                                (304, tag_commit), (305, tag_commit))
+        ]
+        requested: list[str] = []
+
+        def request(path: str) -> object:
+            requested.append(path)
+            run_id = int(path.rsplit("/", 1)[1])
+            return dict(listed[run_id - 301], head_repository={"full_name": "atrinik/classic"})
+
+        with (
+            patch.object(
+                resolve_pending_release, "list_workflow_runs", return_value=listed
+            ),
+            patch.object(
+                resolve_pending_release,
+                "is_ancestor",
+                side_effect=lambda older, newer: tag_commit in (older, newer)
+                and "9" * 40 not in (older, newer) and "8" * 40 not in (older, newer),
+            ),
+            patch.object(resolve_pending_release, "_collect_jobs", return_value=[]),
+        ):
+            self.assertEqual(
+                resolve_pending_release.recent_failure_classes(
+                    "atrinik/classic", "v5.8.0", tag_commit, "2" * 40, request
+                ),
+                ["unknown"] * 3,
+            )
+        self.assertEqual(
+            requested,
+            [f"repos/atrinik/classic/actions/runs/{run_id}" for run_id in (303, 304, 305)],
+        )
+
     def test_repeated_server_image_failures_stop_automatic_retries(self) -> None:
         result = resolve_pending_release.resolve(
             [draft(id=10, tag_name="v5.8.0")],
@@ -346,6 +566,76 @@ class ResolvePendingReleaseTests(unittest.TestCase):
         self.assertEqual(result["action"], "resume")
         self.assertEqual(result["failure_class"], "server-image-build")
         self.assertEqual(result["retry_count"], "1")
+
+    def test_third_consecutive_failure_of_any_class_stops_automatic_retries(self) -> None:
+        def resolved(classes: list[str]) -> dict[str, str]:
+            return resolve_pending_release.resolve(
+                [draft(id=10, tag_name="v5.8.0")],
+                policy(),
+                lambda tag: "0" * 40,
+                lambda run, windows, image: None,
+                failure_classes=lambda tag: classes,
+            )
+
+        self.assertEqual(resolve_pending_release.MAX_AUTOMATIC_PACKAGE_ATTEMPTS, 3)
+        self.assertEqual(
+            resolved(["unknown", "windows-server-build"]),
+            {
+                "action": "resume",
+                "tag": "v5.8.0",
+                "release_id": "10",
+                "failure_class": "unknown",
+                "retry_count": "2",
+            },
+        )
+        self.assertEqual(
+            resolved(["unknown", "candidate-validation", "server-image-build"]),
+            {
+                "action": "blocked",
+                "tag": "v5.8.0",
+                "release_id": "10",
+                "failure_class": "unknown",
+                "retry_count": "3",
+            },
+        )
+
+    def test_failure_inspection_stops_at_the_attempt_cap(self) -> None:
+        listed = [
+            {
+                "id": run_id,
+                "name": "Package Release",
+                "path": ".github/workflows/package-release.yml",
+                "event": "workflow_dispatch",
+                "conclusion": "failure",
+                "head_branch": "v5.8.0",
+                "head_sha": "1" * 40,
+            }
+            for run_id in range(201, 206)
+        ]
+        requested: list[str] = []
+
+        def request(path: str) -> object:
+            requested.append(path)
+            run_id = int(path.rsplit("/", 1)[1])
+            return dict(listed[run_id - 201], head_repository={"full_name": "atrinik/classic"})
+
+        with (
+            patch.object(
+                resolve_pending_release, "list_workflow_runs", return_value=listed
+            ),
+            patch.object(resolve_pending_release, "is_ancestor", return_value=True),
+            patch.object(resolve_pending_release, "_collect_jobs", return_value=[]),
+        ):
+            self.assertEqual(
+                resolve_pending_release.recent_failure_classes(
+                    "atrinik/classic", "v5.8.0", "1" * 40, "2" * 40, request
+                ),
+                ["unknown"] * 3,
+            )
+        self.assertEqual(
+            requested,
+            [f"repos/atrinik/classic/actions/runs/{run_id}" for run_id in (201, 202, 203)],
+        )
 
     def test_multiple_drafts_fail_closed(self) -> None:
         with self.assertRaisesRegex(
@@ -411,6 +701,7 @@ class ResolvePendingReleaseTests(unittest.TestCase):
             "event": "workflow_dispatch",
             "conclusion": "failure",
             "head_sha": "1" * 40,
+            "head_branch": "v5.37.0",
             "head_repository": {"full_name": "atrinik/classic"},
         }
         jobs = {
@@ -456,6 +747,22 @@ class ResolvePendingReleaseTests(unittest.TestCase):
             retained_candidate(),
         )
 
+        for head_branch in ("main", "8.3.x", None):
+            with self.subTest(head_branch=head_branch):
+                branch_run = dict(run, head_branch=head_branch)
+                with self.assertRaisesRegex(
+                    resolve_pending_release.CandidateNotSafe,
+                    "did not run on release tag v5.37.0",
+                ):
+                    resolve_pending_release.validate_retained_candidate(
+                        "atrinik/classic",
+                        "v5.37.0",
+                        32048332566,
+                        lambda path: branch_run
+                        if path.endswith("/runs/32048332566")
+                        else request(path),
+                    )
+
         jobs["jobs"][1]["steps"] = retained_publication_steps(
             resolve_pending_release.IMAGE_INSPECTION_STEP
         )
@@ -467,6 +774,59 @@ class ResolvePendingReleaseTests(unittest.TestCase):
                 "atrinik/classic", "v5.37.0", 32048332566, request
             )
 
+    def test_retained_candidate_search_requires_the_exact_tag_commit(self) -> None:
+        tag_commit = "1" * 40
+        listed = [
+            {
+                "id": run_id,
+                "name": "Package Release",
+                "path": ".github/workflows/package-release.yml",
+                "event": "workflow_dispatch",
+                "conclusion": "failure",
+            }
+            for run_id in (101, 102)
+        ]
+        commits = {101: "3" * 40, 102: tag_commit}
+
+        def validate(
+            repository: str, tag: str, run_id: int, request: object
+        ) -> dict[str, str]:
+            return retained_candidate(
+                tag=tag,
+                candidate_run_id=str(run_id),
+                run_commit=commits[run_id],
+            )
+
+        with (
+            patch.object(
+                resolve_pending_release, "list_workflow_runs", return_value=listed
+            ),
+            patch.object(
+                resolve_pending_release,
+                "validate_retained_candidate",
+                side_effect=validate,
+            ),
+            patch.object(resolve_pending_release, "is_ancestor", return_value=True),
+        ):
+            # Run 101 descends from the tag but was built from a later commit.
+            self.assertEqual(
+                resolve_pending_release.find_retained_candidates(
+                    "atrinik/classic", "v5.37.0", tag_commit, "4" * 40, object()
+                ),
+                [
+                    retained_candidate(
+                        candidate_run_id="102", run_commit=tag_commit
+                    )
+                ],
+            )
+            commits[102] = "3" * 40
+            self.assertEqual(
+                resolve_pending_release.find_retained_candidates(
+                    "atrinik/classic", "v5.37.0", tag_commit, "4" * 40, object()
+                ),
+                [],
+            )
+
     def test_retained_candidate_rejects_duplicate_boundary_jobs(self) -> None:
         run = {
             "id": 32048332566,
@@ -475,6 +835,7 @@ class ResolvePendingReleaseTests(unittest.TestCase):
             "event": "workflow_dispatch",
             "conclusion": "failure",
             "head_sha": "1" * 40,
+            "head_branch": "v5.37.0",
             "head_repository": {"full_name": "atrinik/classic"},
         }
         jobs = {
@@ -534,6 +895,7 @@ class ResolvePendingReleaseTests(unittest.TestCase):
             "event": "workflow_dispatch",
             "conclusion": "failure",
             "head_sha": "1" * 40,
+            "head_branch": "v5.37.0",
             "head_repository": {"full_name": "atrinik/classic"},
         }
         steps = retained_publication_steps(resolve_pending_release.PUBLISH_STEP)

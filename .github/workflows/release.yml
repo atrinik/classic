@@ -166,9 +166,14 @@ jobs:
               fi
               exit "${status}"
             }
+          set -euo pipefail
+          [[ ${RELEASE_TAG} =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          # Rebuild from the immutable tag ref, as the original dispatch did.
+          # GitHub signs provenance with the run's own ref and commit, so a
+          # branch-ref rebuild would name the branch head instead of the tag.
           gh workflow run package-release.yml \
             --repo "${RELEASE_REPOSITORY}" \
-            --ref "${ATRINIK_RELEASE_BRANCH}" \
+            --ref "${RELEASE_TAG}" \
             --field "tag=${RELEASE_TAG}" \
             --field "source_branch=${ATRINIK_RELEASE_BRANCH}"
       - name: Resume the retained complete candidate
@@ -209,7 +214,7 @@ jobs:
             echo "### Pending release recovery disposition"
             echo "- action: \`${RELEASE_ACTION}\`"
             echo "- failure class: \`${RELEASE_FAILURE_CLASS}\`"
-            echo "- consecutive matching failures inspected: \`${RELEASE_RETRY_COUNT}\`"
+            echo "- consecutive failed package attempts inspected: \`${RELEASE_RETRY_COUNT}\`"
           } >> "${GITHUB_STEP_SUMMARY}"
       - name: Analyze commits, tag, and publish release notes
         if: >-

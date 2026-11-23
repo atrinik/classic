@@ -959,7 +959,7 @@ class WorkflowContractTests(unittest.TestCase):
             self.assertNotIn("contents: write", job)
         self.assertEqual(package[: package.index("jobs:")].count("contents: read"), 1)
 
-    def test_current_main_preflight_uses_the_trusted_recovery_verifier(self) -> None:
+    def test_retained_publication_preflight_uses_the_current_branch_verifier(self) -> None:
         workflow = self.text("package-release.yml")
         preflight_job = workflow[
             workflow.index("  preflight:") : workflow.index("  discord-config:")
@@ -968,8 +968,91 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn("fetch-depth: 0", preflight_job)
         self.assertIn("ref: ${{ github.ref }}", preflight_job)
         self.assertIn('test "${GITHUB_REF}" = "refs/heads/${RELEASE_SOURCE_BRANCH}"', preflight_job)
-        self.assertIn('recovery_arguments+=(--recovery-branch "${RELEASE_SOURCE_BRANCH}")', preflight_job)
         self.assertIn("python3 tools/release/validate_release.py", preflight_job)
+        retained = preflight_job[preflight_job.index("name: Validate the retained complete candidate"):]
+        self.assertIn('--recovery-branch "${RELEASE_SOURCE_BRANCH}"', retained)
+
+    def test_candidate_builds_and_their_attestations_are_bound_to_the_tag(self) -> None:
+        # GitHub signs attestations with the run's own ref and commit, so only
+        # a tag-ref run can produce provenance that names the release tag.
+        workflow = self.text("package-release.yml")
+        preflight_job = workflow[
+            workflow.index("  preflight:") : workflow.index("  discord-config:")
+        ]
+        guard = preflight_job[
+            preflight_job.index("Require an immutable tag or validated release-branch definition"):
+            preflight_job.index("id: metadata")
+        ]
+        self.assertIn("RELEASE_CANDIDATE_RUN_ID: ${{ inputs.candidate_run_id }}", guard)
+        branch_mode = guard[guard.index("          else\n"):]
+        self.assertLess(
+            branch_mode.index('if test -z "${RELEASE_CANDIDATE_RUN_ID}"; then'),
+            branch_mode.index('test "${RELEASE_REF_TYPE}" = branch'),
+        )
+        self.assertIn(
+            'echo "candidate builds must run from refs/tags/${RELEASE_TAG}" >&2\n'
+            "              exit 1\n",
+            branch_mode,
+        )
+        metadata = preflight_job[
+            preflight_job.index("id: metadata"):preflight_job.index("id: retained")
+        ]
+        self.assertIn("if: inputs.candidate_run_id == ''", metadata)
+        self.assertIn('test "${GITHUB_REF_TYPE}" = tag', metadata)
+        self.assertNotIn("--recovery-branch", metadata)
+        retained = preflight_job[preflight_job.index("id: retained"):]
+        self.assertIn(".head_sha, .head_branch] | @tsv", retained)
+        self.assertIn('test "${run_ref}" = "${RELEASE_TAG}"', retained)
+        self.assertIn(
+            'test "${run_commit}" = "$(git rev-parse "refs/tags/${RELEASE_TAG}^{commit}")"',
+            retained,
+        )
+        # Branch-ref publication never builds: both build jobs need no candidate run.
+        for start, end in (("  discord-config:", "  candidate:"), ("  candidate:", "  publish:")):
+            job = workflow[workflow.index(start) : workflow.index(end)]
+            self.assertIn("inputs.candidate_run_id == ''", job)
+
+    def test_publication_requires_tag_bound_provenance_after_every_attestation(self) -> None:
+        workflow = self.text("package-release.yml")
+        publish = workflow[workflow.index("  publish:") : workflow.index("  queue-latest:")]
+        helper = "bash build/release-automation/tools/release/verify_tag_provenance.sh"
+        self.assertEqual(publish.count(helper), 2)
+        assets = publish.index("name: Require tag-bound provenance for every release asset")
+        image = publish.index("name: Require tag-bound provenance for the server image")
+        # Assets are verified after this run attests them and before any upload.
+        self.assertLess(publish.index("name: Attest downloadable artifact provenance"), assets)
+        self.assertLess(publish.index("name: Attest downloadable artifact SBOM"), assets)
+        self.assertLess(assets, publish.index("name: Resume draft assets or verify the immutable release"))
+        # The image is verified after its attestation and before publication.
+        self.assertLess(publish.index("name: Verify the GitHub server-image attestation"), image)
+        self.assertLess(image, publish.index("name: Recheck the exact release assets immediately before publication"))
+        self.assertLess(image, publish.index("name: Publish the complete draft release"))
+        for start, end in ((assets, publish.index("      - id: assets")),
+                           (image, publish.index("      - id: final-assets"))):
+            step = publish[start:end]
+            self.assertNotIn("        if:", step)
+            self.assertIn(helper, step)
+        self.assertIn("assets=(build/release/*)", publish[assets:image])
+        self.assertIn('"oci://ghcr.io/atrinik/classic-server@${IMAGE_DIGEST}"', publish[image:])
+        script = (ROOT / "tools/release/verify_tag_provenance.sh").read_text(encoding="utf-8")
+        for flag in ('--signer-workflow "${RELEASE_REPOSITORY}/.github/workflows/package-release.yml"',
+                     '--source-digest "${RELEASE_COMMIT}"',
+                     '--source-ref "refs/tags/${RELEASE_TAG}"',
+                     "--deny-self-hosted-runners"):
+            self.assertIn(flag, script)
+
+    def test_release_validation_selects_the_aggregate_check_by_name(self) -> None:
+        # Each Package Release attempt adds check runs to the tag commit; an
+        # unfiltered first page can lose the aggregate after a few attempts.
+        query = "check-runs?check_name=Classic%20validation&per_page=100"
+        package = self.text("package-release.yml")
+        self.assertIn(query, package)
+        self.assertNotIn("check-runs?per_page=100", package)
+        for helper in ("validate_release.py", "recover_release.py"):
+            source = (ROOT / "tools/release" / helper).read_text(encoding="utf-8")
+            self.assertIn('/check-runs"\n', source)
+            self.assertIn('"?check_name=Classic%20validation&per_page=100"', source)
+            self.assertNotIn("check-runs?per_page=100", source)
 
     def test_semantic_release_skips_cross_repository_issue_comments(self) -> None:
         config = (ROOT / ".releaserc.cjs").read_text(encoding="utf-8")
@@ -1009,8 +1092,12 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn('--expected-tag "${RELEASE_TAG}"', delete_step)
         self.assertIn('--expected-release-id "${RELEASE_ID}"', delete_step)
         self.assertNotIn("gh api --method DELETE", delete_step)
-        self.assertIn('--ref "${ATRINIK_RELEASE_BRANCH}"', workflow)
-        self.assertIn('--field "source_branch=${ATRINIK_RELEASE_BRANCH}"', workflow)
+        resume_step = workflow[recovery : workflow.index("Resume the retained complete candidate")]
+        self.assertIn('[[ ${RELEASE_TAG} =~ ^v[0-9]+\\.[0-9]+\\.[0-9]+$ ]]', resume_step)
+        self.assertIn('--ref "${RELEASE_TAG}"', resume_step)
+        self.assertNotIn('--ref "${ATRINIK_RELEASE_BRANCH}"', resume_step)
+        self.assertNotIn("--ref main", resume_step)
+        self.assertIn('--field "source_branch=${ATRINIK_RELEASE_BRANCH}"', resume_step)
         self.assertIn(
             "steps.pending-release.outputs.action == 'none' ||",
             workflow,
