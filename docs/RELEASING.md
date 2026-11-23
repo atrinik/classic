@@ -157,16 +157,23 @@ packaging run has produced a candidate or uploaded an asset. Otherwise use
 **Re-run failed jobs** on the original Package Release run. Never delete or
 recreate a tag or draft to recover.
 
-If a release-automation defect is fixed after the tag and draft exist but
-before a candidate is produced, the next successful Semantic Release run
-detects the single reachable draft, dispatches Package Release from the
-validated current `main` workflow definition, and skips version analysis. This
-is the guarded escape hatch for a broken tag-bound workflow definition; normal
-publication remains bound to the exact tag definition. Candidate metadata in
-this recovery path is validated by the exact checked current-main revision, so
-an older pending tag is checked against the complete current release history
-rather than running validation code and history policy frozen at that tag.
-Multiple drafts fail closed for manual investigation.
+If Package Release fails before it uploads a draft asset, the next successful
+Semantic Release run detects the single reachable assetless draft, skips
+version analysis, and dispatches Package Release again from that exact
+immutable tag ref, as the original dispatch did. The retry builds, validates
+and attests with the tag's own workflow definition and release tooling, so its
+GitHub/Sigstore provenance names the tag ref and tag commit. GitHub takes an
+attestation's source ref and digest from the workflow run's own ref and commit,
+not from the source tree the run checks out: a branch-ref run that packaged the
+tagged tree would still be signed for the branch head, and consumers that pin
+the tag commit reject it. Package Release therefore refuses to build a
+candidate from any branch ref. Recovery cannot repair a defect in the tagged
+workflow definition itself; like a tagged source defect, it needs a reviewed
+failed-release disposition for that exact tag (see the recorded exceptions
+below) so the next semantic version supersedes it. The current disposition
+helper recognizes only failures whose Windows-server and server-image jobs ran
+and whose candidate finalizer and publisher were skipped. Multiple drafts fail
+closed for manual investigation.
 
 The retired `v5.8.1` and `v5.10.0` coordinates are the recorded exceptions to that
 retry rule. Both `v5.8.1` Package Release attempts failed in the Release-only
@@ -261,16 +268,21 @@ mutations. Local fixtures and this historical audit do not authorize deletion.
 If a failed run reached complete-candidate validation but a defect in its
 publication code makes a job rerun impossible, the semantic-release guard
 searches a bounded, paginated window of failed Package Release runs. It
-accepts exactly one run only when the run belongs to this repository, its tag
-and source commit are ancestors of current `main`, its complete-candidate
-finalizer succeeded, its publication job failed only at `Publish the complete
-draft release`, its image and attestation checks succeeded, and it has one
-unexpired `complete-release-candidate-TAG` artifact with a SHA-256 digest. The
-guard then dispatches Package Release from current `main` with the exact tag
-and numeric failed run ID. Package Release skips every candidate build,
-downloads that retained artifact by run ID, rejects any draft-asset mismatch,
-and uses only the validated current-main verifier against the tagged source
-tree. This is the sole exception to recovery within the original run; it never
+accepts exactly one run only when the run belongs to this repository, it ran
+on the exact tag ref and tag commit, that commit is an ancestor of current
+`main`, its complete-candidate finalizer succeeded, its publication job failed
+only at `Publish the complete draft release`, its image and attestation checks
+succeeded, and it has one unexpired `complete-release-candidate-TAG` artifact
+with a SHA-256 digest. The guard then dispatches Package Release from current
+`main` with the exact tag and numeric failed run ID. Package Release repeats
+the run identity checks, skips every candidate build, downloads that retained
+artifact by run ID, rejects any draft-asset mismatch, and uses only the
+validated current-main verifier against the tagged source tree. The tag-bound
+run has already attested those exact artifacts and the server image with tag
+provenance. The current-main publication run adds its own attestations for the
+same digests, which name `main`; a verifier that accepts any matching
+attestation, such as `gh attestation verify`, still finds the tag-bound one.
+This is the sole exception to recovery within the original run; it never
 rebuilds or edits a tag, release, asset, image, or attestation identity.
 
 For the `v5.37.0` incident, run `32038894588` is not a retained publication
@@ -438,7 +450,9 @@ complete `classic` supply-chain profile before resuming publication.
    workflow. Environment secrets remain scoped to that top-level release job;
    a one-day artifact carries only the validated public ID into the official
    Windows client package. The environment deployment policy admits immutable
-   `v*` tag refs and `main` only for checked recovery.
+   `v*` tag refs and `main`. Recovery rebuilds also run from the tag ref, and
+   retained-candidate publication from `main` skips this job, so only tag refs
+   use the environment.
 5. The non-publishing Build Release Candidate workflow revalidates the tag,
    draft, main ancestry, and successful aggregate check. GitHub exposes drafts
    only to tokens with push access, so production grants `contents: write` only
@@ -867,9 +881,10 @@ may receive at most two automatic retries after consecutive
 `blocked` disposition with the class and count in the workflow summary, so
 successful main validation does not waste another release run. Other classes
 are surfaced in the summary and continue through their existing exact
-disposition; tag-bound runs and current-main recovery runs count only when their
-commits are on the draft tag's lineage to current `main`, and only the server-
-image build class receives this automatic retry cap. Operators must inspect the
+disposition; tag-bound runs, including automatic retries, and earlier
+current-main recovery runs count only when their commits are on the draft tag's
+lineage to current `main`, and only the server-image build class receives this
+automatic retry cap. Operators must inspect the
 recorded failed job boundary before changing any retry policy.
 
 Before upgrading a production server, snapshot its state and retain the exact

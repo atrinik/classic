@@ -968,8 +968,46 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn("fetch-depth: 0", preflight_job)
         self.assertIn("ref: ${{ github.ref }}", preflight_job)
         self.assertIn('test "${GITHUB_REF}" = "refs/heads/${RELEASE_SOURCE_BRANCH}"', preflight_job)
-        self.assertIn('recovery_arguments+=(--recovery-branch "${RELEASE_SOURCE_BRANCH}")', preflight_job)
         self.assertIn("python3 tools/release/validate_release.py", preflight_job)
+        retained = preflight_job[preflight_job.index("name: Validate the retained complete candidate"):]
+        self.assertIn('--recovery-branch "${RELEASE_SOURCE_BRANCH}"', retained)
+
+    def test_candidate_builds_and_their_attestations_are_bound_to_the_tag(self) -> None:
+        # GitHub signs attestations with the run's own ref and commit, so only
+        # a tag-ref run can produce provenance that names the release tag.
+        workflow = self.text("package-release.yml")
+        preflight_job = workflow[
+            workflow.index("  preflight:") : workflow.index("  discord-config:")
+        ]
+        guard = preflight_job[
+            preflight_job.index("Require an immutable tag or validated release-branch definition"):
+            preflight_job.index("id: metadata")
+        ]
+        self.assertIn("RELEASE_CANDIDATE_RUN_ID: ${{ inputs.candidate_run_id }}", guard)
+        branch_mode = guard[guard.index("          else\n"):]
+        self.assertLess(
+            branch_mode.index('if test -z "${RELEASE_CANDIDATE_RUN_ID}"; then'),
+            branch_mode.index('test "${RELEASE_REF_TYPE}" = branch'),
+        )
+        self.assertIn("candidate builds must run from refs/tags/${RELEASE_TAG}", branch_mode)
+        metadata = preflight_job[
+            preflight_job.index("id: metadata"):preflight_job.index("id: retained")
+        ]
+        self.assertIn("if: inputs.candidate_run_id == ''", metadata)
+        self.assertIn('test "${GITHUB_REF_TYPE}" = tag', metadata)
+        self.assertNotIn("--recovery-branch", metadata)
+        self.assertNotIn("--recovery-main", metadata)
+        retained = preflight_job[preflight_job.index("id: retained"):]
+        self.assertIn(".head_sha, .head_branch] | @tsv", retained)
+        self.assertIn('test "${run_ref}" = "${RELEASE_TAG}"', retained)
+        self.assertIn(
+            'test "${run_commit}" = "$(git rev-parse "refs/tags/${RELEASE_TAG}^{commit}")"',
+            retained,
+        )
+        # Branch-ref publication never builds: both build jobs need no candidate run.
+        for start, end in (("  discord-config:", "  candidate:"), ("  candidate:", "  publish:")):
+            job = workflow[workflow.index(start) : workflow.index(end)]
+            self.assertIn("inputs.candidate_run_id == ''", job)
 
     def test_semantic_release_skips_cross_repository_issue_comments(self) -> None:
         config = (ROOT / ".releaserc.cjs").read_text(encoding="utf-8")
@@ -1009,8 +1047,12 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn('--expected-tag "${RELEASE_TAG}"', delete_step)
         self.assertIn('--expected-release-id "${RELEASE_ID}"', delete_step)
         self.assertNotIn("gh api --method DELETE", delete_step)
-        self.assertIn('--ref "${ATRINIK_RELEASE_BRANCH}"', workflow)
-        self.assertIn('--field "source_branch=${ATRINIK_RELEASE_BRANCH}"', workflow)
+        resume_step = workflow[recovery : workflow.index("Resume the retained complete candidate")]
+        self.assertIn('[[ ${RELEASE_TAG} =~ ^v[0-9]+\\.[0-9]+\\.[0-9]+$ ]]', resume_step)
+        self.assertIn('--ref "${RELEASE_TAG}"', resume_step)
+        self.assertNotIn('--ref "${ATRINIK_RELEASE_BRANCH}"', resume_step)
+        self.assertNotIn("--ref main", resume_step)
+        self.assertIn('--field "source_branch=${ATRINIK_RELEASE_BRANCH}"', resume_step)
         self.assertIn(
             "steps.pending-release.outputs.action == 'none' ||",
             workflow,

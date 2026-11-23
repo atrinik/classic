@@ -300,6 +300,10 @@ def validate_retained_candidate(
     run_commit = run.get("head_sha")
     if not isinstance(run_commit, str) or SHA_RE.fullmatch(run_commit) is None:
         raise CandidateNotSafe(f"run {run_id} has no immutable source commit")
+    # The candidate run's attestations are the release's tag provenance:
+    # GitHub signs them with that run's ref and commit.
+    if run.get("head_branch") != tag:
+        raise CandidateNotSafe(f"run {run_id} did not run on release tag {tag}")
 
     jobs = _collect_jobs(repository, run_id, request)
     finalizer_jobs = [
@@ -437,7 +441,7 @@ def find_retained_candidates(
             candidate = validate_retained_candidate(repository, tag, run_id, request)
         except CandidateNotSafe:
             continue
-        if not is_ancestor(tag_commit, candidate["run_commit"]):
+        if candidate["run_commit"] != tag_commit:
             continue
         if not is_ancestor(candidate["run_commit"], current_head):
             continue
