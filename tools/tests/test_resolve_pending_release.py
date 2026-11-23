@@ -465,8 +465,18 @@ class ResolvePendingReleaseTests(unittest.TestCase):
                         repository, name, tag_commit, head, request),
                 )
 
-            with patch.object(resolve_pending_release, "ROOT", root):
-                self.assertEqual(resolved([100, 50])["action"], "resume-retained-candidate")
+            # The resolver's Git calls inherit the process environment; drop any
+            # GIT_* repository overrides so they read the temporary lineage.
+            clean = {key: value for key, value in os.environ.items()
+                     if not key.startswith("GIT_")}
+            clean |= {"GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_NOSYSTEM": "1"}
+            with (
+                patch.object(resolve_pending_release, "ROOT", root),
+                patch.dict(os.environ, clean, clear=True),
+            ):
+                first = resolved([100, 50])
+                self.assertEqual(first["action"], "resume-retained-candidate")
+                self.assertEqual(first["retry_count"], "1")
                 second = resolved([201, 100, 50])
                 self.assertEqual(second["action"], "resume-retained-candidate")
                 self.assertEqual(second["candidate_run_id"], "100")

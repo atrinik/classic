@@ -54,10 +54,11 @@ MAX_CANDIDATE_INSPECTIONS = 25
 # freezes the failed-run inventory that a failed-release disposition lists.
 MAX_AUTOMATIC_PACKAGE_ATTEMPTS = 3
 
-# These name steps in the definition the inspected run executed, which may be
-# a tag's frozen copy. Each must match exactly one successful step, so renaming
-# one on main while a draft from an older tag may be pending needs accepted
-# alternative names per proof step (and the matching identity test) first.
+# These, like the job and publish-step names above, name steps in the tag's
+# frozen workflow copy that the inspected tag-ref run executed. Each must match
+# exactly one successful step, so renaming one on main while a draft from an
+# older tag may be pending needs accepted alternative names per step (and the
+# matching identity test) first.
 RETAINED_PROOF_STEPS = (
     IMAGE_INSPECTION_STEP,
     "Recheck the revision-specific candidate before publication",

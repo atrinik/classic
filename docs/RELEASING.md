@@ -205,12 +205,15 @@ were skipped; a client-package failure with both server jobs run fits. Any
 other boundary, such as a preflight, candidate-validation or publication
 failure, or attempts whose server-job conclusions differ, first needs a
 reviewed helper change. A blocked draft that already has assets cannot be
-rebuilt or deleted: use **Re-run failed jobs** on its tag-ref candidate run
-within 30 days, or, once a publication fix is on `main`, dispatch the
-retained-candidate recovery shown below with that run's ID. A failure of the
-server-image provenance check, which runs after the asset upload, leaves such a
-draft without a retained candidate, so Semantic Release reports an error until
-the operator re-runs that run's failed jobs.
+rebuilt or deleted: use **Re-run failed jobs** on its tag-ref candidate run,
+or, once a publication fix is on `main`, dispatch the retained-candidate
+recovery shown below with that run's ID. Both exits close about 30 days after
+the candidate run, when GitHub stops allowing reruns and the
+`complete-release-candidate-TAG` artifact expires. If a tag-ref run fails after
+the asset upload at any step other than `Publish the complete draft release`,
+such as the server-image provenance check, the draft has no retained
+candidate, and Semantic Release reports an error on each main validation until
+an operator re-runs that tag-ref run's failed jobs within the same 30 days.
 
 The cap also bounds the check runs that each attempt adds to the tag commit and
 fixes the failed-run inventory such a disposition lists; release validation
@@ -241,8 +244,8 @@ provenance that names the branch head.
 The retired `v5.8.1` and `v5.10.0` coordinates are the recorded exceptions to
 the rule against deleting a draft to recover. Both `v5.8.1` Package Release
 attempts failed in the Release-only server build before finalizing a
-candidate, publishing an image, or uploading a draft asset. `docs/history/release-tags.json` records each exact tag commit,
-empty draft ID, failed run IDs, expected Windows-server and server-image job
+candidate, publishing an image, or uploading a draft asset.
+`docs/history/release-tags.json` records each exact tag commit, empty draft ID, failed run IDs, expected Windows-server and server-image job
 conclusions, and
 `delete-empty-draft` disposition. On current validated `main`, Semantic Release
 rechecks those immutable coordinates and the failed job conclusions, then
