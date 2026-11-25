@@ -439,23 +439,40 @@ START_TEST(test_empty_stomach_keeps_hp_and_regeneration) {
 }
 END_TEST
 
-START_TEST(test_non_attack_hp_loss_still_kills_without_starvation) {
+static const char *find_trophy_msg(mapstruct *map, int x, int y) {
+    for (object *tmp = GET_MAP_OB(map, x, y); tmp != NULL; tmp = tmp->above) {
+        if (tmp->msg != NULL && strstr(tmp->msg, "This finger has been cut off") != NULL) {
+            return tmp->msg;
+        }
+    }
+    return NULL;
+}
+
+START_TEST(test_non_attack_hp_loss_kills_before_regeneration) {
     mapstruct *map;
     object *pl;
 
     check_setup_env_pl(&map, &pl);
     configure_regen_player(pl, 0);
     /* A PvP-area defeat restores the player in place without loading a
-     * savebed map. */
+     * savebed map, and leaves a trophy whose text names the killer. */
     map->map_flags |= MAP_FLAG_PVP;
     player_set_killer(CONTR(pl), "rotten apple");
     pl->stats.hp = 0;
+    /* Enough pending regeneration to restore the player on this tick if
+     * regeneration ran before the death check. */
+    CONTR(pl)->gen_hp_remainder = UINT16_MAX;
+    int x = pl->x, y = pl->y;
 
     uint64_t deaths = metrics_get(&CONTR(pl)->metrics, METRIC_CHARACTER_DEATHS);
     player_do_some_living(pl);
 
     ck_assert_uint_eq(metrics_get(&CONTR(pl)->metrics, METRIC_CHARACTER_DEATHS), deaths + 1);
     ck_assert_int_eq(pl->stats.hp, pl->stats.maxhp);
+    const char *msg = find_trophy_msg(map, x, y);
+    ck_assert_ptr_nonnull(msg);
+    ck_assert_ptr_nonnull(strstr(msg, "by rotten apple."));
+    ck_assert_ptr_null(strstr(msg, "starvation"));
 }
 END_TEST
 
@@ -482,7 +499,7 @@ static Suite *suite(void) {
     tcase_add_test(tc_core, test_monster_living_speed_is_not_player_clamped);
     tcase_add_test(tc_core, test_food_does_not_drain_over_many_ticks);
     tcase_add_test(tc_core, test_empty_stomach_keeps_hp_and_regeneration);
-    tcase_add_test(tc_core, test_non_attack_hp_loss_still_kills_without_starvation);
+    tcase_add_test(tc_core, test_non_attack_hp_loss_kills_before_regeneration);
 
     /* Keep all 13,146 real event ticks: shorter runs do not exercise the
      * accumulated roundoff regression. Atomic LLVM coverage counters make

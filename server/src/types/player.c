@@ -764,7 +764,7 @@ static inline uint16_t get_regen_value(double speed, double rate) {
  * food stat and eating are kept so existing items and saves remain valid.
  *
  * A player left without hit points by something other than an attack (for
- * example rotten food) still dies here, as before.
+ * example rotten food) still dies here, before any regeneration.
  *
  * @param op
  * Player.
@@ -774,6 +774,15 @@ void player_do_some_living(object *op) {
     SOFT_ASSERT(op->type == PLAYER, "Not a player object: %s", object_get_str(op));
 
     player *pl = CONTR(op);
+
+    /* Direct hit point loss outside an attack, such as rotten food, kills
+     * here, before regeneration could restore the player. The death reuses
+     * the most recently recorded killer, which may be stale. */
+    if (op->stats.hp <= 0 && !pl->tgm) {
+        draw_info_format(COLOR_WHITE, NULL, "%s died.", op->name);
+        kill_player(op, false, true);
+        return;
+    }
 
     double gen_hp = (pl->gen_hp * (PLAYER_REGEN_HP_RATE / 20.0)) + (op->stats.maxhp / 4.0);
 
@@ -825,13 +834,6 @@ void player_do_some_living(object *op) {
         }
     } else {
         pl->gen_sp_remainder = 0;
-    }
-
-    /* Direct hit point loss outside an attack, such as rotten food, kills
-     * here. Its source has already recorded the killer. */
-    if (op->stats.hp <= 0 && !pl->tgm) {
-        draw_info_format(COLOR_WHITE, NULL, "%s died.", op->name);
-        kill_player(op, false, true);
     }
 }
 

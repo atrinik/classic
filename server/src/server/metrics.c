@@ -232,7 +232,7 @@ static const metric_metadata_t registry[METRIC_COUNT] = {
         CHARACTER("combat.deaths_environmental",
                   "combat",
                   "Environmental deaths",
-                  "Deaths from starvation, traps, or another non-living source.",
+                  "Deaths from traps, rotten food, or another non-living source.",
                   METRIC_KIND_COUNTER,
                   METRIC_UNIT_COUNT,
                   METRIC_AGGREGATION_SUM),
