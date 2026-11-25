@@ -311,7 +311,7 @@ void socket_command_stats(uint8_t *data, size_t len, size_t pos) {
                 case CS_STAT_HP:
                     temp = packet_reader_read_int32(&reader);
 
-                    if (temp < cpl.stats.hp && cpl.stats.food) {
+                    if (temp < cpl.stats.hp) {
                         cpl.warn_hp = 1;
 
                         if (cpl.stats.maxhp / 12 <= cpl.stats.hp - temp) {

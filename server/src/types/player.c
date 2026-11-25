@@ -756,19 +756,33 @@ static inline uint16_t get_regen_value(double speed, double rate) {
 }
 
 /**
- * Regenerate player's hp/mana, decrease food, etc.
+ * Regenerate player's hit points and mana.
  *
- * We will only regenerate HP and mana if the player has some food in their
- * stomach.
+ * Hunger is disabled: the food stat no longer drains over time or with
+ * regeneration, and a food value of zero (for example from an older save)
+ * neither stops regeneration nor drains hit points or kills the player. The
+ * food stat and eating are kept so existing items and saves remain valid.
+ *
+ * A player left without hit points by something other than an attack (for
+ * example rotten food) still dies here, before any regeneration.
  *
  * @param op
  * Player.
  */
-static void player_do_some_living(object *op) {
+void player_do_some_living(object *op) {
     HARD_ASSERT(op != NULL);
     SOFT_ASSERT(op->type == PLAYER, "Not a player object: %s", object_get_str(op));
 
     player *pl = CONTR(op);
+
+    /* Direct hit point loss outside an attack, such as rotten food, kills
+     * here, before regeneration could restore the player. The death reuses
+     * the most recently recorded killer, which may be stale. */
+    if (op->stats.hp <= 0 && !pl->tgm) {
+        draw_info_format(COLOR_WHITE, NULL, "%s died.", op->name);
+        kill_player(op, false, true);
+        return;
+    }
 
     double gen_hp = (pl->gen_hp * (PLAYER_REGEN_HP_RATE / 20.0)) + (op->stats.maxhp / 4.0);
 
@@ -790,10 +804,8 @@ static void player_do_some_living(object *op) {
     uint16_t gen_real_hp = get_regen_value(gen_hp, PLAYER_REGEN_HP_RATE);
     uint16_t gen_real_sp = get_regen_value(gen_sp, PLAYER_REGEN_SP_RATE);
 
-    int16_t last_food = op->stats.food;
-
     /* Regenerate hit points. */
-    if (op->stats.hp < op->stats.maxhp && op->stats.food) {
+    if (op->stats.hp < op->stats.maxhp) {
         int add = get_regen_amount(gen_real_hp, &pl->gen_hp_remainder);
         if (add != 0) {
             int effective = MIN(add, op->stats.maxhp - op->stats.hp);
@@ -803,23 +815,13 @@ static void player_do_some_living(object *op) {
             if (op->stats.hp > op->stats.maxhp) {
                 op->stats.hp = op->stats.maxhp;
             }
-
-            if (!pl->tgm) {
-                op->stats.food--;
-
-                if (pl->digestion < 0) {
-                    op->stats.food += pl->digestion;
-                } else if (pl->digestion > 0 && rndm(0, pl->digestion)) {
-                    op->stats.food = last_food;
-                }
-            }
         }
     } else {
         pl->gen_hp_remainder = 0;
     }
 
     /* Regenerate mana. */
-    if (op->stats.sp < op->stats.maxsp && op->stats.food) {
+    if (op->stats.sp < op->stats.maxsp) {
         int add = get_regen_amount(gen_real_sp, &pl->gen_sp_remainder);
         if (add != 0) {
             int effective = MIN(add, op->stats.maxsp - op->stats.sp);
@@ -829,76 +831,9 @@ static void player_do_some_living(object *op) {
             if (op->stats.sp > op->stats.maxsp) {
                 op->stats.sp = op->stats.maxsp;
             }
-
-            if (!pl->tgm) {
-                op->stats.food--;
-
-                if (pl->digestion < 0) {
-                    op->stats.food += pl->digestion;
-                } else if (pl->digestion > 0 && rndm(0, pl->digestion)) {
-                    op->stats.food = last_food;
-                }
-            }
         }
     } else {
         pl->gen_sp_remainder = 0;
-    }
-
-    /* Digestion */
-    if (--op->last_eat < 0) {
-        int bonus = MAX(pl->digestion, 0);
-        int penalty = MAX(-pl->digestion, 0);
-
-        if (pl->gen_hp > 0) {
-            op->last_eat = 25 * (1 + bonus) / (pl->gen_hp + penalty + 1);
-        } else {
-            op->last_eat = 25 * (1 + bonus) / (penalty + 1);
-        }
-
-        if (!pl->tgm) {
-            op->stats.food--;
-        }
-    }
-
-    if (op->stats.food < 0 && op->stats.hp >= 0) {
-        object *flesh = NULL;
-
-        FOR_INV_PREPARE(op, tmp) {
-            if (QUERY_FLAG(tmp, FLAG_UNPAID)) {
-                continue;
-            }
-
-            if (tmp->type == FOOD || tmp->type == DRINK) {
-                draw_info(COLOR_WHITE, op, "You blindly grab for a bite of food.");
-                manual_apply(op, tmp, 0);
-
-                if (op->stats.food >= 0 || op->stats.hp < 0) {
-                    break;
-                }
-            } else if (tmp->type == FLESH && flesh == NULL) {
-                flesh = tmp;
-            }
-        }
-        FOR_INV_FINISH();
-
-        /* If player is still starving, it means they don't have any food, so
-         * eat flesh instead. */
-        if (op->stats.food < 0 && op->stats.hp >= 0 && flesh != NULL) {
-            draw_info(COLOR_WHITE, op, "You blindly grab for a bite of food.");
-            manual_apply(op, flesh, 0);
-        }
-    }
-
-    /* Lose hitpoints for lack of food. */
-    while (op->stats.food < 0 && op->stats.hp > 0) {
-        op->stats.food++;
-        op->stats.hp--;
-    }
-
-    if ((op->stats.hp <= 0 || op->stats.food < 0) && !pl->tgm) {
-        draw_info_format(COLOR_WHITE, NULL, "%s starved to death.", op->name);
-        player_set_killer(pl, "starvation");
-        kill_player(op, false, true);
     }
 }
 
@@ -1223,7 +1158,8 @@ void kill_player(object *op, bool pvp, bool environmental) {
     /* Remove any disease */
     disease_cure(op, NULL);
 
-    /* If the player starved to death, give them some food back... */
+    /* Hunger is disabled; refilling an empty stomach on death only keeps
+     * the food display of older characters full. */
     if (op->stats.food <= 0) {
         op->stats.food = 500;
     }
