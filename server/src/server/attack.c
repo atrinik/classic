@@ -1618,8 +1618,6 @@ bool attack_kill(object *op, object *hitter) {
         draw_info(COLOR_WHITE, owner, "Your foe has fallen!\nVICTORY!!!");
     }
 
-    int64_t exp_gain = 0;
-
     /* Killed a monster and it wasn't in PvP area, so give exp. */
     if (!is_pvp && owner->type == PLAYER && op->type != PLAYER) {
         /* Figure out the skill that should gain experience. If the hitter
@@ -1631,7 +1629,7 @@ bool attack_kill(object *op, object *hitter) {
         }
 
         if (skill != NULL) {
-            exp_gain = award_kill_exp(owner, op, skill);
+            award_kill_exp(owner, op, skill);
         }
     }
 
@@ -1697,17 +1695,8 @@ bool attack_kill(object *op, object *hitter) {
             op->enemy_count = owner->count;
         }
 
-        /* Monster killed another monster. */
-        if (owner->type == MONSTER) {
-            /* No loot */
-            SET_FLAG(op, FLAG_STARTEQUIP);
-            /* Force an empty corpse though. */
-            SET_FLAG(op, FLAG_CORPSE_FORCED);
-        } else if (exp_gain == 0) {
-            /* No exp, no loot and no corpse. */
-            SET_FLAG(op, FLAG_STARTEQUIP);
-        }
-
+        /* Non-player victims always drop their loot, regardless of who
+         * killed them or how much experience the kill yielded. */
         object_destruct(op);
     }
 
