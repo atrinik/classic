@@ -241,9 +241,10 @@ START_TEST(test_monster_kill_drops_loot) {
     object *victim = attack_test_loot_victim(map, pl);
     int x = victim->x, y = victim->y;
 
-    object *killer = arch_get("kobold");
-    killer->x = x;
-    killer->y = y;
+    /* The killer must be a live map actor for the hostility reference to be
+     * current. */
+    object *killer = attack_test_target(map, pl);
+    ck_assert_ptr_ne(killer, victim);
     memset(killer->attack, 0, sizeof(killer->attack));
     killer->attack[ATNR_IMPACT] = 100;
     /* Make the two monsters hostile to each other. */
@@ -252,8 +253,6 @@ START_TEST(test_monster_kill_drops_loot) {
 
     ck_assert_int_gt(attack_hit(victim, killer, 100), 0);
     ck_assert(attack_test_tile_has(map, x, y, arch_find("sword")));
-
-    object_destroy(killer);
 }
 END_TEST
 
