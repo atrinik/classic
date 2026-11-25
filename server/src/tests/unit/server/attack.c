@@ -182,6 +182,81 @@ static bool attack_test_is_female_hurt_sound(const char *filename) {
     return false;
 }
 
+static bool attack_test_inventory_has(object *op, archetype_t *at) {
+    for (object *tmp = op->inv; tmp != NULL; tmp = tmp->below) {
+        if (tmp->arch == at || attack_test_inventory_has(tmp, at)) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+static bool attack_test_tile_has(mapstruct *map, int x, int y, archetype_t *at) {
+    for (object *tmp = GET_MAP_OB(map, x, y); tmp != NULL; tmp = tmp->above) {
+        if (tmp->arch == at || attack_test_inventory_has(tmp, at)) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+static object *attack_test_loot_victim(mapstruct *map, object *pl) {
+    object *victim = attack_test_target(map, pl);
+    victim->stats.hp = 1;
+    victim->stats.maxhp = 1;
+    victim->stats.exp = 0;
+    object *loot = arch_get("sword");
+    ck_assert_ptr_nonnull(object_insert_into(loot, victim, 0));
+    ck_assert(!QUERY_FLAG(victim, FLAG_STARTEQUIP));
+    return victim;
+}
+
+START_TEST(test_zero_experience_kill_drops_loot) {
+    mapstruct *map;
+    object *pl;
+
+    check_setup_env_pl(&map, &pl);
+    memset(pl->attack, 0, sizeof(pl->attack));
+    pl->attack[ATNR_IMPACT] = 100;
+    object *saved_chosen_skill = pl->chosen_skill;
+    /* Without a skill the kill awards no experience. */
+    pl->chosen_skill = NULL;
+
+    object *victim = attack_test_loot_victim(map, pl);
+    int x = victim->x, y = victim->y;
+    ck_assert_int_gt(attack_hit(victim, pl, 100), 0);
+    ck_assert(attack_test_tile_has(map, x, y, arch_find("sword")));
+
+    pl->chosen_skill = saved_chosen_skill;
+}
+END_TEST
+
+START_TEST(test_monster_kill_drops_loot) {
+    mapstruct *map;
+    object *pl;
+
+    check_setup_env_pl(&map, &pl);
+    object *victim = attack_test_loot_victim(map, pl);
+    int x = victim->x, y = victim->y;
+
+    object *killer = arch_get("kobold");
+    killer->x = x;
+    killer->y = y;
+    memset(killer->attack, 0, sizeof(killer->attack));
+    killer->attack[ATNR_IMPACT] = 100;
+    /* Make the two monsters hostile to each other. */
+    victim->enemy = killer;
+    victim->enemy_count = killer->count;
+
+    ck_assert_int_gt(attack_hit(victim, killer, 100), 0);
+    ck_assert(attack_test_tile_has(map, x, y, arch_find("sword")));
+
+    object_destroy(killer);
+}
+END_TEST
+
 START_TEST(test_player_hurt_sound_selection_and_damage_gate) {
     mapstruct *map;
     object *pl;
@@ -988,6 +1063,8 @@ static Suite *suite(void) {
     tcase_add_test(tc_core, test_attack_roll_adjust_describes_moved_target_penalty);
     tcase_add_test(tc_core, test_kill_experience_follows_damage_skill_participation);
     tcase_add_test(tc_core, test_monster_kill_metrics_separate_named_variants);
+    tcase_add_test(tc_core, test_zero_experience_kill_drops_loot);
+    tcase_add_test(tc_core, test_monster_kill_drops_loot);
     tcase_add_test(tc_core, test_targeted_melee_gets_one_unaware_opening_bonus);
     tcase_add_test(tc_core, test_situational_bonus_excludes_living_pets_and_plugin_damage_api);
     tcase_add_test(tc_core, test_unaware_bonus_does_not_increase_status_effect_strength);
