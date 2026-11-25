@@ -170,7 +170,8 @@ estimated rate before any journal producer is accepted.
   vetoes. Melee/projectile hits require positive effective damage. The engine
   has no critical-hit event, so no synthetic critical metric is recorded.
 - Death causes are exclusive: player ownership is PvP, monster ownership is
-  PvE, and starvation/traps/other non-living sources are environmental.
+  PvE, and traps/other non-living sources are environmental. Starvation
+  deaths no longer occur because hunger is disabled (see `HUNGER.md`).
   Save-life prevention is counted separately and is not a death or respawn.
 - Healing excludes overhealing and records effective healing to self, to
   another friendly target, and received from another friendly source

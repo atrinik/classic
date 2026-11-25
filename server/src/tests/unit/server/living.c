@@ -10,6 +10,7 @@
 #include <attack.h>
 #include <commands.h>
 #include <disease.h>
+#include <metrics.h>
 #include <object.h>
 #include <player.h>
 #include <poisoning.h>
@@ -365,6 +366,99 @@ START_TEST(test_reduce_symptoms_reduces_and_reschedules_progressive_symptoms) {
 }
 END_TEST
 
+/* Enough player ticks for the removed digestion counter to have drained
+ * food hundreds of times and for regeneration to run repeatedly. */
+#define HUNGER_TEST_TICKS 20000
+
+static void configure_regen_player(object *pl, int16_t food) {
+    pl->stats.maxhp = 200;
+    pl->stats.maxsp = 200;
+    pl->stats.food = food;
+    pl->last_eat = 0;
+    CONTR(pl)->tgm = 0;
+    CONTR(pl)->digestion = -10;
+}
+
+START_TEST(test_food_does_not_drain_over_many_ticks) {
+    mapstruct *map;
+    object *pl;
+
+    check_setup_env_pl(&map, &pl);
+    configure_regen_player(pl, 500);
+
+    long saved_pticks = pticks;
+    int hp_regenerated = 0, sp_regenerated = 0;
+    for (int i = 0; i < HUNGER_TEST_TICKS; i++) {
+        /* Keep both pools below maximum so every regeneration path runs. */
+        pl->stats.hp = 1;
+        pl->stats.sp = 0;
+        pticks++;
+        player_do_some_living(pl);
+        hp_regenerated += pl->stats.hp > 1;
+        sp_regenerated += pl->stats.sp > 0;
+        ck_assert_int_eq(pl->stats.food, 500);
+    }
+    pticks = saved_pticks;
+
+    ck_assert_int_gt(hp_regenerated, 0);
+    ck_assert_int_gt(sp_regenerated, 0);
+    ck_assert_ptr_eq(pl->map, map);
+}
+END_TEST
+
+START_TEST(test_empty_stomach_keeps_hp_and_regeneration) {
+    static const int16_t empty_values[] = {0, -1};
+
+    for (size_t v = 0; v < arraysize(empty_values); v++) {
+        mapstruct *map;
+        object *pl;
+
+        check_setup_env_pl(&map, &pl);
+        configure_regen_player(pl, empty_values[v]);
+        pl->stats.hp = 50;
+        pl->stats.sp = 0;
+
+        long saved_pticks = pticks;
+        int16_t previous_hp = pl->stats.hp;
+        for (int i = 0; i < HUNGER_TEST_TICKS; i++) {
+            pticks++;
+            player_do_some_living(pl);
+            /* No starvation damage: hit points never decrease. */
+            ck_assert_int_ge(pl->stats.hp, previous_hp);
+            ck_assert_int_eq(pl->stats.food, empty_values[v]);
+            previous_hp = pl->stats.hp;
+        }
+        pticks = saved_pticks;
+
+        /* Regeneration was not stopped and the player was not killed. */
+        ck_assert_int_eq(pl->stats.hp, pl->stats.maxhp);
+        ck_assert_int_eq(pl->stats.sp, pl->stats.maxsp);
+        ck_assert_ptr_null(player_get_killer(CONTR(pl)));
+        ck_assert_ptr_eq(pl->map, map);
+    }
+}
+END_TEST
+
+START_TEST(test_non_attack_hp_loss_still_kills_without_starvation) {
+    mapstruct *map;
+    object *pl;
+
+    check_setup_env_pl(&map, &pl);
+    configure_regen_player(pl, 0);
+    /* A PvP-area defeat restores the player in place without loading a
+     * savebed map. */
+    map->map_flags |= MAP_FLAG_PVP;
+    player_set_killer(CONTR(pl), "rotten apple");
+    pl->stats.hp = 0;
+
+    uint64_t deaths = metrics_get(&CONTR(pl)->metrics, METRIC_CHARACTER_DEATHS);
+    player_do_some_living(pl);
+
+    ck_assert_uint_eq(metrics_get(&CONTR(pl)->metrics, METRIC_CHARACTER_DEATHS), deaths + 1);
+    ck_assert_int_eq(pl->stats.hp, pl->stats.maxhp);
+}
+END_TEST
+
 static Suite *suite(void) {
     Suite *s = suite_create("living");
     TCase *tc_core = tcase_create("Core");
@@ -386,6 +480,9 @@ static Suite *suite(void) {
     tcase_add_test(tc_core, test_administrative_freeze_keeps_requested_tick_duration);
     tcase_add_test(tc_core, test_non_player_speed_is_not_clamped);
     tcase_add_test(tc_core, test_monster_living_speed_is_not_player_clamped);
+    tcase_add_test(tc_core, test_food_does_not_drain_over_many_ticks);
+    tcase_add_test(tc_core, test_empty_stomach_keeps_hp_and_regeneration);
+    tcase_add_test(tc_core, test_non_attack_hp_loss_still_kills_without_starvation);
 
     /* Keep all 13,146 real event ticks: shorter runs do not exercise the
      * accumulated roundoff regression. Atomic LLVM coverage counters make

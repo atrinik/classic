@@ -547,6 +547,7 @@ void free_player(player *pl);
 void give_initial_items(object *pl, treasure_list_t *items);
 int handle_newcs_player(player *pl);
 void kill_player(object *op, bool pvp, bool environmental);
+void player_do_some_living(object *op);
 void cast_dust(object *op, object *throw_ob, int dir);
 int pvp_area(object *attacker, object *victim);
 object *find_skill(object *op, int skillnr);

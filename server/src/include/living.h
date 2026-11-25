@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -88,7 +88,7 @@ typedef struct liv {
     /** Max spell points. */
     int16_t maxsp;
 
-    /** How much food in stomach. 0 = starved. */
+    /** How much food in stomach. Hunger is disabled: 0 has no effect. */
     int16_t food;
 
     /** How much damage this object does when hitting. */
