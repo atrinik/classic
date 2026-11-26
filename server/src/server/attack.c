@@ -1512,6 +1512,66 @@ static int64_t award_kill_exp(object *killer, object *victim, object *fatal_skil
 }
 
 /**
+ * Check whether an inventory item would be dropped when its carrier dies.
+ *
+ * Mirrors the destruction rules of object_drop_inventory().
+ *
+ * @param tmp
+ * Inventory item to check.
+ * @return
+ * True if the item would be dropped as loot.
+ */
+static bool attack_is_droppable_loot(const object *tmp) {
+    if (tmp->type == QUEST_CONTAINER || tmp->type == RUNE) {
+        return false;
+    }
+
+    return !QUERY_FLAG(tmp, FLAG_SYS_OBJECT) && !QUERY_FLAG(tmp, FLAG_STARTEQUIP) &&
+           !QUERY_FLAG(tmp, FLAG_NO_DROP);
+}
+
+/**
+ * Make sure a killed monster drops some loot.
+ *
+ * If the monster carries nothing that would drop, generate the generic
+ * fallback_loot treasure list into its inventory. A monster without any
+ * treasure list configured is a content problem, so log an error for it;
+ * a monster whose treasure list merely rolled nothing gets the fallback
+ * silently.
+ *
+ * Summoned and owned monsters (pets, golems) and monsters whose content
+ * explicitly marks their inventory as start equipment are skipped.
+ *
+ * @param op
+ * The killed monster.
+ */
+static void attack_ensure_loot(object *op) {
+    HARD_ASSERT(op != NULL);
+
+    if (QUERY_FLAG(op, FLAG_STARTEQUIP) || object_owner(op) != NULL) {
+        return;
+    }
+
+    for (object *tmp = op->inv; tmp != NULL; tmp = tmp->below) {
+        if (attack_is_droppable_loot(tmp)) {
+            return;
+        }
+    }
+
+    if (op->randomitems == NULL) {
+        LOG(ERROR, "Monster has no loot, dropping fallback loot: %s", object_get_str(op));
+    }
+
+    /* treasure_list_find() logs an error if the list is missing. */
+    treasure_list_t *fallback = treasure_list_find("fallback_loot");
+    if (fallback == NULL) {
+        return;
+    }
+
+    treasure_generate(fallback, op, op->level, 0);
+}
+
+/**
  * An object was killed, handle various things (logging, messages, etc).
  *
  * @param op
@@ -1697,6 +1757,10 @@ bool attack_kill(object *op, object *hitter) {
 
         /* Non-player victims always drop their loot, regardless of who
          * killed them or how much experience the kill yielded. */
+        if (op->type == MONSTER) {
+            attack_ensure_loot(op);
+        }
+
         object_destruct(op);
     }
 
