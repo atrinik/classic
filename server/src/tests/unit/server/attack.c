@@ -256,6 +256,79 @@ START_TEST(test_monster_kill_drops_loot) {
 }
 END_TEST
 
+static bool attack_test_inventory_has_type(object *op, uint8_t type) {
+    for (object *tmp = op->inv; tmp != NULL; tmp = tmp->below) {
+        if (tmp->type == type || attack_test_inventory_has_type(tmp, type)) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+static bool attack_test_tile_has_type(mapstruct *map, int x, int y, uint8_t type) {
+    for (object *tmp = GET_MAP_OB(map, x, y); tmp != NULL; tmp = tmp->above) {
+        if (tmp->type == type || attack_test_inventory_has_type(tmp, type)) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+static object *attack_test_lootless_victim(mapstruct *map, object *pl) {
+    object *victim = attack_test_target(map, pl);
+    victim->stats.hp = 1;
+    victim->stats.maxhp = 1;
+    victim->randomitems = NULL;
+    /* Strip anything the archetype carries that would drop as loot. */
+    FOR_INV_PREPARE(victim, tmp) {
+        if (!QUERY_FLAG(tmp, FLAG_SYS_OBJECT) && !QUERY_FLAG(tmp, FLAG_STARTEQUIP) &&
+            !QUERY_FLAG(tmp, FLAG_NO_DROP) && tmp->type != QUEST_CONTAINER && tmp->type != RUNE) {
+            object_remove(tmp, 0);
+            object_destroy(tmp);
+        }
+    }
+    FOR_INV_FINISH();
+    ck_assert(!attack_test_tile_has_type(map, victim->x, victim->y, MONEY));
+    return victim;
+}
+
+START_TEST(test_lootless_monster_drops_fallback_loot) {
+    mapstruct *map;
+    object *pl;
+
+    check_setup_env_pl(&map, &pl);
+    memset(pl->attack, 0, sizeof(pl->attack));
+    pl->attack[ATNR_IMPACT] = 100;
+
+    object *victim = attack_test_lootless_victim(map, pl);
+    int x = victim->x, y = victim->y;
+    ck_assert_int_gt(attack_hit(victim, pl, 100), 0);
+    /* fallback_loot always contains wealth, which expands to coins. */
+    ck_assert(attack_test_tile_has_type(map, x, y, MONEY));
+}
+END_TEST
+
+START_TEST(test_owned_monster_gets_no_fallback_loot) {
+    mapstruct *map;
+    object *pl;
+
+    check_setup_env_pl(&map, &pl);
+    memset(pl->attack, 0, sizeof(pl->attack));
+    pl->attack[ATNR_IMPACT] = 100;
+
+    object *owner = attack_test_target(map, pl);
+    object *victim = attack_test_lootless_victim(map, pl);
+    int x = victim->x, y = victim->y;
+    object_owner_set(victim, owner);
+    victim->enemy = pl;
+    victim->enemy_count = pl->count;
+    ck_assert_int_gt(attack_hit(victim, pl, 100), 0);
+    ck_assert(!attack_test_tile_has_type(map, x, y, MONEY));
+}
+END_TEST
+
 START_TEST(test_player_hurt_sound_selection_and_damage_gate) {
     mapstruct *map;
     object *pl;
@@ -1064,6 +1137,8 @@ static Suite *suite(void) {
     tcase_add_test(tc_core, test_monster_kill_metrics_separate_named_variants);
     tcase_add_test(tc_core, test_zero_experience_kill_drops_loot);
     tcase_add_test(tc_core, test_monster_kill_drops_loot);
+    tcase_add_test(tc_core, test_lootless_monster_drops_fallback_loot);
+    tcase_add_test(tc_core, test_owned_monster_gets_no_fallback_loot);
     tcase_add_test(tc_core, test_targeted_melee_gets_one_unaware_opening_bonus);
     tcase_add_test(tc_core, test_situational_bonus_excludes_living_pets_and_plugin_damage_api);
     tcase_add_test(tc_core, test_unaware_bonus_does_not_increase_status_effect_strength);
