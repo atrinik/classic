@@ -281,11 +281,15 @@ static object *attack_test_lootless_victim(mapstruct *map, object *pl) {
     victim->stats.hp = 1;
     victim->stats.maxhp = 1;
     victim->randomitems = NULL;
-    for (object *tmp = victim->inv; tmp != NULL; tmp = tmp->below) {
-        ck_assert_msg(tmp->type != MONEY && (QUERY_FLAG(tmp, FLAG_SYS_OBJECT) ||
-                                             QUERY_FLAG(tmp, FLAG_STARTEQUIP)),
-                      "Fixture monster unexpectedly carries loot");
+    /* Strip anything the archetype carries that would drop as loot. */
+    FOR_INV_PREPARE(victim, tmp) {
+        if (!QUERY_FLAG(tmp, FLAG_SYS_OBJECT) && !QUERY_FLAG(tmp, FLAG_STARTEQUIP) &&
+            !QUERY_FLAG(tmp, FLAG_NO_DROP) && tmp->type != QUEST_CONTAINER && tmp->type != RUNE) {
+            object_remove(tmp, 0);
+            object_destroy(tmp);
+        }
     }
+    FOR_INV_FINISH();
     ck_assert(!attack_test_tile_has_type(map, victim->x, victim->y, MONEY));
     return victim;
 }
