@@ -4,14 +4,14 @@
     {
       "name": "sound",
       "repository": "atrinik/sound",
-      "tag": "v1.4.0",
-      "commit": "b7f282e0891317d0619c401f3868c6270b66eb07",
-      "url": "https://github.com/atrinik/sound/releases/download/v1.4.0/atrinik-sound-classic-runtime-1.4.0.tar.gz",
-      "sha256": "a0dd76ef776b5c0efdc0a5a36fe564ddb2c0aa51172712b1f2e4b305d75a7e07",
+      "tag": "v1.5.0",
+      "commit": "99258007d7ffc74e323fade45cd9e5636a6239a5",
+      "url": "https://github.com/atrinik/sound/releases/download/v1.5.0/atrinik-sound-classic-runtime-1.5.0.tar.gz",
+      "sha256": "44f82548951e1a9427ed52166de6f8d34fd236191c5506157b7293258b0885e7",
       "destination": "sound",
       "strip_components": 1,
-      "runtime_manifest_sha256": "c13ca2a125bbcd019df97c24cfb0aa825cde1eaea4a46d6b377aab09e0f72f86",
-      "runtime_checksums_sha256": "72b32d46bf5f28fba3fe4f175dc459ac8a298d22de7798792a185c9bc0b29d43"
+      "runtime_manifest_sha256": "a214b6c15df99832dae1aa4b281270b7718e7fc181d15d7100f86f58a7d0a6b6",
+      "runtime_checksums_sha256": "bdb42d15a4c3c2838f782f8245aabd37654091b61e8924def0320f96d7c588d9"
     }
   ]
 }
